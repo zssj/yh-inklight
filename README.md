@@ -2,6 +2,43 @@
 
 Axl Light is a non-invasive Obsidian plugin for reading highlights and sticky notes. It keeps Markdown and PDF files clean: highlights, notes, replies, positions, and recovery metadata are stored in `.obsidian-annotations/` sidecar JSON files.
 
+## Install
+
+### Option 1: Manual install
+
+1. Go to the latest release: https://github.com/epiphie/axl-light/releases/latest
+2. Download these three files from `Assets`:
+
+- `main.js`
+- `manifest.json`
+- `styles.css`
+
+3. Create this folder inside your Obsidian vault:
+
+```text
+<your-vault>/.obsidian/plugins/axl-light/
+```
+
+4. Move the three downloaded files into that folder.
+5. Restart Obsidian.
+6. Open `Settings -> Community plugins`.
+7. Turn off `Restricted mode` if needed.
+8. Enable `Axl Light`.
+
+### Option 2: BRAT install
+
+If you use the Obsidian BRAT plugin:
+
+1. Install and enable `BRAT`.
+2. Run `BRAT: Add a beta plugin for testing`.
+3. Paste this repository URL:
+
+```text
+https://github.com/epiphie/axl-light
+```
+
+4. Enable `Axl Light` in `Settings -> Community plugins`.
+
 ## Features
 
 - CodeMirror 6 overlay highlights with `Decoration.mark()`
@@ -14,51 +51,6 @@ Axl Light is a non-invasive Obsidian plugin for reading highlights and sticky no
 - Rename migration for sidecar data when enabled
 - PDF overlay highlights using page-number plus page-relative rectangle anchors
 - PDF sticky notes in the same right-side reader lane, collapsing to popovers on narrow panes
-
-## Development
-
-```bash
-npm install
-npm run dev
-```
-
-Copy or symlink `main.js`, `manifest.json`, and `styles.css` into:
-
-```text
-<vault>/.obsidian/plugins/axl-light/
-```
-
-## Install from a GitHub release
-
-Download these three files from the latest release:
-
-- `main.js`
-- `manifest.json`
-- `styles.css`
-
-Place them in:
-
-```text
-<vault>/.obsidian/plugins/axl-light/
-```
-
-Then open Obsidian, go to `Settings -> Community plugins`, reload installed plugins, and enable `Axl Light`.
-
-## Release
-
-This repo publishes release assets automatically when a version tag is pushed. The tag must match `manifest.json`:
-
-```bash
-npm install
-npm run build
-git add .
-git commit -m "Release Axl Light 0.1.0"
-git tag 0.1.0
-git push origin main
-git push origin 0.1.0
-```
-
-GitHub Actions will attach `main.js`, `manifest.json`, and `styles.css` to the release.
 
 ## Storage
 
@@ -79,6 +71,35 @@ Markdown source files and PDF binaries are never modified by this plugin.
 - `Add sticky note to selection`: `Cmd/Ctrl + Alt + M`
 - `Toggle sticky note lane`: `Cmd/Ctrl + Shift + N`
 - `Open annotation overview`
+
+## Development
+
+```bash
+npm install
+npm run dev
+```
+
+Copy or symlink `main.js`, `manifest.json`, and `styles.css` into:
+
+```text
+<vault>/.obsidian/plugins/axl-light/
+```
+
+## Release
+
+This repo publishes release assets automatically when a version tag is pushed. The tag must match `manifest.json`:
+
+```bash
+npm install
+npm run build
+git add .
+git commit -m "Release Axl Light 0.1.0"
+git tag 0.1.0
+git push origin main
+git push origin 0.1.0
+```
+
+GitHub Actions will attach `main.js`, `manifest.json`, and `styles.css` to the release.
 
 ## Known Limits
 

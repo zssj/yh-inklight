@@ -5,7 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
-import { App, Component, Notice, TFile } from "obsidian";
+import { App, Component, MarkdownRenderer, Notice, setIcon, TFile } from "obsidian";
 
 import {
   AnnotationColor,

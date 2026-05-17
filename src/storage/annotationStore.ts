@@ -10,6 +10,8 @@ import { App, normalizePath, Notice, TFile } from "obsidian";
 import {
   AnnotationIndex,
   AnnotationIndexEntry,
+  AnnotationColor,
+  AnnotationExportFormat,
   CommentAnnotation,
   EMPTY_INDEX,
   FileAnnotationDocument,
@@ -21,6 +23,23 @@ import {
 const STORE_DIR = ".obsidian-annotations";
 const INDEX_PATH = normalizePath(`${STORE_DIR}/index.json`);
 const BACKUP_DIR = normalizePath(`${STORE_DIR}/backups`);
+
+interface ExportDocumentSource {
+  filePath: string;
+  document: FileAnnotationDocument;
+}
+
+interface ExportEntry {
+  kind: "highlight" | "note";
+  mode: "md" | "pdf";
+  sourcePath: string;
+  color: AnnotationColor;
+  text: string;
+  content: string;
+  createdAt: string;
+  pageNumber: number | null;
+  startOffset: number;
+}
 
 export class AnnotationStoreReadError extends Error {
   constructor(readonly path: string, readonly originalError: unknown) {
@@ -47,6 +66,22 @@ export class AnnotationStore {
 
   getCachedDocument(filePath: string): FileAnnotationDocument | null {
     return this.documents.get(this.toCacheKey(filePath)) ?? null;
+  }
+
+  async getIndexedDocuments(): Promise<FileAnnotationDocument[]> {
+    const documents: FileAnnotationDocument[] = [];
+    const filePaths = Object.keys(this.index.files).sort((left, right) => left.localeCompare(right));
+
+    for (const filePath of filePaths) {
+      const file = this.app.vault.getAbstractFileByPath(filePath);
+      if (!(file instanceof TFile)) {
+        continue;
+      }
+
+      documents.push(await this.getDocument(file));
+    }
+
+    return documents;
   }
 
   async getDocument(file: TFile): Promise<FileAnnotationDocument> {
@@ -214,49 +249,28 @@ export class AnnotationStore {
     this.documents.delete(this.toCacheKey(normalizedOldPath));
   }
 
-  async exportNotes(file: TFile): Promise<TFile> {
+  async exportNotes(file: TFile, format: AnnotationExportFormat = "summary"): Promise<TFile> {
     const document = await this.getDocument(file);
     const baseName = file.basename || file.name.replace(/\.md$/i, "");
-    const targetPath = normalizePath(`${file.parent?.path ?? ""}/${baseName}-notes.md`);
-    const lines = [
-      `# Notes for ${file.path}`,
-      "",
-      `Exported: ${new Date().toISOString()}`,
-      "",
-      "## Highlights",
-      "",
-      ...document.highlights.map((highlight) => {
-        return `- ==${highlight.anchor.selectedText}== (${highlight.color}, ${highlight.createdAt})`;
-      }),
-      ...document.pdfHighlights.map((highlight) => {
-        return `- ==${highlight.anchor.selectedText}== (PDF page ${highlight.anchor.pageNumber}, ${highlight.color}, ${highlight.createdAt})`;
-      }),
-      "",
-      "## Sticky Notes",
-      "",
-      ...document.comments.map((comment) => {
-        return [
-          `### ${comment.anchor.selectedText}`,
-          "",
-          `Color: ${comment.color}`,
-          `Created: ${comment.createdAt}`,
-          "",
-          comment.content,
-          "",
-        ].join("\n");
-      }),
-      ...document.pdfComments.map((comment) => {
-        return [
-          `### PDF page ${comment.anchor.pageNumber}: ${comment.anchor.selectedText}`,
-          "",
-          `Color: ${comment.color}`,
-          `Created: ${comment.createdAt}`,
-          "",
-          comment.content,
-          "",
-        ].join("\n");
-      }),
-    ];
+    const suffix = format === "summary" ? "" : `-${format}`;
+    const targetPath = normalizePath(`${file.parent?.path ?? ""}/${baseName}-notes${suffix}.md`);
+    const lines = buildExportLines(`Notes for ${file.path}`, [{ filePath: file.path, document }], format);
+
+    const existing = this.app.vault.getAbstractFileByPath(targetPath);
+    if (existing instanceof TFile) {
+      await this.app.vault.modify(existing, lines.join("\n"));
+      return existing;
+    }
+
+    return this.app.vault.create(targetPath, lines.join("\n"));
+  }
+
+  async exportAllNotes(format: AnnotationExportFormat = "summary"): Promise<TFile> {
+    const documents = await this.getIndexedDocuments();
+    const suffix = format === "summary" ? "" : `-${format}`;
+    const targetPath = normalizePath(`inklight-all-notes${suffix}.md`);
+    const sources = documents.map((document) => ({ filePath: document.filePath, document }));
+    const lines = buildExportLines("墨光批注全库汇总", sources, format);
 
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
     if (existing instanceof TFile) {
@@ -423,4 +437,155 @@ export class AnnotationStore {
 
 function backupTimestamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+function buildExportLines(
+  title: string,
+  sources: ExportDocumentSource[],
+  format: AnnotationExportFormat,
+): string[] {
+  const entries = sources.flatMap((source) => collectExportEntries(source));
+  const lines = [`# ${title}`, "", `Exported: ${new Date().toISOString()}`, ""];
+
+  if (!entries.length) {
+    return [...lines, "No annotations found.", ""];
+  }
+
+  if (format === "by-color") {
+    return [...lines, ...renderByColor(entries)];
+  }
+
+  if (format === "notes-only") {
+    return [...lines, ...renderNotesOnly(entries)];
+  }
+
+  if (format === "reading-notes") {
+    return [...lines, ...renderReadingNotes(entries)];
+  }
+
+  return [...lines, ...renderSummary(entries)];
+}
+
+function collectExportEntries(source: ExportDocumentSource): ExportEntry[] {
+  return [
+    ...source.document.highlights.map((highlight): ExportEntry => ({
+      kind: "highlight",
+      mode: "md",
+      sourcePath: source.filePath,
+      color: highlight.color,
+      text: highlight.anchor.selectedText,
+      content: "",
+      createdAt: highlight.createdAt,
+      pageNumber: null,
+      startOffset: highlight.anchor.startOffset,
+    })),
+    ...source.document.comments.map((comment): ExportEntry => ({
+      kind: "note",
+      mode: "md",
+      sourcePath: source.filePath,
+      color: comment.color,
+      text: comment.anchor.selectedText,
+      content: comment.content,
+      createdAt: comment.updatedAt || comment.createdAt,
+      pageNumber: null,
+      startOffset: comment.anchor.startOffset,
+    })),
+    ...source.document.pdfHighlights.map((highlight): ExportEntry => ({
+      kind: "highlight",
+      mode: "pdf",
+      sourcePath: source.filePath,
+      color: highlight.color,
+      text: highlight.anchor.selectedText,
+      content: "",
+      createdAt: highlight.createdAt,
+      pageNumber: highlight.anchor.pageNumber,
+      startOffset: Number.MAX_SAFE_INTEGER,
+    })),
+    ...source.document.pdfComments.map((comment): ExportEntry => ({
+      kind: "note",
+      mode: "pdf",
+      sourcePath: source.filePath,
+      color: comment.color,
+      text: comment.anchor.selectedText,
+      content: comment.content,
+      createdAt: comment.updatedAt || comment.createdAt,
+      pageNumber: comment.anchor.pageNumber,
+      startOffset: Number.MAX_SAFE_INTEGER,
+    })),
+  ].sort((left, right) => {
+    return left.sourcePath.localeCompare(right.sourcePath) || left.startOffset - right.startOffset;
+  });
+}
+
+function renderSummary(entries: ExportEntry[]): string[] {
+  const highlights = entries.filter((entry) => entry.kind === "highlight");
+  const notes = entries.filter((entry) => entry.kind === "note");
+  return [
+    "## Highlights",
+    "",
+    ...highlights.map((entry) => `- ==${entry.text}== (${entry.color}, ${entrySource(entry)}, ${entry.createdAt})`),
+    "",
+    "## Sticky Notes",
+    "",
+    ...notes.flatMap((entry) => renderNoteBlock(entry)),
+  ];
+}
+
+function renderByColor(entries: ExportEntry[]): string[] {
+  const colors: AnnotationColor[] = ["yellow", "green", "blue", "pink", "orange", "purple"];
+  return colors.flatMap((color) => {
+    const colorEntries = entries.filter((entry) => entry.color === color);
+    if (!colorEntries.length) {
+      return [];
+    }
+    return [
+      `## ${color}`,
+      "",
+      ...colorEntries.flatMap((entry) => {
+        return entry.kind === "note"
+          ? renderNoteBlock(entry)
+          : [`- ==${entry.text}== (${entrySource(entry)}, ${entry.createdAt})`, ""];
+      }),
+    ];
+  });
+}
+
+function renderNotesOnly(entries: ExportEntry[]): string[] {
+  const notes = entries.filter((entry) => entry.kind === "note" && entry.content.trim());
+  if (!notes.length) {
+    return ["No sticky notes found.", ""];
+  }
+  return ["## Sticky Notes", "", ...notes.flatMap((entry) => renderNoteBlock(entry))];
+}
+
+function renderReadingNotes(entries: ExportEntry[]): string[] {
+  return [
+    "## Reading Notes",
+    "",
+    ...entries.flatMap((entry) => {
+      const lines = [`### ${entrySource(entry)}`, "", `> ${entry.text}`, "", `Color: ${entry.color}`, `Type: ${entry.kind}`];
+      if (entry.content.trim()) {
+        lines.push("", entry.content);
+      }
+      lines.push("");
+      return lines;
+    }),
+  ];
+}
+
+function renderNoteBlock(entry: ExportEntry): string[] {
+  return [
+    `### ${entry.text}`,
+    "",
+    `Source: ${entrySource(entry)}`,
+    `Color: ${entry.color}`,
+    `Updated: ${entry.createdAt}`,
+    "",
+    entry.content,
+    "",
+  ];
+}
+
+function entrySource(entry: ExportEntry): string {
+  return entry.pageNumber ? `${entry.sourcePath} p.${entry.pageNumber}` : entry.sourcePath;
 }

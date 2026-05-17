@@ -1224,6 +1224,18 @@ var AnnotationStore = class {
   getCachedDocument(filePath) {
     return this.documents.get(this.toCacheKey(filePath)) ?? null;
   }
+  async getIndexedDocuments() {
+    const documents = [];
+    const filePaths = Object.keys(this.index.files).sort((left, right) => left.localeCompare(right));
+    for (const filePath of filePaths) {
+      const file = this.app.vault.getAbstractFileByPath(filePath);
+      if (!(file instanceof import_obsidian5.TFile)) {
+        continue;
+      }
+      documents.push(await this.getDocument(file));
+    }
+    return documents;
+  }
   async getDocument(file) {
     const filePath = this.normalizeVaultPath(file.path);
     const cacheKey = this.toCacheKey(filePath);
@@ -1361,49 +1373,25 @@ var AnnotationStore = class {
     await this.writeIndex();
     this.documents.delete(this.toCacheKey(normalizedOldPath));
   }
-  async exportNotes(file) {
+  async exportNotes(file, format = "summary") {
     const document2 = await this.getDocument(file);
     const baseName = file.basename || file.name.replace(/\.md$/i, "");
-    const targetPath = (0, import_obsidian5.normalizePath)(`${file.parent?.path ?? ""}/${baseName}-notes.md`);
-    const lines = [
-      `# Notes for ${file.path}`,
-      "",
-      `Exported: ${(/* @__PURE__ */ new Date()).toISOString()}`,
-      "",
-      "## Highlights",
-      "",
-      ...document2.highlights.map((highlight) => {
-        return `- ==${highlight.anchor.selectedText}== (${highlight.color}, ${highlight.createdAt})`;
-      }),
-      ...document2.pdfHighlights.map((highlight) => {
-        return `- ==${highlight.anchor.selectedText}== (PDF page ${highlight.anchor.pageNumber}, ${highlight.color}, ${highlight.createdAt})`;
-      }),
-      "",
-      "## Sticky Notes",
-      "",
-      ...document2.comments.map((comment) => {
-        return [
-          `### ${comment.anchor.selectedText}`,
-          "",
-          `Color: ${comment.color}`,
-          `Created: ${comment.createdAt}`,
-          "",
-          comment.content,
-          ""
-        ].join("\n");
-      }),
-      ...document2.pdfComments.map((comment) => {
-        return [
-          `### PDF page ${comment.anchor.pageNumber}: ${comment.anchor.selectedText}`,
-          "",
-          `Color: ${comment.color}`,
-          `Created: ${comment.createdAt}`,
-          "",
-          comment.content,
-          ""
-        ].join("\n");
-      })
-    ];
+    const suffix = format === "summary" ? "" : `-${format}`;
+    const targetPath = (0, import_obsidian5.normalizePath)(`${file.parent?.path ?? ""}/${baseName}-notes${suffix}.md`);
+    const lines = buildExportLines(`Notes for ${file.path}`, [{ filePath: file.path, document: document2 }], format);
+    const existing = this.app.vault.getAbstractFileByPath(targetPath);
+    if (existing instanceof import_obsidian5.TFile) {
+      await this.app.vault.modify(existing, lines.join("\n"));
+      return existing;
+    }
+    return this.app.vault.create(targetPath, lines.join("\n"));
+  }
+  async exportAllNotes(format = "summary") {
+    const documents = await this.getIndexedDocuments();
+    const suffix = format === "summary" ? "" : `-${format}`;
+    const targetPath = (0, import_obsidian5.normalizePath)(`inklight-all-notes${suffix}.md`);
+    const sources = documents.map((document2) => ({ filePath: document2.filePath, document: document2 }));
+    const lines = buildExportLines("\u58A8\u5149\u6279\u6CE8\u5168\u5E93\u6C47\u603B", sources, format);
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
     if (existing instanceof import_obsidian5.TFile) {
       await this.app.vault.modify(existing, lines.join("\n"));
@@ -1531,6 +1519,138 @@ var AnnotationStore = class {
 function backupTimestamp() {
   return (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
 }
+function buildExportLines(title, sources, format) {
+  const entries = sources.flatMap((source) => collectExportEntries(source));
+  const lines = [`# ${title}`, "", `Exported: ${(/* @__PURE__ */ new Date()).toISOString()}`, ""];
+  if (!entries.length) {
+    return [...lines, "No annotations found.", ""];
+  }
+  if (format === "by-color") {
+    return [...lines, ...renderByColor(entries)];
+  }
+  if (format === "notes-only") {
+    return [...lines, ...renderNotesOnly(entries)];
+  }
+  if (format === "reading-notes") {
+    return [...lines, ...renderReadingNotes(entries)];
+  }
+  return [...lines, ...renderSummary(entries)];
+}
+function collectExportEntries(source) {
+  return [
+    ...source.document.highlights.map((highlight) => ({
+      kind: "highlight",
+      mode: "md",
+      sourcePath: source.filePath,
+      color: highlight.color,
+      text: highlight.anchor.selectedText,
+      content: "",
+      createdAt: highlight.createdAt,
+      pageNumber: null,
+      startOffset: highlight.anchor.startOffset
+    })),
+    ...source.document.comments.map((comment) => ({
+      kind: "note",
+      mode: "md",
+      sourcePath: source.filePath,
+      color: comment.color,
+      text: comment.anchor.selectedText,
+      content: comment.content,
+      createdAt: comment.updatedAt || comment.createdAt,
+      pageNumber: null,
+      startOffset: comment.anchor.startOffset
+    })),
+    ...source.document.pdfHighlights.map((highlight) => ({
+      kind: "highlight",
+      mode: "pdf",
+      sourcePath: source.filePath,
+      color: highlight.color,
+      text: highlight.anchor.selectedText,
+      content: "",
+      createdAt: highlight.createdAt,
+      pageNumber: highlight.anchor.pageNumber,
+      startOffset: Number.MAX_SAFE_INTEGER
+    })),
+    ...source.document.pdfComments.map((comment) => ({
+      kind: "note",
+      mode: "pdf",
+      sourcePath: source.filePath,
+      color: comment.color,
+      text: comment.anchor.selectedText,
+      content: comment.content,
+      createdAt: comment.updatedAt || comment.createdAt,
+      pageNumber: comment.anchor.pageNumber,
+      startOffset: Number.MAX_SAFE_INTEGER
+    }))
+  ].sort((left, right) => {
+    return left.sourcePath.localeCompare(right.sourcePath) || left.startOffset - right.startOffset;
+  });
+}
+function renderSummary(entries) {
+  const highlights = entries.filter((entry) => entry.kind === "highlight");
+  const notes = entries.filter((entry) => entry.kind === "note");
+  return [
+    "## Highlights",
+    "",
+    ...highlights.map((entry) => `- ==${entry.text}== (${entry.color}, ${entrySource(entry)}, ${entry.createdAt})`),
+    "",
+    "## Sticky Notes",
+    "",
+    ...notes.flatMap((entry) => renderNoteBlock(entry))
+  ];
+}
+function renderByColor(entries) {
+  const colors = ["yellow", "green", "blue", "pink", "orange", "purple"];
+  return colors.flatMap((color) => {
+    const colorEntries = entries.filter((entry) => entry.color === color);
+    if (!colorEntries.length) {
+      return [];
+    }
+    return [
+      `## ${color}`,
+      "",
+      ...colorEntries.flatMap((entry) => {
+        return entry.kind === "note" ? renderNoteBlock(entry) : [`- ==${entry.text}== (${entrySource(entry)}, ${entry.createdAt})`, ""];
+      })
+    ];
+  });
+}
+function renderNotesOnly(entries) {
+  const notes = entries.filter((entry) => entry.kind === "note" && entry.content.trim());
+  if (!notes.length) {
+    return ["No sticky notes found.", ""];
+  }
+  return ["## Sticky Notes", "", ...notes.flatMap((entry) => renderNoteBlock(entry))];
+}
+function renderReadingNotes(entries) {
+  return [
+    "## Reading Notes",
+    "",
+    ...entries.flatMap((entry) => {
+      const lines = [`### ${entrySource(entry)}`, "", `> ${entry.text}`, "", `Color: ${entry.color}`, `Type: ${entry.kind}`];
+      if (entry.content.trim()) {
+        lines.push("", entry.content);
+      }
+      lines.push("");
+      return lines;
+    })
+  ];
+}
+function renderNoteBlock(entry) {
+  return [
+    `### ${entry.text}`,
+    "",
+    `Source: ${entrySource(entry)}`,
+    `Color: ${entry.color}`,
+    `Updated: ${entry.createdAt}`,
+    "",
+    entry.content,
+    ""
+  ];
+}
+function entrySource(entry) {
+  return entry.pageNumber ? `${entry.sourcePath} p.${entry.pageNumber}` : entry.sourcePath;
+}
 
 // src/views/annotationPopover.ts
 var import_obsidian6 = require("obsidian");
@@ -1616,10 +1736,12 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
+    this.annotationScope = "current";
     this.query = "";
     this.color = "all";
     this.type = "all";
     this.sort = "document";
+    this.exportFormat = "summary";
   }
   getViewType() {
     return ANNOTATION_SIDEBAR_VIEW;
@@ -1641,90 +1763,112 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
     const file = this.app.workspace.getActiveFile();
     this.renderHeader(container);
     this.renderControls(container);
-    if (!file) {
+    if (this.annotationScope === "current" && !file) {
       container.createDiv({ cls: "yh-empty", text: "Open a Markdown or PDF file to inspect annotations." });
+      this.renderExportFooter(container, null);
       return;
     }
-    const document2 = await this.plugin.store.getDocument(file);
-    const rawCards = this.buildCards(
-      document2.highlights,
-      document2.comments,
-      document2.pdfHighlights,
-      document2.pdfComments
-    );
+    const documents = this.annotationScope === "all" ? await this.plugin.store.getIndexedDocuments() : [await this.plugin.store.getDocument(file)];
+    const rawCards = documents.flatMap((document2) => this.buildCards(document2));
     const cards = this.filterCards(rawCards);
-    const highlightCount = document2.highlights.filter((highlight) => !highlight.orphaned).length + document2.pdfHighlights.filter((highlight) => !highlight.orphaned).length;
-    const noteCount = document2.comments.filter((comment) => !comment.orphaned).length + document2.pdfComments.filter((comment) => !comment.orphaned).length;
-    container.createDiv({ cls: "yh-ov-count", text: `${highlightCount} highlights \xB7 ${noteCount} notes` });
+    const highlightCount = rawCards.filter((card) => card.kind === "highlight" && !card.orphaned).length;
+    const noteCount = rawCards.filter((card) => card.note && !card.orphaned).length;
+    const scopeLabel = this.annotationScope === "all" ? `${documents.length} files` : "current file";
+    container.createDiv({ cls: "yh-ov-count", text: `${scopeLabel} \xB7 ${highlightCount} highlights \xB7 ${noteCount} notes` });
     const list = container.createDiv({ cls: "yh-ov-list" });
     if (!cards.length) {
       list.createDiv({ cls: "yh-empty", text: "No matching annotations." });
     } else {
       for (const card of cards) {
-        this.renderCard(list, file, card);
+        this.renderCard(list, card);
       }
     }
-    this.renderExportFooter(container, file);
+    this.renderExportFooter(container, this.annotationScope === "current" ? file : null);
   }
-  buildCards(highlights, comments, pdfHighlights, pdfComments) {
+  buildCards(document2) {
     const usedNotes = /* @__PURE__ */ new Set();
     const cards = [];
-    for (const source of this.markdownHighlightSources(highlights, comments, usedNotes)) {
-      cards.push(this.highlightCard(source));
+    for (const highlight of document2.highlights) {
+      const note = this.findAttachedMarkdownNote(highlight, document2.comments, usedNotes);
+      if (note) {
+        usedNotes.add(note.id);
+      }
+      cards.push({
+        id: highlight.id,
+        kind: "highlight",
+        mode: "md",
+        sourcePath: document2.filePath,
+        color: highlight.color,
+        text: highlight.anchor.selectedText,
+        content: note?.content ?? "",
+        createdAt: highlight.createdAt,
+        startOffset: highlight.anchor.startOffset,
+        pageNumber: null,
+        orphaned: highlight.orphaned || note?.orphaned,
+        isCode: isCodeAnchor(highlight.anchor),
+        highlight,
+        note
+      });
     }
-    for (const source of this.pdfHighlightSources(pdfHighlights, pdfComments, usedNotes)) {
-      cards.push(this.highlightCard(source));
+    for (const highlight of document2.pdfHighlights) {
+      const note = this.findAttachedPdfNote(highlight, document2.pdfComments, usedNotes);
+      if (note) {
+        usedNotes.add(note.id);
+      }
+      cards.push({
+        id: highlight.id,
+        kind: "highlight",
+        mode: "pdf",
+        sourcePath: document2.filePath,
+        color: highlight.color,
+        text: highlight.anchor.selectedText,
+        content: note?.content ?? "",
+        createdAt: highlight.createdAt,
+        startOffset: Number.MAX_SAFE_INTEGER,
+        pageNumber: highlight.anchor.pageNumber,
+        orphaned: highlight.orphaned || note?.orphaned,
+        isCode: false,
+        highlight,
+        note
+      });
     }
-    for (const source of this.orphanNoteSources(comments, pdfComments, usedNotes)) {
-      cards.push(this.orphanNoteCard(source));
+    for (const note of document2.comments.filter((item) => !usedNotes.has(item.id))) {
+      cards.push({
+        id: note.id,
+        kind: "note",
+        mode: "md",
+        sourcePath: document2.filePath,
+        color: note.color,
+        text: note.anchor.selectedText,
+        content: note.content,
+        createdAt: note.createdAt,
+        startOffset: note.anchor.startOffset,
+        pageNumber: null,
+        orphaned: note.orphaned,
+        isCode: isCodeAnchor(note.anchor),
+        highlight: null,
+        note
+      });
+    }
+    for (const note of document2.pdfComments.filter((item) => !usedNotes.has(item.id))) {
+      cards.push({
+        id: note.id,
+        kind: "note",
+        mode: "pdf",
+        sourcePath: document2.filePath,
+        color: note.color,
+        text: note.anchor.selectedText,
+        content: note.content,
+        createdAt: note.createdAt,
+        startOffset: Number.MAX_SAFE_INTEGER,
+        pageNumber: note.anchor.pageNumber,
+        orphaned: note.orphaned,
+        isCode: false,
+        highlight: null,
+        note
+      });
     }
     return cards;
-  }
-  markdownHighlightSources(highlights, comments, usedNotes) {
-    return highlights.map((highlight) => {
-      const note = this.findAttachedMarkdownNote(highlight, comments, usedNotes);
-      if (note) {
-        usedNotes.add(note.id);
-      }
-      return {
-        mode: "md",
-        highlight,
-        note,
-        pageNumber: null,
-        startOffset: highlight.anchor.startOffset
-      };
-    });
-  }
-  pdfHighlightSources(highlights, comments, usedNotes) {
-    return highlights.map((highlight) => {
-      const note = this.findAttachedPdfNote(highlight, comments, usedNotes);
-      if (note) {
-        usedNotes.add(note.id);
-      }
-      return {
-        mode: "pdf",
-        highlight,
-        note,
-        pageNumber: highlight.anchor.pageNumber,
-        startOffset: Number.MAX_SAFE_INTEGER
-      };
-    });
-  }
-  orphanNoteSources(comments, pdfComments, usedNotes) {
-    return [
-      ...comments.filter((note) => !usedNotes.has(note.id)).map((note) => ({
-        mode: "md",
-        note,
-        pageNumber: null,
-        startOffset: note.anchor.startOffset
-      })),
-      ...pdfComments.filter((note) => !usedNotes.has(note.id)).map((note) => ({
-        mode: "pdf",
-        note,
-        pageNumber: note.anchor.pageNumber,
-        startOffset: Number.MAX_SAFE_INTEGER
-      }))
-    ];
   }
   findAttachedMarkdownNote(highlight, comments, usedNotes) {
     return comments.find((note) => !usedNotes.has(note.id) && note.highlightId === highlight.id) ?? comments.find((note) => {
@@ -1735,40 +1879,6 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
     return comments.find((note) => !usedNotes.has(note.id) && note.highlightId === highlight.id) ?? comments.find((note) => {
       return !usedNotes.has(note.id) && !note.highlightId && note.anchor.pageNumber === highlight.anchor.pageNumber && note.anchor.selectedText === highlight.anchor.selectedText;
     }) ?? null;
-  }
-  highlightCard(source) {
-    return {
-      id: source.highlight.id,
-      kind: "highlight",
-      mode: source.mode,
-      color: source.highlight.color,
-      text: source.highlight.anchor.selectedText,
-      content: source.note?.content ?? "",
-      createdAt: source.highlight.createdAt,
-      startOffset: source.startOffset,
-      pageNumber: source.pageNumber,
-      orphaned: source.highlight.orphaned || source.note?.orphaned,
-      isCode: isCodeAnchor(source.highlight.anchor),
-      highlight: source.highlight,
-      note: source.note
-    };
-  }
-  orphanNoteCard(source) {
-    return {
-      id: source.note.id,
-      kind: "note",
-      mode: source.mode,
-      color: source.note.color,
-      text: source.note.anchor.selectedText,
-      content: source.note.content,
-      createdAt: source.note.createdAt,
-      startOffset: source.startOffset,
-      pageNumber: source.pageNumber,
-      orphaned: source.note.orphaned,
-      isCode: isCodeAnchor(source.note.anchor),
-      highlight: null,
-      note: source.note
-    };
   }
   renderHeader(container) {
     const header = container.createDiv({ cls: "yh-ov-head" });
@@ -1791,6 +1901,14 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
     search.value = this.query;
     search.addEventListener("input", async () => {
       this.query = search.value;
+      await this.render();
+    });
+    const scope = searchRow.createEl("select", { cls: "yh-filter-select" });
+    scope.createEl("option", { text: "\u5F53\u524D\u6587\u4EF6", value: "current" });
+    scope.createEl("option", { text: "\u5168\u5E93", value: "all" });
+    scope.value = this.annotationScope;
+    scope.addEventListener("change", async () => {
+      this.annotationScope = scope.value;
       await this.render();
     });
     const filterButton = searchRow.createEl("button", { cls: "yh-icon-btn", attr: { type: "button", title: "\u7B5B\u9009" } });
@@ -1825,8 +1943,19 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
       this.sort = sort.value;
       await this.render();
     });
+    const exportFormat = filterRow.createEl("select", { cls: "yh-filter-select" });
+    exportFormat.createEl("option", { text: "\u9ED8\u8BA4\u6458\u8981", value: "summary" });
+    exportFormat.createEl("option", { text: "\u6309\u989C\u8272\u5206\u7EC4", value: "by-color" });
+    exportFormat.createEl("option", { text: "\u53EA\u5BFC\u51FA\u7B14\u8BB0", value: "notes-only" });
+    exportFormat.createEl("option", { text: "\u9605\u8BFB\u7B14\u8BB0", value: "reading-notes" });
+    exportFormat.value = this.exportFormat;
+    exportFormat.addEventListener("change", async () => {
+      this.exportFormat = exportFormat.value;
+      await this.render();
+    });
   }
-  renderCard(list, file, cardData) {
+  renderCard(list, cardData) {
+    const file = this.fileForCard(cardData);
     const card = list.createDiv({
       cls: `yh-ov-card yh-ov-card--${cardData.color}`,
       attr: this.cardAttributes(cardData)
@@ -1852,12 +1981,12 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
     this.addExpandToggle(quote, card);
     if (cardData.content) {
       const content = card.createDiv({ cls: "yh-ov-content" });
-      void import_obsidian7.MarkdownRenderer.render(this.app, cardData.content, content, file.path, this).then(() => {
+      void import_obsidian7.MarkdownRenderer.render(this.app, cardData.content, content, cardData.sourcePath, this).then(() => {
         this.addExpandToggle(content, card);
       });
     }
     const source = card.createDiv({ cls: "yh-ov-source" });
-    source.createSpan({ cls: "yh-ov-file", text: file.name });
+    source.createSpan({ cls: "yh-ov-file", text: file?.name ?? cardData.sourcePath });
     source.createSpan({ cls: "yh-ov-mode", text: cardData.pageNumber ? `p.${cardData.pageNumber}` : "Markdown" });
     const actions = card.createDiv({ cls: "yh-ov-actions" });
     if (cardData.note) {
@@ -1866,16 +1995,24 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
         attr: { type: "button", title: "\u7F16\u8F91\u7B14\u8BB0", "data-action": "edit-note" }
       });
       (0, import_obsidian7.setIcon)(edit2, "pencil");
-      edit2.addEventListener("click", () => this.openInlineEditor(card, file, cardData, cardData.content));
+      edit2.disabled = !file;
+      edit2.addEventListener("click", () => {
+        if (file) {
+          this.openInlineEditor(card, file, cardData, cardData.content);
+        }
+      });
     } else if (cardData.highlight) {
       const addNote = actions.createEl("button", {
         cls: "yh-ov-btn",
         text: "\u6DFB\u52A0\u7B14\u8BB0",
         attr: { type: "button", "data-action": "add-note" }
       });
+      addNote.disabled = !file;
       addNote.addEventListener("click", () => {
-        addNote.addClass("hidden");
-        this.openInlineEditor(card, file, cardData, "");
+        if (file) {
+          addNote.addClass("hidden");
+          this.openInlineEditor(card, file, cardData, "");
+        }
       });
     }
     const jump = actions.createEl("button", {
@@ -1883,16 +2020,24 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
       text: "\u8DF3\u8F6C",
       attr: { type: "button", "data-action": "jump" }
     });
-    jump.addEventListener("click", () => this.jumpTo(file, cardData.startOffset, cardData.pageNumber));
+    jump.disabled = !file;
+    jump.addEventListener("click", () => {
+      if (file) {
+        this.jumpTo(file, cardData.startOffset, cardData.pageNumber);
+      }
+    });
     const remove = actions.createEl("button", {
       cls: "yh-ov-btn yh-ov-btn--danger",
       text: "\u5220\u9664",
       attr: { type: "button", "data-action": "delete" }
     });
+    remove.disabled = !file;
     remove.addEventListener("click", async () => {
-      await this.deleteCard(file, cardData);
-      new import_obsidian7.Notice("\u6279\u6CE8\u5DF2\u5220\u9664");
-      await this.plugin.refreshAnnotations();
+      if (file) {
+        await this.deleteCard(file, cardData);
+        new import_obsidian7.Notice("\u6279\u6CE8\u5DF2\u5220\u9664");
+        await this.plugin.refreshAnnotations();
+      }
     });
     const edit = card.createDiv({ cls: "yh-ov-edit hidden" });
     const textarea = edit.createEl("textarea", {
@@ -1904,7 +2049,7 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
     editActions.createEl("button", { cls: "yh-ov-cancel", text: "\u53D6\u6D88", attr: { type: "button" } });
   }
   cardAttributes(card) {
-    const attrs = { "data-id": card.id };
+    const attrs = { "data-id": card.id, "data-source-path": card.sourcePath };
     if (card.highlight) {
       attrs["data-highlight-id"] = card.highlight.id;
     }
@@ -2042,6 +2187,10 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
       await this.plugin.store.removeAnnotation(file, card.note.id);
     }
   }
+  fileForCard(card) {
+    const file = this.app.vault.getAbstractFileByPath(card.sourcePath);
+    return file instanceof import_obsidian7.TFile ? file : null;
+  }
   filterCards(cards) {
     return cards.filter((card) => this.color === "all" || card.color === this.color).filter((card) => {
       if (this.type === "all") {
@@ -2052,7 +2201,7 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
       }
       return Boolean(card.note);
     }).filter((card) => {
-      const haystack = `${card.text} ${card.content}`.toLowerCase();
+      const haystack = `${card.sourcePath} ${card.text} ${card.content}`.toLowerCase();
       return haystack.includes(this.query.toLowerCase());
     }).sort((a, b) => {
       if (this.sort === "newest") {
@@ -2061,7 +2210,7 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
       if (this.sort === "oldest") {
         return this.cardUpdatedAt(a).localeCompare(this.cardUpdatedAt(b));
       }
-      return (a.pageNumber ?? 0) - (b.pageNumber ?? 0) || a.startOffset - b.startOffset;
+      return a.sourcePath.localeCompare(b.sourcePath) || (a.pageNumber ?? 0) - (b.pageNumber ?? 0) || a.startOffset - b.startOffset;
     });
   }
   cardUpdatedAt(card) {
@@ -2070,15 +2219,24 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
   renderExportFooter(container, file) {
     const footer = container.createDiv({ cls: "yh-ov-foot" });
     const exportButton = footer.createEl("button", { cls: "yh-export-btn", text: "\u2191 \u5BFC\u51FA\u6279\u6CE8", attr: { type: "button" } });
-    exportButton.disabled = !file;
+    exportButton.disabled = this.annotationScope === "current" && !file;
     exportButton.addEventListener("click", async () => {
-      if (!file) {
+      if (this.annotationScope === "current" && !file) {
         return;
       }
-      const exported = await this.plugin.store.exportNotes(file);
+      const exported = this.annotationScope === "all" ? await this.plugin.store.exportAllNotes(this.exportFormat) : await this.plugin.store.exportNotes(file, this.exportFormat);
       new import_obsidian7.Notice(`\u5DF2\u5BFC\u51FA\u7B14\u8BB0\u81F3 ${exported.path}`);
     });
-    footer.createDiv({ cls: "yh-ov-export-note", text: "\u5BFC\u51FA\u4E3A Markdown \u6458\u8981" });
+    footer.createDiv({ cls: "yh-ov-export-note", text: this.exportFormatLabel() });
+  }
+  exportFormatLabel() {
+    const labels = {
+      summary: "\u5BFC\u51FA\u4E3A Markdown \u6458\u8981",
+      "by-color": "\u6309\u989C\u8272\u5206\u7EC4\u5BFC\u51FA",
+      "notes-only": "\u53EA\u5BFC\u51FA\u5E26\u7B14\u8BB0\u7684\u6279\u6CE8",
+      "reading-notes": "\u5BFC\u51FA\u4E3A\u9605\u8BFB\u7B14\u8BB0\u683C\u5F0F"
+    };
+    return labels[this.exportFormat];
   }
   async jumpTo(file, offset, pageNumber) {
     const leaf = this.app.workspace.getLeaf(false);
@@ -2110,9 +2268,9 @@ function formatTime(value) {
 }
 function getTitleLabel(title) {
   const labels = {
-    Insight: "\u{1F4A1} \u6D1E\u5BDF",
-    Question: "\u2753 \u7591\u95EE",
-    Reminder: "\u{1F514} \u63D0\u9192"
+    Insight: "\u6D1E\u5BDF",
+    Question: "\u7591\u95EE",
+    Reminder: "\u63D0\u9192"
   };
   return labels[title] ?? title;
 }
@@ -3031,16 +3189,28 @@ var CommentModal = class extends import_obsidian10.Modal {
     const actions = this.contentEl.createDiv({ cls: "yh-modal-actions" });
     const cancel = actions.createEl("button", { text: "\u53D6\u6D88", cls: "yh-modal-cancel", attr: { type: "button" } });
     const save = actions.createEl("button", { text: "\u4FDD\u5B58", cls: "yh-modal-save", attr: { type: "button" } });
-    cancel.addEventListener("click", () => {
+    const cancelValue = () => {
       this.value = null;
       this.close();
-    });
-    save.addEventListener("click", () => {
+    };
+    const saveValue = () => {
       this.value = {
         title: title.value.trim(),
         content: input.value.trim()
       };
       this.close();
+    };
+    cancel.addEventListener("click", cancelValue);
+    save.addEventListener("click", saveValue);
+    input.addEventListener("keydown", (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        saveValue();
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancelValue();
+      }
     });
   }
   onClose() {

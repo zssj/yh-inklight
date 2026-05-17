@@ -26,6 +26,7 @@ export const COLOR_LABELS: Record<AnnotationColor, string> = {
 export type AnnotationColor = (typeof ANNOTATION_COLORS)[number];
 export type SidebarSide = "left" | "right";
 export type AnnotationSortMode = "newest" | "oldest" | "document";
+export type AnnotationExportFormat = "summary" | "by-color" | "notes-only" | "reading-notes";
 
 export interface TextAnchor {
   startOffset: number;

@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 Obsidian ItemView、AnnotationStore 数据与插件主类回调
- * [OUTPUT]: 对外提供 AnnotationSidebarView，将 highlight 与关联 note 合并为同一张总览卡片
- * [POS]: views 模块的右侧 Leaf 总览面板，是 sticky lane 移除后的主注释工作台
+ * [OUTPUT]: 对外提供 AnnotationSidebarView，将当前文件或全库 annotation 合并为可筛选、可跳转、可导出的总览卡片
+ * [POS]: views 模块的右侧 Leaf 总览面板，承载搜索、筛选、排序、行内编辑、跳转、删除与导出模板
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
@@ -11,9 +11,11 @@ import type OverlayAnnotationsPlugin from "../../main";
 import {
   ANNOTATION_COLORS,
   AnnotationColor,
+  AnnotationExportFormat,
   AnnotationSortMode,
   COLOR_LABELS,
   CommentAnnotation,
+  FileAnnotationDocument,
   HighlightAnnotation,
   PdfCommentAnnotation,
   PdfHighlightAnnotation,
@@ -23,43 +25,15 @@ export const ANNOTATION_SIDEBAR_VIEW = "yh-inklight-sidebar";
 
 type AnnotationKind = "highlight" | "note";
 type AnnotationMode = "md" | "pdf";
+type AnnotationScope = "current" | "all";
 type TypeFilter = "all" | AnnotationKind;
-
-type HighlightSource =
-  | {
-      mode: "md";
-      highlight: HighlightAnnotation;
-      note: CommentAnnotation | null;
-      pageNumber: null;
-      startOffset: number;
-    }
-  | {
-      mode: "pdf";
-      highlight: PdfHighlightAnnotation;
-      note: PdfCommentAnnotation | null;
-      pageNumber: number;
-      startOffset: number;
-    };
-
-type OrphanNoteSource =
-  | {
-      mode: "md";
-      note: CommentAnnotation;
-      pageNumber: null;
-      startOffset: number;
-    }
-  | {
-      mode: "pdf";
-      note: PdfCommentAnnotation;
-      pageNumber: number;
-      startOffset: number;
-    };
 
 type SidebarCard =
   | {
       id: string;
       kind: "highlight";
       mode: AnnotationMode;
+      sourcePath: string;
       color: AnnotationColor;
       text: string;
       content: string;
@@ -75,6 +49,7 @@ type SidebarCard =
       id: string;
       kind: "note";
       mode: AnnotationMode;
+      sourcePath: string;
       color: AnnotationColor;
       text: string;
       content: string;
@@ -88,10 +63,12 @@ type SidebarCard =
     };
 
 export class AnnotationSidebarView extends ItemView {
+  private annotationScope: AnnotationScope = "current";
   private query = "";
   private color: AnnotationColor | "all" = "all";
   private type: TypeFilter = "all";
   private sort: AnnotationSortMode = "document";
+  private exportFormat: AnnotationExportFormat = "summary";
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: OverlayAnnotationsPlugin) {
     super(leaf);
@@ -123,128 +100,122 @@ export class AnnotationSidebarView extends ItemView {
     this.renderHeader(container);
     this.renderControls(container);
 
-    if (!file) {
+    if (this.annotationScope === "current" && !file) {
       container.createDiv({ cls: "yh-empty", text: "Open a Markdown or PDF file to inspect annotations." });
+      this.renderExportFooter(container, null);
       return;
     }
 
-    const document = await this.plugin.store.getDocument(file);
-    const rawCards = this.buildCards(
-      document.highlights,
-      document.comments,
-      document.pdfHighlights,
-      document.pdfComments,
-    );
+    const documents =
+      this.annotationScope === "all" ? await this.plugin.store.getIndexedDocuments() : [await this.plugin.store.getDocument(file!)];
+    const rawCards = documents.flatMap((document) => this.buildCards(document));
     const cards = this.filterCards(rawCards);
-    const highlightCount =
-      document.highlights.filter((highlight) => !highlight.orphaned).length +
-      document.pdfHighlights.filter((highlight) => !highlight.orphaned).length;
-    const noteCount =
-      document.comments.filter((comment) => !comment.orphaned).length +
-      document.pdfComments.filter((comment) => !comment.orphaned).length;
-    container.createDiv({ cls: "yh-ov-count", text: `${highlightCount} highlights · ${noteCount} notes` });
+    const highlightCount = rawCards.filter((card) => card.kind === "highlight" && !card.orphaned).length;
+    const noteCount = rawCards.filter((card) => card.note && !card.orphaned).length;
+    const scopeLabel = this.annotationScope === "all" ? `${documents.length} files` : "current file";
+    container.createDiv({ cls: "yh-ov-count", text: `${scopeLabel} · ${highlightCount} highlights · ${noteCount} notes` });
 
     const list = container.createDiv({ cls: "yh-ov-list" });
     if (!cards.length) {
       list.createDiv({ cls: "yh-empty", text: "No matching annotations." });
     } else {
       for (const card of cards) {
-        this.renderCard(list, file, card);
+        this.renderCard(list, card);
       }
     }
 
-    this.renderExportFooter(container, file);
+    this.renderExportFooter(container, this.annotationScope === "current" ? file : null);
   }
 
-  private buildCards(
-    highlights: HighlightAnnotation[],
-    comments: CommentAnnotation[],
-    pdfHighlights: PdfHighlightAnnotation[],
-    pdfComments: PdfCommentAnnotation[],
-  ): SidebarCard[] {
+  private buildCards(document: FileAnnotationDocument): SidebarCard[] {
     const usedNotes = new Set<string>();
     const cards: SidebarCard[] = [];
 
-    for (const source of this.markdownHighlightSources(highlights, comments, usedNotes)) {
-      cards.push(this.highlightCard(source));
+    for (const highlight of document.highlights) {
+      const note = this.findAttachedMarkdownNote(highlight, document.comments, usedNotes);
+      if (note) {
+        usedNotes.add(note.id);
+      }
+      cards.push({
+        id: highlight.id,
+        kind: "highlight",
+        mode: "md",
+        sourcePath: document.filePath,
+        color: highlight.color,
+        text: highlight.anchor.selectedText,
+        content: note?.content ?? "",
+        createdAt: highlight.createdAt,
+        startOffset: highlight.anchor.startOffset,
+        pageNumber: null,
+        orphaned: highlight.orphaned || note?.orphaned,
+        isCode: isCodeAnchor(highlight.anchor),
+        highlight,
+        note,
+      });
     }
 
-    for (const source of this.pdfHighlightSources(pdfHighlights, pdfComments, usedNotes)) {
-      cards.push(this.highlightCard(source));
+    for (const highlight of document.pdfHighlights) {
+      const note = this.findAttachedPdfNote(highlight, document.pdfComments, usedNotes);
+      if (note) {
+        usedNotes.add(note.id);
+      }
+      cards.push({
+        id: highlight.id,
+        kind: "highlight",
+        mode: "pdf",
+        sourcePath: document.filePath,
+        color: highlight.color,
+        text: highlight.anchor.selectedText,
+        content: note?.content ?? "",
+        createdAt: highlight.createdAt,
+        startOffset: Number.MAX_SAFE_INTEGER,
+        pageNumber: highlight.anchor.pageNumber,
+        orphaned: highlight.orphaned || note?.orphaned,
+        isCode: false,
+        highlight,
+        note,
+      });
     }
 
-    for (const source of this.orphanNoteSources(comments, pdfComments, usedNotes)) {
-      cards.push(this.orphanNoteCard(source));
+    for (const note of document.comments.filter((item) => !usedNotes.has(item.id))) {
+      cards.push({
+        id: note.id,
+        kind: "note",
+        mode: "md",
+        sourcePath: document.filePath,
+        color: note.color,
+        text: note.anchor.selectedText,
+        content: note.content,
+        createdAt: note.createdAt,
+        startOffset: note.anchor.startOffset,
+        pageNumber: null,
+        orphaned: note.orphaned,
+        isCode: isCodeAnchor(note.anchor),
+        highlight: null,
+        note,
+      });
+    }
+
+    for (const note of document.pdfComments.filter((item) => !usedNotes.has(item.id))) {
+      cards.push({
+        id: note.id,
+        kind: "note",
+        mode: "pdf",
+        sourcePath: document.filePath,
+        color: note.color,
+        text: note.anchor.selectedText,
+        content: note.content,
+        createdAt: note.createdAt,
+        startOffset: Number.MAX_SAFE_INTEGER,
+        pageNumber: note.anchor.pageNumber,
+        orphaned: note.orphaned,
+        isCode: false,
+        highlight: null,
+        note,
+      });
     }
 
     return cards;
-  }
-
-  private markdownHighlightSources(
-    highlights: HighlightAnnotation[],
-    comments: CommentAnnotation[],
-    usedNotes: Set<string>,
-  ): HighlightSource[] {
-    return highlights.map((highlight) => {
-      const note = this.findAttachedMarkdownNote(highlight, comments, usedNotes);
-      if (note) {
-        usedNotes.add(note.id);
-      }
-
-      return {
-        mode: "md",
-        highlight,
-        note,
-        pageNumber: null,
-        startOffset: highlight.anchor.startOffset,
-      };
-    });
-  }
-
-  private pdfHighlightSources(
-    highlights: PdfHighlightAnnotation[],
-    comments: PdfCommentAnnotation[],
-    usedNotes: Set<string>,
-  ): HighlightSource[] {
-    return highlights.map((highlight) => {
-      const note = this.findAttachedPdfNote(highlight, comments, usedNotes);
-      if (note) {
-        usedNotes.add(note.id);
-      }
-
-      return {
-        mode: "pdf",
-        highlight,
-        note,
-        pageNumber: highlight.anchor.pageNumber,
-        startOffset: Number.MAX_SAFE_INTEGER,
-      };
-    });
-  }
-
-  private orphanNoteSources(
-    comments: CommentAnnotation[],
-    pdfComments: PdfCommentAnnotation[],
-    usedNotes: Set<string>,
-  ): OrphanNoteSource[] {
-    return [
-      ...comments
-        .filter((note) => !usedNotes.has(note.id))
-        .map((note): OrphanNoteSource => ({
-          mode: "md",
-          note,
-          pageNumber: null,
-          startOffset: note.anchor.startOffset,
-        })),
-      ...pdfComments
-        .filter((note) => !usedNotes.has(note.id))
-        .map((note): OrphanNoteSource => ({
-          mode: "pdf",
-          note,
-          pageNumber: note.anchor.pageNumber,
-          startOffset: Number.MAX_SAFE_INTEGER,
-        })),
-    ];
   }
 
   private findAttachedMarkdownNote(
@@ -285,42 +256,6 @@ export class AnnotationSidebarView extends ItemView {
     );
   }
 
-  private highlightCard(source: HighlightSource): SidebarCard {
-    return {
-      id: source.highlight.id,
-      kind: "highlight",
-      mode: source.mode,
-      color: source.highlight.color,
-      text: source.highlight.anchor.selectedText,
-      content: source.note?.content ?? "",
-      createdAt: source.highlight.createdAt,
-      startOffset: source.startOffset,
-      pageNumber: source.pageNumber,
-      orphaned: source.highlight.orphaned || source.note?.orphaned,
-      isCode: isCodeAnchor(source.highlight.anchor),
-      highlight: source.highlight,
-      note: source.note,
-    };
-  }
-
-  private orphanNoteCard(source: OrphanNoteSource): SidebarCard {
-    return {
-      id: source.note.id,
-      kind: "note",
-      mode: source.mode,
-      color: source.note.color,
-      text: source.note.anchor.selectedText,
-      content: source.note.content,
-      createdAt: source.note.createdAt,
-      startOffset: source.startOffset,
-      pageNumber: source.pageNumber,
-      orphaned: source.note.orphaned,
-      isCode: isCodeAnchor(source.note.anchor),
-      highlight: null,
-      note: source.note,
-    };
-  }
-
   private renderHeader(container: Element): void {
     const header = container.createDiv({ cls: "yh-ov-head" });
     header.createSpan({ cls: "yh-ov-title", text: "墨光批注" });
@@ -345,6 +280,16 @@ export class AnnotationSidebarView extends ItemView {
       this.query = search.value;
       await this.render();
     });
+
+    const scope = searchRow.createEl("select", { cls: "yh-filter-select" });
+    scope.createEl("option", { text: "当前文件", value: "current" });
+    scope.createEl("option", { text: "全库", value: "all" });
+    scope.value = this.annotationScope;
+    scope.addEventListener("change", async () => {
+      this.annotationScope = scope.value as AnnotationScope;
+      await this.render();
+    });
+
     const filterButton = searchRow.createEl("button", { cls: "yh-icon-btn", attr: { type: "button", title: "筛选" } });
     setIcon(filterButton, "filter");
 
@@ -380,9 +325,21 @@ export class AnnotationSidebarView extends ItemView {
       this.sort = sort.value as AnnotationSortMode;
       await this.render();
     });
+
+    const exportFormat = filterRow.createEl("select", { cls: "yh-filter-select" });
+    exportFormat.createEl("option", { text: "默认摘要", value: "summary" });
+    exportFormat.createEl("option", { text: "按颜色分组", value: "by-color" });
+    exportFormat.createEl("option", { text: "只导出笔记", value: "notes-only" });
+    exportFormat.createEl("option", { text: "阅读笔记", value: "reading-notes" });
+    exportFormat.value = this.exportFormat;
+    exportFormat.addEventListener("change", async () => {
+      this.exportFormat = exportFormat.value as AnnotationExportFormat;
+      await this.render();
+    });
   }
 
-  private renderCard(list: Element, file: TFile, cardData: SidebarCard): void {
+  private renderCard(list: Element, cardData: SidebarCard): void {
+    const file = this.fileForCard(cardData);
     const card = list.createDiv({
       cls: `yh-ov-card yh-ov-card--${cardData.color}`,
       attr: this.cardAttributes(cardData),
@@ -410,13 +367,13 @@ export class AnnotationSidebarView extends ItemView {
     this.addExpandToggle(quote, card);
     if (cardData.content) {
       const content = card.createDiv({ cls: "yh-ov-content" });
-      void MarkdownRenderer.render(this.app, cardData.content, content, file.path, this).then(() => {
+      void MarkdownRenderer.render(this.app, cardData.content, content, cardData.sourcePath, this).then(() => {
         this.addExpandToggle(content, card);
       });
     }
 
     const source = card.createDiv({ cls: "yh-ov-source" });
-    source.createSpan({ cls: "yh-ov-file", text: file.name });
+    source.createSpan({ cls: "yh-ov-file", text: file?.name ?? cardData.sourcePath });
     source.createSpan({ cls: "yh-ov-mode", text: cardData.pageNumber ? `p.${cardData.pageNumber}` : "Markdown" });
 
     const actions = card.createDiv({ cls: "yh-ov-actions" });
@@ -426,16 +383,24 @@ export class AnnotationSidebarView extends ItemView {
         attr: { type: "button", title: "编辑笔记", "data-action": "edit-note" },
       });
       setIcon(edit, "pencil");
-      edit.addEventListener("click", () => this.openInlineEditor(card, file, cardData, cardData.content));
+      edit.disabled = !file;
+      edit.addEventListener("click", () => {
+        if (file) {
+          this.openInlineEditor(card, file, cardData, cardData.content);
+        }
+      });
     } else if (cardData.highlight) {
       const addNote = actions.createEl("button", {
         cls: "yh-ov-btn",
         text: "添加笔记",
         attr: { type: "button", "data-action": "add-note" },
       });
+      addNote.disabled = !file;
       addNote.addEventListener("click", () => {
-        addNote.addClass("hidden");
-        this.openInlineEditor(card, file, cardData, "");
+        if (file) {
+          addNote.addClass("hidden");
+          this.openInlineEditor(card, file, cardData, "");
+        }
       });
     }
 
@@ -444,17 +409,25 @@ export class AnnotationSidebarView extends ItemView {
       text: "跳转",
       attr: { type: "button", "data-action": "jump" },
     });
-    jump.addEventListener("click", () => this.jumpTo(file, cardData.startOffset, cardData.pageNumber));
+    jump.disabled = !file;
+    jump.addEventListener("click", () => {
+      if (file) {
+        this.jumpTo(file, cardData.startOffset, cardData.pageNumber);
+      }
+    });
 
     const remove = actions.createEl("button", {
       cls: "yh-ov-btn yh-ov-btn--danger",
       text: "删除",
       attr: { type: "button", "data-action": "delete" },
     });
+    remove.disabled = !file;
     remove.addEventListener("click", async () => {
-      await this.deleteCard(file, cardData);
-      new Notice("批注已删除");
-      await this.plugin.refreshAnnotations();
+      if (file) {
+        await this.deleteCard(file, cardData);
+        new Notice("批注已删除");
+        await this.plugin.refreshAnnotations();
+      }
     });
 
     const edit = card.createDiv({ cls: "yh-ov-edit hidden" });
@@ -468,7 +441,7 @@ export class AnnotationSidebarView extends ItemView {
   }
 
   private cardAttributes(card: SidebarCard): Record<string, string> {
-    const attrs: Record<string, string> = { "data-id": card.id };
+    const attrs: Record<string, string> = { "data-id": card.id, "data-source-path": card.sourcePath };
     if (card.highlight) {
       attrs["data-highlight-id"] = card.highlight.id;
     }
@@ -618,6 +591,11 @@ export class AnnotationSidebarView extends ItemView {
     }
   }
 
+  private fileForCard(card: SidebarCard): TFile | null {
+    const file = this.app.vault.getAbstractFileByPath(card.sourcePath);
+    return file instanceof TFile ? file : null;
+  }
+
   private filterCards(cards: SidebarCard[]): SidebarCard[] {
     return cards
       .filter((card) => this.color === "all" || card.color === this.color)
@@ -631,7 +609,7 @@ export class AnnotationSidebarView extends ItemView {
         return Boolean(card.note);
       })
       .filter((card) => {
-        const haystack = `${card.text} ${card.content}`.toLowerCase();
+        const haystack = `${card.sourcePath} ${card.text} ${card.content}`.toLowerCase();
         return haystack.includes(this.query.toLowerCase());
       })
       .sort((a, b) => {
@@ -641,7 +619,7 @@ export class AnnotationSidebarView extends ItemView {
         if (this.sort === "oldest") {
           return this.cardUpdatedAt(a).localeCompare(this.cardUpdatedAt(b));
         }
-        return (a.pageNumber ?? 0) - (b.pageNumber ?? 0) || a.startOffset - b.startOffset;
+        return a.sourcePath.localeCompare(b.sourcePath) || (a.pageNumber ?? 0) - (b.pageNumber ?? 0) || a.startOffset - b.startOffset;
       });
   }
 
@@ -652,15 +630,28 @@ export class AnnotationSidebarView extends ItemView {
   private renderExportFooter(container: Element, file: TFile | null): void {
     const footer = container.createDiv({ cls: "yh-ov-foot" });
     const exportButton = footer.createEl("button", { cls: "yh-export-btn", text: "↑ 导出批注", attr: { type: "button" } });
-    exportButton.disabled = !file;
+    exportButton.disabled = this.annotationScope === "current" && !file;
     exportButton.addEventListener("click", async () => {
-      if (!file) {
+      if (this.annotationScope === "current" && !file) {
         return;
       }
-      const exported = await this.plugin.store.exportNotes(file);
+      const exported =
+        this.annotationScope === "all"
+          ? await this.plugin.store.exportAllNotes(this.exportFormat)
+          : await this.plugin.store.exportNotes(file!, this.exportFormat);
       new Notice(`已导出笔记至 ${exported.path}`);
     });
-    footer.createDiv({ cls: "yh-ov-export-note", text: "导出为 Markdown 摘要" });
+    footer.createDiv({ cls: "yh-ov-export-note", text: this.exportFormatLabel() });
+  }
+
+  private exportFormatLabel(): string {
+    const labels: Record<AnnotationExportFormat, string> = {
+      summary: "导出为 Markdown 摘要",
+      "by-color": "按颜色分组导出",
+      "notes-only": "只导出带笔记的批注",
+      "reading-notes": "导出为阅读笔记格式",
+    };
+    return labels[this.exportFormat];
   }
 
   private async jumpTo(file: TFile, offset: number, pageNumber: number | null): Promise<void> {
@@ -697,9 +688,9 @@ function formatTime(value: string): string {
 
 function getTitleLabel(title: string): string {
   const labels: Record<string, string> = {
-    Insight: "💡 洞察",
-    Question: "❓ 疑问",
-    Reminder: "🔔 提醒",
+    Insight: "洞察",
+    Question: "疑问",
+    Reminder: "提醒",
   };
   return labels[title] ?? title;
 }

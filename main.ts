@@ -801,16 +801,28 @@ class CommentModal extends Modal {
     const actions = this.contentEl.createDiv({ cls: "yh-modal-actions" });
     const cancel = actions.createEl("button", { text: "取消", cls: "yh-modal-cancel", attr: { type: "button" } });
     const save = actions.createEl("button", { text: "保存", cls: "yh-modal-save", attr: { type: "button" } });
-    cancel.addEventListener("click", () => {
+    const cancelValue = (): void => {
       this.value = null;
       this.close();
-    });
-    save.addEventListener("click", () => {
+    };
+    const saveValue = (): void => {
       this.value = {
         title: title.value.trim(),
         content: input.value.trim(),
       };
       this.close();
+    };
+    cancel.addEventListener("click", cancelValue);
+    save.addEventListener("click", saveValue);
+    input.addEventListener("keydown", (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        saveValue();
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancelValue();
+      }
     });
   }
 

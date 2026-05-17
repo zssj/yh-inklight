@@ -6,7 +6,14 @@
 
 > 本插件基于 [Axl Light](https://github.com/rezonegame/axl-light) 开发，在原有功能基础上增加了编辑器旁便签栏和行内编辑功能。
 
-## 最新版本：v0.5.1
+## 最新版本：v0.5.2
+
+### v0.5.2 功能升级
+
+- ✅ **全库批注总览**：侧栏支持在“当前文件”和“全库”之间切换，跨 Markdown/PDF 搜索、筛选、排序和跳转
+- ✅ **导出模板**：支持默认摘要、按颜色分组、只导出笔记、阅读笔记四种 Markdown 导出格式
+- ✅ **全库导出**：全库模式下可导出 `inklight-all-notes*.md` 汇总文件
+- ✅ **创建便签快捷键**：首次添加便签弹窗支持 `Cmd/Ctrl + Enter` 保存、`Esc` 取消
 
 ### v0.5.1 最小升级
 
@@ -38,6 +45,8 @@
 - 编辑器旁便签栏：支持 Markdown 渲染笔记，窄屏自动隐藏
 - 便签和侧栏笔记的行内编辑：按 `Cmd/Ctrl + Enter` 快捷保存
 - 侧栏批注概览：搜索、颜色筛选、排序、跳转、删除、添加笔记和导出
+- 全库批注总览：跨文件查看、搜索、筛选和导出所有 sidecar 批注
+- 导出模板：默认摘要、按颜色分组、只导出笔记、阅读笔记
 - Sidecar JSON 存储，支持模糊文本锚点重定位
 - Windows 安全路径规范化和重命名迁移处理
 
@@ -90,7 +99,7 @@ curl -fsSL https://raw.githubusercontent.com/rezonegame/yh-inklight/main/scripts
 如果你只想测试指定版本，可以打开：
 
 ```text
-https://github.com/rezonegame/yh-inklight/releases/tag/v0.5.1
+https://github.com/rezonegame/yh-inklight/releases/tag/v0.5.2
 ```
 
 下载该版本的 `main.js`、`manifest.json` 和 `styles.css`，放入 `<你的仓库>/.obsidian/plugins/yh-inklight/` 后重启 Obsidian。
@@ -138,6 +147,7 @@ https://github.com/rezonegame/yh-inklight/releases/tag/v0.5.1
 通过侧栏面板查看、搜索、筛选和管理所有批注。
 
 **面板功能：**
+- **范围切换**：在当前文件和全库批注之间切换
 - **搜索**：输入关键词搜索高亮和笔记内容
 - **颜色筛选**：按颜色过滤批注
 - **类型筛选**：查看全部/高亮/笔记
@@ -160,8 +170,9 @@ https://github.com/rezonegame/yh-inklight/releases/tag/v0.5.1
 
 **导出功能：**
 - 点击底部的 "↑ 导出批注" 按钮
-- 自动生成 Markdown 文件，包含所有高亮和笔记
-- 导出文件命名为 `<原文件名>-notes.md`
+- 选择导出模板：默认摘要、按颜色分组、只导出笔记、阅读笔记
+- 当前文件模式导出 `<原文件名>-notes.md` 或带模板后缀的 Markdown 文件
+- 全库模式导出 `inklight-all-notes.md` 或带模板后缀的全库汇总文件
 
 ## 快捷键
 

@@ -4,6 +4,8 @@
 
 **本插件绝不会修改你的 Markdown 或 PDF 文件。** 批注数据单独存储在 `.obsidian-annotations/` 目录下的 sidecar JSON 文件中。
 
+> 本插件基于 [Axl Light](https://github.com/rezonegame/axl-light) 开发，在原有功能基础上增加了编辑器旁便签栏和行内编辑功能。
+
 ## 最新版本：v0.5.0
 
 ### 新增功能
@@ -67,7 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/rezonegame/yh-inklight/main/scripts
    - `styles.css`
 
 2. 将它们移动到：
-   `<你的仓库>/.obsidian/plugins/axl-light/`
+    `<你的仓库>/.obsidian/plugins/yh-inklight/`
 
 3. 重启 Obsidian
 
@@ -138,14 +140,18 @@ npm run build
 将 `main.js`、`manifest.json` 和 `styles.css` 复制到：
 
 ```text
-<你的仓库>/.obsidian/plugins/axl-light/
+<你的仓库>/.obsidian/plugins/yh-inklight/
 ```
 
 ## 许可证
 
 MIT。详见 [LICENSE](LICENSE)。
 
-## 引用来源
+## 原始项目
+
+本插件基于 [Axl Light](https://github.com/rezonegame/axl-light) 开发，感谢原作者的贡献。
+
+## 参考项目
 
 本插件的功能实现参考了以下开源项目的设计理念：
 

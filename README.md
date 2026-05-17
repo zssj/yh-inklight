@@ -1,92 +1,92 @@
 # Axl Light
 
-Axl Light is a non-invasive Obsidian reading annotation plugin for Markdown and PDF files. It adds overlay highlights, sticky notes, search, jump, and Markdown export while keeping your original documents clean.
+Axl Light 是一款非侵入式 Obsidian 阅读批注插件，支持 Markdown 和 PDF 文件。它提供覆盖层高亮、便签、搜索、跳转和 Markdown 导出功能，同时保持原始文档不变。
 
-**This plugin never modifies your Markdown or PDF files.** Annotation data is stored separately in sidecar JSON files under `.obsidian-annotations/`.
+**本插件绝不会修改你的 Markdown 或 PDF 文件。** 批注数据单独存储在 `.obsidian-annotations/` 目录下的 sidecar JSON 文件中。
 
-## Features
+## 功能特性
 
-- Overlay highlights for Markdown Live Preview, Source Mode, Reading View, and PDFs
-- Mobile-friendly Reading View highlight recovery with delayed rendering and DOM observation
-- Floating toolbar with six colors, sticky note, copy, and annotation overview actions
-- Right-side sticky note lane with Markdown-rendered notes
-- Inline editing for sticky notes and sidebar notes
-- Sidebar overview with search, color filtering, sorting, jump, delete, add-note, and export
-- Sidecar JSON storage with fuzzy text-anchor relocation
-- Windows-safe path normalization and rename migration handling
+- 覆盖层高亮：支持 Markdown 实时预览、源码模式、阅读视图和 PDF
+- 移动端友好的阅读视图高亮恢复，支持延迟渲染和 DOM 观察
+- 浮动工具栏：六种颜色、便签、复制和批注概览操作
+- 右侧便签栏，支持 Markdown 渲染笔记
+- 便签和侧栏笔记的行内编辑
+- 侧栏批注概览：搜索、颜色筛选、排序、跳转、删除、添加笔记和导出
+- Sidecar JSON 存储，支持模糊文本锚点重定位
+- Windows 安全路径规范化和重命名迁移处理
 
-## Installation
+## 安装方式
 
-### BRAT
+### BRAT 安装
 
-1. Install the Obsidian BRAT plugin.
-2. Run `BRAT: Add a beta plugin for testing`.
-3. Paste this repository URL:
+1. 安装 Obsidian BRAT 插件
+2. 运行 `BRAT: Add a beta plugin for testing`
+3. 粘贴本仓库 URL：
 
 ```text
-https://github.com/little-pond/axl-light
+https://github.com/rezonegame/yh-inklight
 ```
 
-4. Enable `Axl Light` in `Settings -> Community plugins`.
+4. 在 `设置 → 第三方插件` 中启用 `Axl Light`
 
-### Quick Install
+### 快速安装
 
-Run this in Terminal. Replace the path with your Obsidian vault path:
+在终端中运行以下命令，将路径替换为你的 Obsidian 仓库路径：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/little-pond/axl-light/main/scripts/install.sh | bash -s -- "$HOME/Documents/Obsidian Vault"
+curl -fsSL https://raw.githubusercontent.com/rezonegame/yh-inklight/main/scripts/install.sh | bash -s -- "$HOME/Documents/Obsidian Vault"
 ```
 
-Then restart Obsidian, open Settings → Community plugins, and enable Axl Light.
+然后重启 Obsidian，打开 设置 → 第三方插件，启用 Axl Light。
 
-![Install Axl Light from Terminal](docs/images/install-axl-light-command.png)
+![从终端安装 Axl Light](docs/images/install-axl-light-command.png)
 
-### Manual Install
+### 手动安装
 
-1. Download these three files from the latest release:
-   https://github.com/little-pond/axl-light/releases/latest
+1. 从最新 Release 下载以下三个文件：
+   https://github.com/rezonegame/yh-inklight/releases/latest
 
    - `main.js`
    - `manifest.json`
    - `styles.css`
 
-2. Move them to:
-   `<your-vault>/.obsidian/plugins/axl-light/`
+2. 将它们移动到：
+   `<你的仓库>/.obsidian/plugins/axl-light/`
 
-3. Restart Obsidian
+3. 重启 Obsidian
 
-4. Settings → Community plugins → Enable "Axl Light"
+4. 设置 → 第三方插件 → 启用 "Axl Light"
 
-Do **not** download the source code ZIP from the green `Code` button. Obsidian needs the built release files.
+**不要**从绿色 `Code` 按钮下载源代码 ZIP。Obsidian 需要的是构建后的 Release 文件。
 
-## Usage
+## 使用方法
 
-### Highlight Text
+### 高亮文本
 
-Select text in Markdown or PDF. Use the floating toolbar to choose a color, add a sticky note, copy the selection, or open the overview.
+在 Markdown 或 PDF 中选择文本，使用浮动工具栏选择颜色、添加便签、复制选区或打开批注概览。
 
-![Highlight with Axl Light](docs/images/highlight-with-axl-light.png)
+![使用 Axl Light 高亮](docs/images/highlight-with-axl-light.png)
 
-### Edit Sticky Notes
+### 编辑便签
 
-Open the right-side sticky note lane or the annotation overview. Click the pencil button to edit a note inline. Press `Cmd/Ctrl + Enter` to save.
+打开右侧便签栏或批注概览，点击铅笔按钮行内编辑笔记，按 `Cmd/Ctrl + Enter` 保存。
 
-![Sticky notes and annotation overview](docs/images/sticky-notes-overview.png)
+![便签和批注概览](docs/images/sticky-notes-overview.png)
 
-### Search, Jump, and Export
+### 搜索、跳转和导出
 
-Use the annotation overview to search highlights and notes, jump back to the source position, delete annotations, add notes to existing highlights, or export everything into a new Markdown notes file.
+使用批注概览搜索高亮和笔记、跳转回源位置、删除批注、为已有高亮添加笔记，或将所有内容导出为新的 Markdown 笔记文件。
 
-## Commands
+## 命令
 
-- `Highlight selected text`: `Cmd/Ctrl + Shift + H`
-- `Add sticky note to selection`: `Cmd/Ctrl + Alt + M`
-- `Toggle sticky note lane`: `Cmd/Ctrl + Shift + N`
-- `Open annotation overview`
+- `高亮选中文本`：`Cmd/Ctrl + Shift + H`
+- `为选区添加便签`：`Cmd/Ctrl + Alt + M`
+- `切换便签栏`：`Cmd/Ctrl + Shift + N`
+- `打开批注概览`
 
-## Data Storage
+## 数据存储
 
-Axl Light stores annotations in your vault:
+Axl Light 将批注存储在你的仓库中：
 
 ```text
 .obsidian-annotations/
@@ -95,36 +95,36 @@ Axl Light stores annotations in your vault:
   papers__example.pdf.json
 ```
 
-The sidecar files contain anchors, selected text, colors, sticky note content, optional titles, timestamps, and PDF page rectangles.
+Sidecar 文件包含锚点、选中文本、颜色、便签内容、可选标题、时间戳和 PDF 页面矩形信息。
 
-Your original `.md` and `.pdf` files remain unchanged. If you disable or remove the plugin, your documents stay clean.
+你的原始 `.md` 和 `.pdf` 文件保持不变。即使禁用或卸载插件，文档也不会被修改。
 
-## Known Limitations
+## 已知限制
 
-- Reading View highlights are matched against rendered DOM text, so unusual themes or plugins that heavily rewrite rendered HTML may affect placement.
-- PDF support depends on Obsidian's built-in PDF viewer DOM structure.
-- PDF text selection and rectangle anchors may need relocation improvements for rotated pages or unusual PDF layouts.
-- Very large annotation sets currently render directly in the sidebar; virtual scrolling is planned.
+- 阅读视图的高亮基于渲染后的 DOM 文本匹配，因此不常见的主题或大量重写渲染 HTML 的插件可能会影响高亮位置。
+- PDF 支持依赖于 Obsidian 内置 PDF 查看器的 DOM 结构。
+- PDF 文本选择和矩形锚点在旋转页面或特殊 PDF 布局下可能需要改进重定位。
+- 大量批注集目前直接在侧栏中渲染，虚拟滚动计划中。
 
-## Development
+## 开发
 
 ```bash
 npm install
 npm run dev
 ```
 
-For production builds:
+生产构建：
 
 ```bash
 npm run build
 ```
 
-Copy `main.js`, `manifest.json`, and `styles.css` into:
+将 `main.js`、`manifest.json` 和 `styles.css` 复制到：
 
 ```text
-<your-vault>/.obsidian/plugins/axl-light/
+<你的仓库>/.obsidian/plugins/axl-light/
 ```
 
-## License
+## 许可证
 
-MIT. See [LICENSE](LICENSE).
+MIT。详见 [LICENSE](LICENSE)。

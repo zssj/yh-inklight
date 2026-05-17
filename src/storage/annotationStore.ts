@@ -5,7 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
-import { App, normalizePath, TFile } from "obsidian";
+import { App, normalizePath, Notice, TFile } from "obsidian";
 
 import {
   AnnotationIndex,
@@ -20,6 +20,14 @@ import {
 
 const STORE_DIR = ".obsidian-annotations";
 const INDEX_PATH = normalizePath(`${STORE_DIR}/index.json`);
+const BACKUP_DIR = normalizePath(`${STORE_DIR}/backups`);
+
+export class AnnotationStoreReadError extends Error {
+  constructor(readonly path: string, readonly originalError: unknown) {
+    super(`Failed to read annotation sidecar JSON: ${path}`);
+    this.name = "AnnotationStoreReadError";
+  }
+}
 
 export class AnnotationStore {
   private readonly documents = new Map<string, FileAnnotationDocument>();
@@ -34,7 +42,7 @@ export class AnnotationStore {
 
   async initialize(): Promise<void> {
     await this.ensureStoreDir();
-    this.index = await this.readJson<AnnotationIndex>(INDEX_PATH, EMPTY_INDEX);
+    this.index = await this.readJson<AnnotationIndex>(INDEX_PATH, EMPTY_INDEX, { allowCorruptFallback: true });
   }
 
   getCachedDocument(filePath: string): FileAnnotationDocument | null {
@@ -266,6 +274,36 @@ export class AnnotationStore {
     await this.saveDocument(document);
   }
 
+  async backupDocuments(): Promise<number> {
+    await this.ensureStoreDir();
+    await this.ensureDir(BACKUP_DIR);
+
+    const listed = await this.app.vault.adapter.list(STORE_DIR);
+    const sidecars = listed.files.filter((path) => {
+      const normalizedPath = normalizePath(path);
+      return (
+        normalizedPath.endsWith(".json") &&
+        normalizedPath !== INDEX_PATH &&
+        !normalizedPath.startsWith(`${BACKUP_DIR}/`)
+      );
+    });
+
+    if (!sidecars.length) {
+      return 0;
+    }
+
+    const snapshotDir = normalizePath(`${BACKUP_DIR}/${backupTimestamp()}`);
+    await this.ensureDir(snapshotDir);
+
+    for (const sidecar of sidecars) {
+      const content = await this.app.vault.adapter.read(sidecar);
+      const target = normalizePath(`${snapshotDir}/${sidecar.split("/").pop()}`);
+      await this.app.vault.adapter.write(target, content);
+    }
+
+    return sidecars.length;
+  }
+
   async hashFile(file: TFile): Promise<string> {
     if (file.extension === "md") {
       return this.hashString(await this.app.vault.cachedRead(file));
@@ -320,9 +358,13 @@ export class AnnotationStore {
   }
 
   private async ensureStoreDir(): Promise<void> {
-    const storeDir = normalizePath(STORE_DIR);
-    if (!(await this.app.vault.adapter.exists(storeDir))) {
-      await this.app.vault.adapter.mkdir(storeDir);
+    await this.ensureDir(STORE_DIR);
+  }
+
+  private async ensureDir(path: string): Promise<void> {
+    const normalizedPath = normalizePath(path);
+    if (!(await this.app.vault.adapter.exists(normalizedPath))) {
+      await this.app.vault.adapter.mkdir(normalizedPath);
     }
   }
 
@@ -331,7 +373,11 @@ export class AnnotationStore {
     await this.app.vault.adapter.write(INDEX_PATH, JSON.stringify(this.index, null, 2));
   }
 
-  private async readJson<T>(path: string, fallback: T): Promise<T> {
+  private async readJson<T>(
+    path: string,
+    fallback: T,
+    options: { allowCorruptFallback?: boolean } = {},
+  ): Promise<T> {
     const normalizedPath = normalizePath(path);
     if (!(await this.app.vault.adapter.exists(normalizedPath))) {
       return fallback;
@@ -339,8 +385,12 @@ export class AnnotationStore {
 
     try {
       return JSON.parse(await this.app.vault.adapter.read(normalizedPath)) as T;
-    } catch {
-      return fallback;
+    } catch (error) {
+      if (options.allowCorruptFallback) {
+        return fallback;
+      }
+      new Notice(`墨光批注无法读取 ${normalizedPath}，已停止写入以保护批注数据。`);
+      throw new AnnotationStoreReadError(normalizedPath, error);
     }
   }
 
@@ -369,4 +419,8 @@ export class AnnotationStore {
       .map((byte) => byte.toString(16).padStart(2, "0"))
       .join("");
   }
+}
+
+function backupTimestamp(): string {
+  return new Date().toISOString().replace(/[:.]/g, "-");
 }

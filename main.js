@@ -443,14 +443,11 @@ function wrapRenderedAnchor(root, anchor, color, id) {
   return wrapRange(snapshot.segments, range, color, id);
 }
 function locateRenderedRange(renderedText, anchor) {
-  const exact = renderedText.indexOf(anchor.selectedText);
-  if (exact >= 0) {
-    return {
-      start: exact,
-      end: exact + anchor.selectedText.length
-    };
+  const exact = locateBestTextRange(renderedText, anchor);
+  if (exact) {
+    return exact;
   }
-  const normalized = locateNormalizedRange(renderedText, anchor.selectedText);
+  const normalized = locateNormalizedRange(renderedText, anchor);
   if (normalized) {
     return normalized;
   }
@@ -467,23 +464,92 @@ function locateRenderedRange(renderedText, anchor) {
     end: fuzzy.endOffset
   };
 }
-function locateNormalizedRange(renderedText, selectedText) {
+function locateBestTextRange(renderedText, anchor) {
+  if (!anchor.selectedText) {
+    return null;
+  }
+  let cursor = renderedText.indexOf(anchor.selectedText);
+  let best = null;
+  while (cursor >= 0) {
+    const range = {
+      start: cursor,
+      end: cursor + anchor.selectedText.length
+    };
+    const score = rangeScore(renderedText, anchor, range);
+    if (!best || score > best.score) {
+      best = { range, score };
+    }
+    cursor = renderedText.indexOf(anchor.selectedText, cursor + 1);
+  }
+  return best?.range ?? null;
+}
+function locateNormalizedRange(renderedText, anchor) {
   const rendered = normalizeWithMap(renderedText);
-  const selected = normalizeWithMap(selectedText);
+  const selected = normalizeWithMap(anchor.selectedText);
   if (!rendered.text || !selected.text) {
     return null;
   }
-  const normalizedStart = rendered.text.indexOf(selected.text);
-  if (normalizedStart < 0) {
-    return null;
+  let normalizedStart = rendered.text.indexOf(selected.text);
+  let best = null;
+  while (normalizedStart >= 0) {
+    const normalizedEnd = normalizedStart + selected.text.length - 1;
+    const start = rendered.map[normalizedStart];
+    const end = rendered.map[normalizedEnd] + 1;
+    if (start !== void 0 && end !== void 0 && start < end) {
+      const range = { start, end };
+      const score = rangeScore(renderedText, anchor, range);
+      if (!best || score > best.score) {
+        best = { range, score };
+      }
+    }
+    normalizedStart = rendered.text.indexOf(selected.text, normalizedStart + 1);
   }
-  const normalizedEnd = normalizedStart + selected.text.length - 1;
-  const start = rendered.map[normalizedStart];
-  const end = rendered.map[normalizedEnd] + 1;
-  if (start === void 0 || end === void 0 || start >= end) {
-    return null;
+  return best?.range ?? null;
+}
+function rangeScore(renderedText, anchor, range) {
+  const before = renderedText.slice(Math.max(0, range.start - anchor.prefix.length), range.start);
+  const after = renderedText.slice(range.end, Math.min(renderedText.length, range.end + anchor.suffix.length));
+  const context = prefixScore(anchor.prefix, before) * 0.45 + suffixScore(anchor.suffix, after) * 0.45;
+  const distance = 1 - Math.min(1, Math.abs(range.start - anchor.startOffset) / Math.max(renderedText.length, 1));
+  return context + distance * 0.1;
+}
+function prefixScore(expected, actual) {
+  if (!expected && !actual) {
+    return 1;
   }
-  return { start, end };
+  if (!expected || !actual) {
+    return 0;
+  }
+  if (actual.endsWith(expected) || expected.endsWith(actual)) {
+    return 1;
+  }
+  let shared = 0;
+  const max = Math.min(expected.length, actual.length);
+  for (let index = 1; index <= max; index += 1) {
+    if (expected.slice(-index) === actual.slice(-index)) {
+      shared = index;
+    }
+  }
+  return shared / Math.max(expected.length, actual.length);
+}
+function suffixScore(expected, actual) {
+  if (!expected && !actual) {
+    return 1;
+  }
+  if (!expected || !actual) {
+    return 0;
+  }
+  if (actual.startsWith(expected) || expected.startsWith(actual)) {
+    return 1;
+  }
+  let shared = 0;
+  const max = Math.min(expected.length, actual.length);
+  for (let index = 1; index <= max; index += 1) {
+    if (expected.slice(0, index) === actual.slice(0, index)) {
+      shared = index;
+    }
+  }
+  return shared / Math.max(expected.length, actual.length);
 }
 function normalizeWithMap(value) {
   let text = "";
@@ -1132,6 +1198,15 @@ var AnnotationSettingsTab = class extends import_obsidian4.PluginSettingTab {
 var import_obsidian5 = require("obsidian");
 var STORE_DIR = ".obsidian-annotations";
 var INDEX_PATH = (0, import_obsidian5.normalizePath)(`${STORE_DIR}/index.json`);
+var BACKUP_DIR = (0, import_obsidian5.normalizePath)(`${STORE_DIR}/backups`);
+var AnnotationStoreReadError = class extends Error {
+  constructor(path, originalError) {
+    super(`Failed to read annotation sidecar JSON: ${path}`);
+    this.path = path;
+    this.originalError = originalError;
+    this.name = "AnnotationStoreReadError";
+  }
+};
 var AnnotationStore = class {
   constructor(app) {
     this.app = app;
@@ -1144,7 +1219,7 @@ var AnnotationStore = class {
   }
   async initialize() {
     await this.ensureStoreDir();
-    this.index = await this.readJson(INDEX_PATH, EMPTY_INDEX);
+    this.index = await this.readJson(INDEX_PATH, EMPTY_INDEX, { allowCorruptFallback: true });
   }
   getCachedDocument(filePath) {
     return this.documents.get(this.toCacheKey(filePath)) ?? null;
@@ -1342,6 +1417,26 @@ var AnnotationStore = class {
     document2.lastModified = (/* @__PURE__ */ new Date()).toISOString();
     await this.saveDocument(document2);
   }
+  async backupDocuments() {
+    await this.ensureStoreDir();
+    await this.ensureDir(BACKUP_DIR);
+    const listed = await this.app.vault.adapter.list(STORE_DIR);
+    const sidecars = listed.files.filter((path) => {
+      const normalizedPath = (0, import_obsidian5.normalizePath)(path);
+      return normalizedPath.endsWith(".json") && normalizedPath !== INDEX_PATH && !normalizedPath.startsWith(`${BACKUP_DIR}/`);
+    });
+    if (!sidecars.length) {
+      return 0;
+    }
+    const snapshotDir = (0, import_obsidian5.normalizePath)(`${BACKUP_DIR}/${backupTimestamp()}`);
+    await this.ensureDir(snapshotDir);
+    for (const sidecar of sidecars) {
+      const content = await this.app.vault.adapter.read(sidecar);
+      const target = (0, import_obsidian5.normalizePath)(`${snapshotDir}/${sidecar.split("/").pop()}`);
+      await this.app.vault.adapter.write(target, content);
+    }
+    return sidecars.length;
+  }
   async hashFile(file) {
     if (file.extension === "md") {
       return this.hashString(await this.app.vault.cachedRead(file));
@@ -1386,24 +1481,31 @@ var AnnotationStore = class {
     };
   }
   async ensureStoreDir() {
-    const storeDir = (0, import_obsidian5.normalizePath)(STORE_DIR);
-    if (!await this.app.vault.adapter.exists(storeDir)) {
-      await this.app.vault.adapter.mkdir(storeDir);
+    await this.ensureDir(STORE_DIR);
+  }
+  async ensureDir(path) {
+    const normalizedPath = (0, import_obsidian5.normalizePath)(path);
+    if (!await this.app.vault.adapter.exists(normalizedPath)) {
+      await this.app.vault.adapter.mkdir(normalizedPath);
     }
   }
   async writeIndex() {
     await this.ensureStoreDir();
     await this.app.vault.adapter.write(INDEX_PATH, JSON.stringify(this.index, null, 2));
   }
-  async readJson(path, fallback) {
+  async readJson(path, fallback, options = {}) {
     const normalizedPath = (0, import_obsidian5.normalizePath)(path);
     if (!await this.app.vault.adapter.exists(normalizedPath)) {
       return fallback;
     }
     try {
       return JSON.parse(await this.app.vault.adapter.read(normalizedPath));
-    } catch {
-      return fallback;
+    } catch (error) {
+      if (options.allowCorruptFallback) {
+        return fallback;
+      }
+      new import_obsidian5.Notice(`\u58A8\u5149\u6279\u6CE8\u65E0\u6CD5\u8BFB\u53D6 ${normalizedPath}\uFF0C\u5DF2\u505C\u6B62\u5199\u5165\u4EE5\u4FDD\u62A4\u6279\u6CE8\u6570\u636E\u3002`);
+      throw new AnnotationStoreReadError(normalizedPath, error);
     }
   }
   async deleteIfExists(path) {
@@ -1426,6 +1528,9 @@ var AnnotationStore = class {
     return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
   }
 };
+function backupTimestamp() {
+  return (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+}
 
 // src/views/annotationPopover.ts
 var import_obsidian6 = require("obsidian");
@@ -2250,7 +2355,7 @@ var StickyNoteLane = class {
         onUpdate: (c, content, title) => this.handleUpdate(view.file, c, content, title),
         onDelete: (c) => this.handleDelete(view.file, c)
       });
-      if (settings.stickySide === "right") {
+      if (settings.showLeaderLines && settings.stickySide === "right") {
         const line = this.lane.createDiv({ cls: "yh-leader-line" });
         line.style.position = "absolute";
         line.style.left = "0";
@@ -2262,7 +2367,7 @@ var StickyNoteLane = class {
     }
   }
   getAnchorTop(view, comment) {
-    const mark = view.containerEl.querySelector(`mark.yh-highlight[data-yh-id="${comment.id}"]`);
+    const mark = view.containerEl.querySelector(`.yh-highlight[data-yh-id="${comment.id}"]`);
     if (mark) {
       const rect = mark.getBoundingClientRect();
       const containerRect = view.containerEl.getBoundingClientRect();
@@ -2325,12 +2430,14 @@ var OverlayAnnotationsPlugin = class extends import_obsidian10.Plugin {
     this.settings = DEFAULT_SETTINGS;
     this.lastSelection = null;
     this.renameMigrationTimer = null;
+    this.lastBackupAt = 0;
   }
   async onload() {
     (0, import_obsidian10.addIcon)("yh-inklight-icon", YH_INKLIGHT_ICON);
     await this.loadSettings();
     this.store = new AnnotationStore(this.app);
     await this.store.initialize();
+    this.registerAutomaticBackups();
     this.registerView(ANNOTATION_SIDEBAR_VIEW, (leaf) => new AnnotationSidebarView(leaf, this));
     this.registerEditorExtension([
       createHighlightExtension({
@@ -2512,6 +2619,26 @@ var OverlayAnnotationsPlugin = class extends import_obsidian10.Plugin {
       })
     );
   }
+  registerAutomaticBackups() {
+    this.registerInterval(
+      window.setInterval(() => {
+        void this.runScheduledBackup();
+      }, 6e4)
+    );
+  }
+  async runScheduledBackup() {
+    const intervalMs = Math.max(1, this.settings.backupFrequencyMinutes) * 6e4;
+    const now = Date.now();
+    if (now - this.lastBackupAt < intervalMs) {
+      return;
+    }
+    try {
+      await this.store.backupDocuments();
+      this.lastBackupAt = now;
+    } catch {
+      new import_obsidian10.Notice("\u58A8\u5149\u6279\u6CE8\u81EA\u52A8\u5907\u4EFD\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5 .obsidian-annotations \u76EE\u5F55\u3002");
+    }
+  }
   async createHighlight(color) {
     if (this.pdfLayer.isPdfActive()) {
       await this.pdfLayer.createHighlight(color);
@@ -2647,7 +2774,11 @@ var OverlayAnnotationsPlugin = class extends import_obsidian10.Plugin {
         return this.lastSelection;
       }
     }
-    return this.lastSelection;
+    if (file && this.lastSelection?.filePath === file.path) {
+      return this.lastSelection;
+    }
+    this.lastSelection = null;
+    return null;
   }
   activeEditor() {
     const view = this.app.workspace.getActiveViewOfType(import_obsidian10.MarkdownView);

@@ -173,15 +173,12 @@ function wrapRenderedAnchor(root: HTMLElement, anchor: TextAnchor, color: Annota
 }
 
 function locateRenderedRange(renderedText: string, anchor: TextAnchor): RenderedRange | null {
-  const exact = renderedText.indexOf(anchor.selectedText);
-  if (exact >= 0) {
-    return {
-      start: exact,
-      end: exact + anchor.selectedText.length,
-    };
+  const exact = locateBestTextRange(renderedText, anchor);
+  if (exact) {
+    return exact;
   }
 
-  const normalized = locateNormalizedRange(renderedText, anchor.selectedText);
+  const normalized = locateNormalizedRange(renderedText, anchor);
   if (normalized) {
     return normalized;
   }
@@ -201,26 +198,104 @@ function locateRenderedRange(renderedText: string, anchor: TextAnchor): Rendered
   };
 }
 
-function locateNormalizedRange(renderedText: string, selectedText: string): RenderedRange | null {
+function locateBestTextRange(renderedText: string, anchor: TextAnchor): RenderedRange | null {
+  if (!anchor.selectedText) {
+    return null;
+  }
+
+  let cursor = renderedText.indexOf(anchor.selectedText);
+  let best: { range: RenderedRange; score: number } | null = null;
+
+  while (cursor >= 0) {
+    const range = {
+      start: cursor,
+      end: cursor + anchor.selectedText.length,
+    };
+    const score = rangeScore(renderedText, anchor, range);
+    if (!best || score > best.score) {
+      best = { range, score };
+    }
+    cursor = renderedText.indexOf(anchor.selectedText, cursor + 1);
+  }
+
+  return best?.range ?? null;
+}
+
+function locateNormalizedRange(renderedText: string, anchor: TextAnchor): RenderedRange | null {
   const rendered = normalizeWithMap(renderedText);
-  const selected = normalizeWithMap(selectedText);
+  const selected = normalizeWithMap(anchor.selectedText);
   if (!rendered.text || !selected.text) {
     return null;
   }
 
-  const normalizedStart = rendered.text.indexOf(selected.text);
-  if (normalizedStart < 0) {
-    return null;
+  let normalizedStart = rendered.text.indexOf(selected.text);
+  let best: { range: RenderedRange; score: number } | null = null;
+
+  while (normalizedStart >= 0) {
+    const normalizedEnd = normalizedStart + selected.text.length - 1;
+    const start = rendered.map[normalizedStart];
+    const end = rendered.map[normalizedEnd] + 1;
+    if (start !== undefined && end !== undefined && start < end) {
+      const range = { start, end };
+      const score = rangeScore(renderedText, anchor, range);
+      if (!best || score > best.score) {
+        best = { range, score };
+      }
+    }
+    normalizedStart = rendered.text.indexOf(selected.text, normalizedStart + 1);
   }
 
-  const normalizedEnd = normalizedStart + selected.text.length - 1;
-  const start = rendered.map[normalizedStart];
-  const end = rendered.map[normalizedEnd] + 1;
-  if (start === undefined || end === undefined || start >= end) {
-    return null;
+  return best?.range ?? null;
+}
+
+function rangeScore(renderedText: string, anchor: TextAnchor, range: RenderedRange): number {
+  const before = renderedText.slice(Math.max(0, range.start - anchor.prefix.length), range.start);
+  const after = renderedText.slice(range.end, Math.min(renderedText.length, range.end + anchor.suffix.length));
+  const context = prefixScore(anchor.prefix, before) * 0.45 + suffixScore(anchor.suffix, after) * 0.45;
+  const distance = 1 - Math.min(1, Math.abs(range.start - anchor.startOffset) / Math.max(renderedText.length, 1));
+  return context + distance * 0.1;
+}
+
+function prefixScore(expected: string, actual: string): number {
+  if (!expected && !actual) {
+    return 1;
+  }
+  if (!expected || !actual) {
+    return 0;
+  }
+  if (actual.endsWith(expected) || expected.endsWith(actual)) {
+    return 1;
   }
 
-  return { start, end };
+  let shared = 0;
+  const max = Math.min(expected.length, actual.length);
+  for (let index = 1; index <= max; index += 1) {
+    if (expected.slice(-index) === actual.slice(-index)) {
+      shared = index;
+    }
+  }
+  return shared / Math.max(expected.length, actual.length);
+}
+
+function suffixScore(expected: string, actual: string): number {
+  if (!expected && !actual) {
+    return 1;
+  }
+  if (!expected || !actual) {
+    return 0;
+  }
+  if (actual.startsWith(expected) || expected.startsWith(actual)) {
+    return 1;
+  }
+
+  let shared = 0;
+  const max = Math.min(expected.length, actual.length);
+  for (let index = 1; index <= max; index += 1) {
+    if (expected.slice(0, index) === actual.slice(0, index)) {
+      shared = index;
+    }
+  }
+  return shared / Math.max(expected.length, actual.length);
 }
 
 function normalizeWithMap(value: string): NormalizedIndex {

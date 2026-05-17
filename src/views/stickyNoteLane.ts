@@ -14,7 +14,13 @@ import { renderStickyNoteCard } from "./stickyNoteView";
 interface StickyNoteLaneOptions {
   app: App;
   component: Component;
-  getSettings: () => { stickyWidth: number; stickySide: "left" | "right"; stickyCollapseWidth: number; stickyNotesVisible: boolean };
+  getSettings: () => {
+    stickyWidth: number;
+    stickySide: "left" | "right";
+    stickyCollapseWidth: number;
+    showLeaderLines: boolean;
+    stickyNotesVisible: boolean;
+  };
   getCachedDocument: (filePath: string) => FileAnnotationDocument | null;
   onUpdateComment: (file: TFile, comment: CommentAnnotation, content: string, title?: string) => Promise<void>;
   onDeleteAnnotation: (file: TFile, annotationId: string) => Promise<void>;
@@ -91,7 +97,11 @@ export class StickyNoteLane {
     }
   }
 
-  private renderLane(view: MarkdownView, comments: CommentAnnotation[], settings: { stickySide: "left" | "right" }): void {
+  private renderLane(
+    view: MarkdownView,
+    comments: CommentAnnotation[],
+    settings: { stickySide: "left" | "right"; showLeaderLines: boolean },
+  ): void {
     if (!this.lane) {
       return;
     }
@@ -165,7 +175,7 @@ export class StickyNoteLane {
       });
 
       // 添加连接线
-      if (settings.stickySide === "right") {
+      if (settings.showLeaderLines && settings.stickySide === "right") {
         const line = this.lane.createDiv({ cls: "yh-leader-line" });
         line.style.position = "absolute";
         line.style.left = "0";
@@ -179,7 +189,7 @@ export class StickyNoteLane {
 
   private getAnchorTop(view: MarkdownView, comment: CommentAnnotation): number | null {
     // 在阅读视图中查找高亮元素
-    const mark = view.containerEl.querySelector<HTMLElement>(`mark.yh-highlight[data-yh-id="${comment.id}"]`);
+    const mark = view.containerEl.querySelector<HTMLElement>(`.yh-highlight[data-yh-id="${comment.id}"]`);
     if (mark) {
       const rect = mark.getBoundingClientRect();
       const containerRect = view.containerEl.getBoundingClientRect();

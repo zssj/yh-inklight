@@ -6,9 +6,17 @@
 
 > 本插件基于 [Axl Light](https://github.com/rezonegame/axl-light) 开发，在原有功能基础上增加了编辑器旁便签栏和行内编辑功能。
 
-## 最新版本：v0.5.0
+## 最新版本：v0.5.1
 
-### 新增功能
+### v0.5.1 最小升级
+
+- ✅ **自动备份 sidecar 批注**：根据“数据备份频率”设置，将 `.obsidian-annotations/` 下的批注 JSON 快照保存到 `.obsidian-annotations/backups/`
+- ✅ **选区复用保护**：切换文件后不会继续使用旧文件选区，避免批注写入错误文档
+- ✅ **sidecar 读取保护**：批注 JSON 损坏时停止写入并提示，避免静默覆盖为空数据
+- ✅ **重复文本定位优化**：阅读视图中重复文本会优先使用上下文和原始位置匹配
+- ✅ **便签栏细节修复**：连接线设置生效，并兼容更多高亮 DOM 形态
+
+### v0.5.0 新增功能
 
 - ✅ **编辑器旁便签栏**：在 Markdown 编辑器右侧显示便签卡片，支持 Markdown 渲染
 - ✅ **便签行内编辑**：点击铅笔按钮直接编辑便签内容，按 `Cmd/Ctrl + Enter` 保存
@@ -76,6 +84,16 @@ curl -fsSL https://raw.githubusercontent.com/rezonegame/yh-inklight/main/scripts
 4. 设置 → 第三方插件 → 启用 "墨光批注"
 
 **不要**从绿色 `Code` 按钮下载源代码 ZIP。Obsidian 需要的是构建后的 Release 文件。
+
+### 测试版下载
+
+如果你只想测试指定版本，可以打开：
+
+```text
+https://github.com/rezonegame/yh-inklight/releases/tag/v0.5.1
+```
+
+下载该版本的 `main.js`、`manifest.json` 和 `styles.css`，放入 `<你的仓库>/.obsidian/plugins/yh-inklight/` 后重启 Obsidian。
 
 ## 使用方法
 
@@ -175,9 +193,14 @@ curl -fsSL https://raw.githubusercontent.com/rezonegame/yh-inklight/main/scripts
   index.json
   notes__reading__book.md.json
   papers__example.pdf.json
+  backups/
+    2026-05-17T12-00-00-000Z/
+      notes__reading__book.md.json
 ```
 
 Sidecar 文件包含锚点、选中文本、颜色、便签内容、可选标题、时间戳和 PDF 页面矩形信息。
+
+`backups/` 目录只保存 sidecar JSON 的历史快照，用于防止批注数据误删或损坏；它不会备份或修改你的原始 Markdown/PDF 文件。
 
 你的原始 `.md` 和 `.pdf` 文件保持不变。即使禁用或卸载插件，文档也不会被修改。
 

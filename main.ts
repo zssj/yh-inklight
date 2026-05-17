@@ -166,7 +166,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     for (const leaf of this.app.workspace.getLeavesOfType(ANNOTATION_SIDEBAR_VIEW)) {
       const view = leaf.view;
       if (view instanceof AnnotationSidebarView) {
-        await view.render();
+        view.requestRender();
       }
     }
     await this.stickyLane.render();
@@ -474,6 +474,10 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       await leaf.setViewState({ type: ANNOTATION_SIDEBAR_VIEW, active: true });
     }
     this.app.workspace.revealLeaf(leaf);
+    const view = leaf.view;
+    if (view instanceof AnnotationSidebarView) {
+      view.requestRender();
+    }
   }
 
   private copySelection(): void {

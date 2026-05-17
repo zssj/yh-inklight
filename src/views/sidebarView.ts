@@ -69,6 +69,8 @@ export class AnnotationSidebarView extends ItemView {
   private type: TypeFilter = "all";
   private sort: AnnotationSortMode = "document";
   private exportFormat: AnnotationExportFormat = "summary";
+  private renderToken = 0;
+  private renderTimer: number | null = null;
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: OverlayAnnotationsPlugin) {
     super(leaf);
@@ -91,7 +93,18 @@ export class AnnotationSidebarView extends ItemView {
     await this.render();
   }
 
+  requestRender(): void {
+    if (this.renderTimer !== null) {
+      window.clearTimeout(this.renderTimer);
+    }
+    this.renderTimer = window.setTimeout(() => {
+      this.renderTimer = null;
+      void this.render();
+    }, 0);
+  }
+
   async render(): Promise<void> {
+    const token = ++this.renderToken;
     const container = this.containerEl.children[1] ?? this.containerEl;
     container.empty();
     container.addClass("yh-overview");
@@ -108,6 +121,9 @@ export class AnnotationSidebarView extends ItemView {
 
     const documents =
       this.annotationScope === "all" ? await this.plugin.store.getIndexedDocuments() : [await this.plugin.store.getDocument(file!)];
+    if (token !== this.renderToken) {
+      return;
+    }
     const rawCards = documents.flatMap((document) => this.buildCards(document));
     const cards = this.filterCards(rawCards);
     const highlightCount = rawCards.filter((card) => card.kind === "highlight" && !card.orphaned).length;
@@ -259,7 +275,15 @@ export class AnnotationSidebarView extends ItemView {
   private renderHeader(container: Element): void {
     const header = container.createDiv({ cls: "yh-ov-head" });
     header.createSpan({ cls: "yh-ov-title", text: "墨光批注" });
-    const close = header.createEl("button", {
+    const actions = header.createDiv({ cls: "yh-ov-head-actions" });
+    const refresh = actions.createEl("button", {
+      cls: "yh-icon-btn yh-ov-refresh",
+      attr: { type: "button", title: "刷新批注", "aria-label": "刷新批注" },
+    });
+    setIcon(refresh, "refresh-cw");
+    refresh.addEventListener("click", () => this.requestRender());
+
+    const close = actions.createEl("button", {
       cls: "yh-icon-btn yh-ov-close",
       attr: { type: "button", title: "Close panel", "aria-label": "关闭墨光批注面板" },
     });

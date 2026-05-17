@@ -239,6 +239,19 @@
   color: var(--text-normal);
 }
 
+.yh-ov-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.yh-ov-head .yh-icon-btn svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2;
+}
+
 .yh-ov-close {
   font-size: 16px;
   font-weight: 400;

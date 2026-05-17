@@ -6,7 +6,13 @@
 
 > 本插件基于 [Axl Light](https://github.com/rezonegame/axl-light) 开发，在原有功能基础上增加了编辑器旁便签栏和行内编辑功能。
 
-## 最新版本：v0.5.2
+## 最新版本：v0.5.3
+
+### v0.5.3 侧栏刷新修复
+
+- ✅ **即时刷新更稳定**：侧栏刷新请求会合并执行，避免旧的异步渲染覆盖新结果
+- ✅ **手动刷新按钮**：批注侧栏标题栏新增刷新按钮，不重置搜索、筛选、排序和导出模板
+- ✅ **关闭按钮修正**：标题栏关闭按钮明确显示为 X 图标
 
 ### v0.5.2 功能升级
 
@@ -99,7 +105,7 @@ curl -fsSL https://raw.githubusercontent.com/rezonegame/yh-inklight/main/scripts
 如果你只想测试指定版本，可以打开：
 
 ```text
-https://github.com/rezonegame/yh-inklight/releases/tag/v0.5.2
+https://github.com/rezonegame/yh-inklight/releases/tag/v0.5.3
 ```
 
 下载该版本的 `main.js`、`manifest.json` 和 `styles.css`，放入 `<你的仓库>/.obsidian/plugins/yh-inklight/` 后重启 Obsidian。

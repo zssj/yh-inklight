@@ -1742,6 +1742,8 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
     this.type = "all";
     this.sort = "document";
     this.exportFormat = "summary";
+    this.renderToken = 0;
+    this.renderTimer = null;
   }
   getViewType() {
     return ANNOTATION_SIDEBAR_VIEW;
@@ -1756,7 +1758,17 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
     this.containerEl.addClass("yh-sidebar");
     await this.render();
   }
+  requestRender() {
+    if (this.renderTimer !== null) {
+      window.clearTimeout(this.renderTimer);
+    }
+    this.renderTimer = window.setTimeout(() => {
+      this.renderTimer = null;
+      void this.render();
+    }, 0);
+  }
   async render() {
+    const token = ++this.renderToken;
     const container = this.containerEl.children[1] ?? this.containerEl;
     container.empty();
     container.addClass("yh-overview");
@@ -1769,6 +1781,9 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
       return;
     }
     const documents = this.annotationScope === "all" ? await this.plugin.store.getIndexedDocuments() : [await this.plugin.store.getDocument(file)];
+    if (token !== this.renderToken) {
+      return;
+    }
     const rawCards = documents.flatMap((document2) => this.buildCards(document2));
     const cards = this.filterCards(rawCards);
     const highlightCount = rawCards.filter((card) => card.kind === "highlight" && !card.orphaned).length;
@@ -1883,7 +1898,14 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
   renderHeader(container) {
     const header = container.createDiv({ cls: "yh-ov-head" });
     header.createSpan({ cls: "yh-ov-title", text: "\u58A8\u5149\u6279\u6CE8" });
-    const close = header.createEl("button", {
+    const actions = header.createDiv({ cls: "yh-ov-head-actions" });
+    const refresh = actions.createEl("button", {
+      cls: "yh-icon-btn yh-ov-refresh",
+      attr: { type: "button", title: "\u5237\u65B0\u6279\u6CE8", "aria-label": "\u5237\u65B0\u6279\u6CE8" }
+    });
+    (0, import_obsidian7.setIcon)(refresh, "refresh-cw");
+    refresh.addEventListener("click", () => this.requestRender());
+    const close = actions.createEl("button", {
       cls: "yh-icon-btn yh-ov-close",
       attr: { type: "button", title: "Close panel", "aria-label": "\u5173\u95ED\u58A8\u5149\u6279\u6CE8\u9762\u677F" }
     });
@@ -2686,7 +2708,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian10.Plugin {
     for (const leaf of this.app.workspace.getLeavesOfType(ANNOTATION_SIDEBAR_VIEW)) {
       const view = leaf.view;
       if (view instanceof AnnotationSidebarView) {
-        await view.render();
+        view.requestRender();
       }
     }
     await this.stickyLane.render();
@@ -2953,6 +2975,10 @@ var OverlayAnnotationsPlugin = class extends import_obsidian10.Plugin {
       await leaf.setViewState({ type: ANNOTATION_SIDEBAR_VIEW, active: true });
     }
     this.app.workspace.revealLeaf(leaf);
+    const view = leaf.view;
+    if (view instanceof AnnotationSidebarView) {
+      view.requestRender();
+    }
   }
   copySelection() {
     const text = window.getSelection()?.toString() || this.activeEditor()?.editor.getSelection() || "";

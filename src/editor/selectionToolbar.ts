@@ -22,7 +22,7 @@ export class SelectionToolbar {
   };
 
   constructor(private readonly options: SelectionToolbarOptions) {
-    this.element = document.body.createDiv({ cls: "axl-toolbar axl-selection-toolbar" });
+    this.element = document.body.createDiv({ cls: "yh-toolbar yh-selection-toolbar" });
     this.render();
     this.hide();
     document.addEventListener("mouseup", this.handleMouseUp);
@@ -66,31 +66,31 @@ export class SelectionToolbar {
   private render(): void {
     for (const color of ANNOTATION_COLORS) {
       const button = this.element.createEl("button", {
-        cls: `axl-toolbar-color axl-toolbar-color--${color}`,
+        cls: `yh-toolbar-color yh-toolbar-color--${color}`,
         attr: {
           type: "button",
-          "aria-label": `Highlight ${color}`,
-          "data-axl-color": color,
+          "aria-label": `高亮 ${color}`,
+          "data-yh-color": color,
         },
       });
       button.addEventListener("click", () => this.options.onHighlight(color));
     }
 
-    this.element.createDiv({ cls: "axl-toolbar-sep" });
+    this.element.createDiv({ cls: "yh-toolbar-sep" });
 
-    const commentButton = this.iconButton("Add sticky note", NOTE_ICON);
+    const commentButton = this.iconButton("添加便签", NOTE_ICON);
     commentButton.addEventListener("click", () => this.options.onComment());
 
-    const copyButton = this.iconButton("Copy", COPY_ICON);
+    const copyButton = this.iconButton("复制", COPY_ICON);
     copyButton.addEventListener("click", () => this.options.onCopy());
 
-    const sidebarButton = this.iconButton("Open overview", OVERVIEW_ICON);
+    const sidebarButton = this.iconButton("打开总览", OVERVIEW_ICON);
     sidebarButton.addEventListener("click", () => this.options.onOpenSidebar());
   }
 
   private iconButton(label: string, svg: string): HTMLButtonElement {
     const button = this.element.createEl("button", {
-      cls: "axl-toolbar-action",
+      cls: "yh-toolbar-action",
       attr: {
         type: "button",
         "aria-label": label,

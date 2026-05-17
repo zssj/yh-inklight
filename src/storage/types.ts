@@ -163,7 +163,7 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   stickySide: "right",
   stickyCollapseWidth: 800,
   showLeaderLines: true,
-  defaultAuthor: "Reader",
+  defaultAuthor: "读者",
   backupFrequencyMinutes: 30,
   migrateOnRename: true,
   stickyNotesVisible: true,

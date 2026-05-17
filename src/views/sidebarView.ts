@@ -18,7 +18,7 @@ import {
   PdfHighlightAnnotation,
 } from "../storage/types";
 
-export const ANNOTATION_SIDEBAR_VIEW = "axl-light-sidebar";
+export const ANNOTATION_SIDEBAR_VIEW = "yh-inklight-sidebar";
 
 type AnnotationKind = "highlight" | "note";
 type AnnotationMode = "md" | "pdf";
@@ -101,29 +101,29 @@ export class AnnotationSidebarView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "Axl Light";
+    return "墨光批注";
   }
 
   getIcon(): string {
-    return "axl-light-icon";
+    return "yh-inklight-icon";
   }
 
   async onOpen(): Promise<void> {
-    this.containerEl.addClass("axl-sidebar");
+    this.containerEl.addClass("yh-sidebar");
     await this.render();
   }
 
   async render(): Promise<void> {
     const container = this.containerEl.children[1] ?? this.containerEl;
     container.empty();
-    container.addClass("axl-overview");
+    container.addClass("yh-overview");
 
     const file = this.app.workspace.getActiveFile();
     this.renderHeader(container);
     this.renderControls(container);
 
     if (!file) {
-      container.createDiv({ cls: "axl-empty", text: "Open a Markdown or PDF file to inspect annotations." });
+      container.createDiv({ cls: "yh-empty", text: "Open a Markdown or PDF file to inspect annotations." });
       return;
     }
 
@@ -141,11 +141,11 @@ export class AnnotationSidebarView extends ItemView {
     const noteCount =
       document.comments.filter((comment) => !comment.orphaned).length +
       document.pdfComments.filter((comment) => !comment.orphaned).length;
-    container.createDiv({ cls: "axl-ov-count", text: `${highlightCount} highlights · ${noteCount} notes` });
+    container.createDiv({ cls: "yh-ov-count", text: `${highlightCount} highlights · ${noteCount} notes` });
 
-    const list = container.createDiv({ cls: "axl-ov-list" });
+    const list = container.createDiv({ cls: "yh-ov-list" });
     if (!cards.length) {
-      list.createDiv({ cls: "axl-empty", text: "No matching annotations." });
+      list.createDiv({ cls: "yh-empty", text: "No matching annotations." });
     } else {
       for (const card of cards) {
         this.renderCard(list, file, card);
@@ -321,11 +321,11 @@ export class AnnotationSidebarView extends ItemView {
   }
 
   private renderHeader(container: Element): void {
-    const header = container.createDiv({ cls: "axl-ov-head" });
-    header.createSpan({ cls: "axl-ov-title", text: "Axl Light" });
+    const header = container.createDiv({ cls: "yh-ov-head" });
+    header.createSpan({ cls: "yh-ov-title", text: "墨光批注" });
     const close = header.createEl("button", {
-      cls: "axl-icon-btn axl-ov-close",
-      attr: { type: "button", title: "Close panel", "aria-label": "Close Axl Light panel" },
+      cls: "yh-icon-btn yh-ov-close",
+      attr: { type: "button", title: "Close panel", "aria-label": "关闭墨光批注面板" },
     });
     setIcon(close, "x");
     close.addEventListener("click", () => {
@@ -334,22 +334,22 @@ export class AnnotationSidebarView extends ItemView {
   }
 
   private renderControls(container: Element): void {
-    const searchRow = container.createDiv({ cls: "axl-ov-search-row" });
+    const searchRow = container.createDiv({ cls: "yh-ov-search-row" });
     const search = searchRow.createEl("input", {
-      cls: "axl-ov-search",
-      attr: { type: "search", placeholder: "Search annotations..." },
+      cls: "yh-ov-search",
+      attr: { type: "search", placeholder: "搜索批注..." },
     });
     search.value = this.query;
     search.addEventListener("input", async () => {
       this.query = search.value;
       await this.render();
     });
-    const filterButton = searchRow.createEl("button", { cls: "axl-icon-btn", attr: { type: "button", title: "Filter" } });
+    const filterButton = searchRow.createEl("button", { cls: "yh-icon-btn", attr: { type: "button", title: "筛选" } });
     setIcon(filterButton, "filter");
 
-    const filterRow = container.createDiv({ cls: "axl-ov-filter-row" });
-    const color = filterRow.createEl("select", { cls: "axl-filter-select" });
-    color.createEl("option", { text: "All colors", value: "all" });
+    const filterRow = container.createDiv({ cls: "yh-ov-filter-row" });
+    const color = filterRow.createEl("select", { cls: "yh-filter-select" });
+    color.createEl("option", { text: "全部颜色", value: "all" });
     for (const item of ANNOTATION_COLORS) {
       color.createEl("option", { text: item, value: item });
     }
@@ -359,19 +359,20 @@ export class AnnotationSidebarView extends ItemView {
       await this.render();
     });
 
-    const type = filterRow.createEl("select", { cls: "axl-filter-select" });
-    type.createEl("option", { text: "All types", value: "all" });
-    type.createEl("option", { text: "highlight", value: "highlight" });
-    type.createEl("option", { text: "note", value: "note" });
+    const type = filterRow.createEl("select", { cls: "yh-filter-select" });
+    type.createEl("option", { text: "全部类型", value: "all" });
+    type.createEl("option", { text: "高亮", value: "highlight" });
+    type.createEl("option", { text: "笔记", value: "note" });
     type.value = this.type;
     type.addEventListener("change", async () => {
       this.type = type.value as TypeFilter;
       await this.render();
     });
 
-    const sort = filterRow.createEl("select", { cls: "axl-filter-select" });
+    const sort = filterRow.createEl("select", { cls: "yh-filter-select" });
+    const sortOptions = { document: "文档顺序", newest: "最新优先", oldest: "最早优先" } as const;
     for (const item of ["document", "newest", "oldest"] as const) {
-      sort.createEl("option", { text: item, value: item });
+      sort.createEl("option", { text: sortOptions[item], value: item });
     }
     sort.value = this.sort;
     sort.addEventListener("change", async () => {
@@ -382,52 +383,52 @@ export class AnnotationSidebarView extends ItemView {
 
   private renderCard(list: Element, file: TFile, cardData: SidebarCard): void {
     const card = list.createDiv({
-      cls: `axl-ov-card axl-ov-card--${cardData.color}`,
+      cls: `yh-ov-card yh-ov-card--${cardData.color}`,
       attr: this.cardAttributes(cardData),
     });
     card.toggleClass("is-orphaned", !!cardData.orphaned);
 
-    const head = card.createDiv({ cls: "axl-ov-card-head" });
-    head.createSpan({ cls: `axl-ov-label axl-label--${cardData.color}`, text: cardData.color });
-    head.createSpan({ cls: "axl-ov-meta", text: cardData.mode });
-    head.createSpan({ cls: "axl-ov-dot", text: "·" });
+    const head = card.createDiv({ cls: "yh-ov-card-head" });
+    head.createSpan({ cls: `yh-ov-label yh-label--${cardData.color}`, text: cardData.color });
+    head.createSpan({ cls: "yh-ov-meta", text: cardData.mode });
+    head.createSpan({ cls: "yh-ov-dot", text: "·" });
     const title = cardData.note?.title ?? "";
     const type = head.createSpan({
-      cls: "axl-ov-type",
+      cls: "yh-ov-type",
       text: title ? getTitleLabel(title) : cardData.kind,
     });
     if (title) {
       type.dataset.title = title;
     }
-    head.createSpan({ cls: "axl-ov-time", text: formatTime(cardData.createdAt) });
+    head.createSpan({ cls: "yh-ov-time", text: formatTime(cardData.createdAt) });
 
-    const quote = card.createDiv({ cls: "axl-ov-quote" });
+    const quote = card.createDiv({ cls: "yh-ov-quote" });
     quote.textContent = cardData.text;
     quote.toggleClass("is-code", cardData.isCode || isCodeLikeText(cardData.text));
     this.addExpandToggle(quote, card);
     if (cardData.content) {
-      const content = card.createDiv({ cls: "axl-ov-content" });
+      const content = card.createDiv({ cls: "yh-ov-content" });
       void MarkdownRenderer.render(this.app, cardData.content, content, file.path, this).then(() => {
         this.addExpandToggle(content, card);
       });
     }
 
-    const source = card.createDiv({ cls: "axl-ov-source" });
-    source.createSpan({ cls: "axl-ov-file", text: file.name });
-    source.createSpan({ cls: "axl-ov-mode", text: cardData.pageNumber ? `p.${cardData.pageNumber}` : "Markdown" });
+    const source = card.createDiv({ cls: "yh-ov-source" });
+    source.createSpan({ cls: "yh-ov-file", text: file.name });
+    source.createSpan({ cls: "yh-ov-mode", text: cardData.pageNumber ? `p.${cardData.pageNumber}` : "Markdown" });
 
-    const actions = card.createDiv({ cls: "axl-ov-actions" });
+    const actions = card.createDiv({ cls: "yh-ov-actions" });
     if (cardData.note) {
       const edit = actions.createEl("button", {
-        cls: "axl-ov-btn axl-ov-btn--icon",
-        attr: { type: "button", title: "Edit note", "data-action": "edit-note" },
+        cls: "yh-ov-btn yh-ov-btn--icon",
+        attr: { type: "button", title: "编辑笔记", "data-action": "edit-note" },
       });
       setIcon(edit, "pencil");
       edit.addEventListener("click", () => this.openInlineEditor(card, file, cardData, cardData.content));
     } else if (cardData.highlight) {
       const addNote = actions.createEl("button", {
-        cls: "axl-ov-btn",
-        text: "Add note",
+        cls: "yh-ov-btn",
+        text: "添加笔记",
         attr: { type: "button", "data-action": "add-note" },
       });
       addNote.addEventListener("click", () => {
@@ -437,31 +438,31 @@ export class AnnotationSidebarView extends ItemView {
     }
 
     const jump = actions.createEl("button", {
-      cls: "axl-ov-btn",
-      text: "Jump",
+      cls: "yh-ov-btn",
+      text: "跳转",
       attr: { type: "button", "data-action": "jump" },
     });
     jump.addEventListener("click", () => this.jumpTo(file, cardData.startOffset, cardData.pageNumber));
 
     const remove = actions.createEl("button", {
-      cls: "axl-ov-btn axl-ov-btn--danger",
-      text: "Delete",
+      cls: "yh-ov-btn yh-ov-btn--danger",
+      text: "删除",
       attr: { type: "button", "data-action": "delete" },
     });
     remove.addEventListener("click", async () => {
       await this.deleteCard(file, cardData);
-      new Notice("Annotation deleted");
+      new Notice("批注已删除");
       await this.plugin.refreshAnnotations();
     });
 
-    const edit = card.createDiv({ cls: "axl-ov-edit hidden" });
+    const edit = card.createDiv({ cls: "yh-ov-edit hidden" });
     const textarea = edit.createEl("textarea", {
-      cls: "axl-ov-textarea",
+      cls: "yh-ov-textarea",
       attr: { placeholder: "写下你的想法..." },
     });
-    const editActions = edit.createDiv({ cls: "axl-ov-edit-actions" });
-    editActions.createEl("button", { cls: "axl-ov-save", text: "保存", attr: { type: "button" } });
-    editActions.createEl("button", { cls: "axl-ov-cancel", text: "取消", attr: { type: "button" } });
+    const editActions = edit.createDiv({ cls: "yh-ov-edit-actions" });
+    editActions.createEl("button", { cls: "yh-ov-save", text: "保存", attr: { type: "button" } });
+    editActions.createEl("button", { cls: "yh-ov-cancel", text: "取消", attr: { type: "button" } });
   }
 
   private cardAttributes(card: SidebarCard): Record<string, string> {
@@ -476,10 +477,10 @@ export class AnnotationSidebarView extends ItemView {
   }
 
   private openInlineEditor(card: HTMLElement, file: TFile, cardData: SidebarCard, initialValue: string): void {
-    const edit = card.querySelector<HTMLElement>(".axl-ov-edit");
-    const textarea = card.querySelector<HTMLTextAreaElement>(".axl-ov-textarea");
-    const save = card.querySelector<HTMLButtonElement>(".axl-ov-save");
-    const cancel = card.querySelector<HTMLButtonElement>(".axl-ov-cancel");
+    const edit = card.querySelector<HTMLElement>(".yh-ov-edit");
+    const textarea = card.querySelector<HTMLTextAreaElement>(".yh-ov-textarea");
+    const save = card.querySelector<HTMLButtonElement>(".yh-ov-save");
+    const cancel = card.querySelector<HTMLButtonElement>(".yh-ov-cancel");
     const addNote = card.querySelector<HTMLElement>('[data-action="add-note"]');
     if (!edit || !textarea || !save || !cancel) {
       return;
@@ -526,15 +527,15 @@ export class AnnotationSidebarView extends ItemView {
         }
 
         const button = document.createElement("span");
-        button.className = "axl-ov-expand-btn";
-        button.textContent = "Show more";
+        button.className = "yh-ov-expand-btn";
+        button.textContent = "展开";
         button.tabIndex = 0;
         button.setAttribute("role", "button");
         contentEl.insertAdjacentElement("afterend", button);
         const toggle = (): void => {
           const expanded = contentEl.hasClass("expanded");
           contentEl.toggleClass("expanded", !expanded);
-          button.setText(expanded ? "Show more" : "Show less");
+          button.setText(expanded ? "展开" : "收起");
         };
         button.addEventListener("click", toggle);
         button.addEventListener("keydown", (event) => {
@@ -647,17 +648,17 @@ export class AnnotationSidebarView extends ItemView {
   }
 
   private renderExportFooter(container: Element, file: TFile | null): void {
-    const footer = container.createDiv({ cls: "axl-ov-foot" });
-    const exportButton = footer.createEl("button", { cls: "axl-export-btn", text: "↑ Export annotations", attr: { type: "button" } });
+    const footer = container.createDiv({ cls: "yh-ov-foot" });
+    const exportButton = footer.createEl("button", { cls: "yh-export-btn", text: "↑ 导出批注", attr: { type: "button" } });
     exportButton.disabled = !file;
     exportButton.addEventListener("click", async () => {
       if (!file) {
         return;
       }
       const exported = await this.plugin.store.exportNotes(file);
-      new Notice(`Exported notes to ${exported.path}`);
+      new Notice(`已导出笔记至 ${exported.path}`);
     });
-    footer.createDiv({ cls: "axl-ov-export-note", text: "Export as Markdown summary" });
+    footer.createDiv({ cls: "yh-ov-export-note", text: "导出为 Markdown 摘要" });
   }
 
   private async jumpTo(file: TFile, offset: number, pageNumber: number | null): Promise<void> {
@@ -669,8 +670,8 @@ export class AnnotationSidebarView extends ItemView {
           `.workspace-leaf.mod-active .pdf-page[data-page-number="${pageNumber}"], .workspace-leaf.mod-active .page[data-page-number="${pageNumber}"]`,
         );
         page?.scrollIntoView({ block: "center" });
-        page?.addClass("axl-flash-target");
-        window.setTimeout(() => page?.removeClass("axl-flash-target"), 850);
+        page?.addClass("yh-flash-target");
+        window.setTimeout(() => page?.removeClass("yh-flash-target"), 850);
       }, 120);
       return;
     }
@@ -683,8 +684,8 @@ export class AnnotationSidebarView extends ItemView {
     const pos = view.editor.offsetToPos(offset);
     view.editor.setCursor(pos);
     view.editor.scrollIntoView({ from: pos, to: pos }, true);
-    view.containerEl.addClass("axl-flash-target");
-    window.setTimeout(() => view.containerEl.removeClass("axl-flash-target"), 850);
+    view.containerEl.addClass("yh-flash-target");
+    window.setTimeout(() => view.containerEl.removeClass("yh-flash-target"), 850);
   }
 }
 

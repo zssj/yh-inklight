@@ -285,10 +285,10 @@ function createHighlightExtension(options) {
             from,
             to,
             import_view.Decoration.mark({
-              class: `axl-highlight axl-highlight--${mark.color}`,
+              class: `yh-highlight yh-highlight--${mark.color}`,
               attributes: {
-                "data-axl-color": mark.color,
-                "data-axl-id": mark.id,
+                "data-yh-color": mark.color,
+                "data-yh-id": mark.id,
                 style: `background-color: ${highlightBackground(mark.color)} !important;`
               }
             })
@@ -335,7 +335,7 @@ function highlightBackground(color) {
 
 // src/editor/readingViewHighlight.ts
 var import_obsidian2 = require("obsidian");
-var MARK_SELECTOR = ".axl-reading-highlight, mark.axl-highlight";
+var MARK_SELECTOR = ".yh-reading-highlight, mark.yh-highlight";
 var MOBILE_RENDER_DELAYS = [0, 80, 220, 520, 900];
 var DESKTOP_RENDER_DELAYS = [0, 40, 160];
 function installReadingViewHighlights(options) {
@@ -518,7 +518,7 @@ function collectText(root) {
       if (["script", "style"].includes(tag)) {
         return NodeFilter.FILTER_REJECT;
       }
-      if (parent.closest(`${MARK_SELECTOR}, mark.axl-highlight, pre, textarea, input`)) {
+      if (parent.closest(`${MARK_SELECTOR}, mark.yh-highlight, pre, textarea, input`)) {
         return NodeFilter.FILTER_REJECT;
       }
       if (!node2.textContent) {
@@ -549,9 +549,9 @@ function wrapRange(segments, range, color, id) {
     }
     const selected = splitTextRange(segment.node, localStart, localEnd);
     const mark = document.createElement("mark");
-    mark.className = `axl-reading-highlight axl-highlight axl-highlight--${color}`;
-    mark.dataset.axlColor = color;
-    mark.dataset.axlId = id;
+    mark.className = `yh-reading-highlight yh-highlight yh-highlight--${color}`;
+    mark.dataset.yhColor = color;
+    mark.dataset.yhId = id;
     mark.style.setProperty("background-color", highlightBackground2(color), "important");
     mark.tabIndex = 0;
     selected.parentNode?.insertBefore(mark, selected);
@@ -598,7 +598,7 @@ function cssEscape(value) {
 }
 function highlightSelectorForId(id) {
   const escaped = cssEscape(id);
-  return `.axl-reading-highlight[data-axl-id="${escaped}"], mark.axl-highlight[data-axl-id="${escaped}"]`;
+  return `.yh-reading-highlight[data-yh-id="${escaped}"], mark.yh-highlight[data-yh-id="${escaped}"]`;
 }
 
 // src/storage/types.ts
@@ -616,7 +616,7 @@ var DEFAULT_SETTINGS = {
   stickySide: "right",
   stickyCollapseWidth: 800,
   showLeaderLines: true,
-  defaultAuthor: "Reader",
+  defaultAuthor: "\u8BFB\u8005",
   backupFrequencyMinutes: 30,
   migrateOnRename: true,
   stickyNotesVisible: true
@@ -634,7 +634,7 @@ var SelectionToolbar = class {
     this.handleMouseUp = () => {
       window.setTimeout(() => this.showForSelection(), 0);
     };
-    this.element = document.body.createDiv({ cls: "axl-toolbar axl-selection-toolbar" });
+    this.element = document.body.createDiv({ cls: "yh-toolbar yh-selection-toolbar" });
     this.render();
     this.hide();
     document.addEventListener("mouseup", this.handleMouseUp);
@@ -671,26 +671,26 @@ var SelectionToolbar = class {
   render() {
     for (const color of ANNOTATION_COLORS) {
       const button = this.element.createEl("button", {
-        cls: `axl-toolbar-color axl-toolbar-color--${color}`,
+        cls: `yh-toolbar-color yh-toolbar-color--${color}`,
         attr: {
           type: "button",
-          "aria-label": `Highlight ${color}`,
-          "data-axl-color": color
+          "aria-label": `\u9AD8\u4EAE ${color}`,
+          "data-yh-color": color
         }
       });
       button.addEventListener("click", () => this.options.onHighlight(color));
     }
-    this.element.createDiv({ cls: "axl-toolbar-sep" });
-    const commentButton = this.iconButton("Add sticky note", NOTE_ICON);
+    this.element.createDiv({ cls: "yh-toolbar-sep" });
+    const commentButton = this.iconButton("\u6DFB\u52A0\u4FBF\u7B7E", NOTE_ICON);
     commentButton.addEventListener("click", () => this.options.onComment());
-    const copyButton = this.iconButton("Copy", COPY_ICON);
+    const copyButton = this.iconButton("\u590D\u5236", COPY_ICON);
     copyButton.addEventListener("click", () => this.options.onCopy());
-    const sidebarButton = this.iconButton("Open overview", OVERVIEW_ICON);
+    const sidebarButton = this.iconButton("\u6253\u5F00\u603B\u89C8", OVERVIEW_ICON);
     sidebarButton.addEventListener("click", () => this.options.onOpenSidebar());
   }
   iconButton(label, svg) {
     const button = this.element.createEl("button", {
-      cls: "axl-toolbar-action",
+      cls: "yh-toolbar-action",
       attr: {
         type: "button",
         "aria-label": label,
@@ -785,7 +785,7 @@ var PdfAnnotationLayer = class {
   async createHighlight(color) {
     const snapshot = this.resolveSelection();
     if (!snapshot) {
-      new import_obsidian3.Notice("Select text in a PDF first.");
+      new import_obsidian3.Notice("\u8BF7\u5148\u5728 PDF \u4E2D\u9009\u4E2D\u6587\u672C\u3002");
       return true;
     }
     await this.options.addHighlight(snapshot.file, {
@@ -801,7 +801,7 @@ var PdfAnnotationLayer = class {
   async createComment(color, content, author, title = "") {
     const snapshot = this.resolveSelection();
     if (!snapshot) {
-      new import_obsidian3.Notice("Select text in a PDF first.");
+      new import_obsidian3.Notice("\u8BF7\u5148\u5728 PDF \u4E2D\u9009\u4E2D\u6587\u672C\u3002");
       return true;
     }
     const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -845,11 +845,11 @@ var PdfAnnotationLayer = class {
     const document2 = await this.options.getDocument(file);
     const settings = this.options.getSettings();
     const host = viewer.closest(".workspace-leaf-content") ?? viewer;
-    host.addClass("axl-pdf-host");
-    host.style.setProperty("--axl-sticky-width", `${settings.stickyWidth}px`);
+    host.addClass("yh-pdf-host");
+    host.style.setProperty("--yh-sticky-width", `${settings.stickyWidth}px`);
     if (!this.root || this.root.parentElement !== host) {
       this.root?.remove();
-      this.root = host.createDiv({ cls: "axl-pdf-layer" });
+      this.root = host.createDiv({ cls: "yh-pdf-layer" });
     }
     this.renderHighlights(host, document2);
   }
@@ -857,7 +857,7 @@ var PdfAnnotationLayer = class {
     if (!this.root) {
       return;
     }
-    this.root.querySelectorAll(".axl-pdf-highlight").forEach((item) => item.remove());
+    this.root.querySelectorAll(".yh-pdf-highlight").forEach((item) => item.remove());
     const hostRect = host.getBoundingClientRect();
     const annotations = [...document2.pdfHighlights, ...document2.pdfComments].filter((item) => !item.orphaned);
     for (const annotation of annotations) {
@@ -868,10 +868,10 @@ var PdfAnnotationLayer = class {
         }
         const pageRect = page.getBoundingClientRect();
         const highlight = this.root.createDiv({
-          cls: `axl-pdf-highlight axl-pdf-highlight--${annotation.color}`,
+          cls: `yh-pdf-highlight yh-pdf-highlight--${annotation.color}`,
           attr: {
-            "data-axl-id": annotation.id,
-            "data-axl-color": annotation.color
+            "data-yh-id": annotation.id,
+            "data-yh-color": annotation.color
           }
         });
         highlight.style.left = `${pageRect.left - hostRect.left + rect.left * pageRect.width}px`;
@@ -938,15 +938,15 @@ var PdfAnnotationLayer = class {
     if (!(target instanceof HTMLElement)) {
       return;
     }
-    const highlight = target.closest(".axl-pdf-highlight");
+    const highlight = target.closest(".yh-pdf-highlight");
     if (!highlight) {
-      if (!target.closest(".axl-pdf-popover")) {
+      if (!target.closest(".yh-pdf-popover")) {
         this.hidePopover();
       }
       return;
     }
     const file = this.activePdfFile();
-    const id = highlight.dataset.axlId;
+    const id = highlight.dataset.yhId;
     if (!file || !id) {
       return;
     }
@@ -961,19 +961,19 @@ var PdfAnnotationLayer = class {
   }
   showPopover(sourcePath, rect, annotation) {
     this.hidePopover();
-    this.popover = document.body.createDiv({ cls: "axl-pdf-popover axl-annotation-popover is-visible" });
-    const header = this.popover.createDiv({ cls: "axl-popover-header" });
-    header.createSpan({ cls: "axl-popover-title", text: `PDF page ${annotation.anchor.pageNumber}` });
-    const close = header.createEl("button", { cls: "axl-icon-button", attr: { type: "button", title: "Close" } });
+    this.popover = document.body.createDiv({ cls: "yh-pdf-popover yh-annotation-popover is-visible" });
+    const header = this.popover.createDiv({ cls: "yh-popover-header" });
+    header.createSpan({ cls: "yh-popover-title", text: `PDF \u7B2C ${annotation.anchor.pageNumber} \u9875` });
+    const close = header.createEl("button", { cls: "yh-icon-button", attr: { type: "button", title: "\u5173\u95ED" } });
     (0, import_obsidian3.setIcon)(close, "x");
     close.addEventListener("click", () => this.hidePopover());
     const card = this.popover.createDiv({
-      cls: "axl-popover-card",
-      attr: { "data-axl-color": annotation.color, "data-axl-id": annotation.id }
+      cls: "yh-popover-card",
+      attr: { "data-yh-color": annotation.color, "data-yh-id": annotation.id }
     });
-    card.createDiv({ cls: "axl-popover-quote", text: annotation.anchor.selectedText });
+    card.createDiv({ cls: "yh-popover-quote", text: annotation.anchor.selectedText });
     if ("content" in annotation && annotation.content) {
-      const body = card.createDiv({ cls: "axl-popover-body" });
+      const body = card.createDiv({ cls: "yh-popover-body" });
       import_obsidian3.MarkdownRenderer.render(this.options.app, annotation.content, body, sourcePath, this.options.component);
     }
     const width = Math.min(320, window.innerWidth - 24);
@@ -1059,8 +1059,8 @@ var AnnotationSettingsTab = class extends import_obsidian4.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Axl Light" });
-    new import_obsidian4.Setting(containerEl).setName("Default highlight color").addDropdown((dropdown) => {
+    containerEl.createEl("h2", { text: "\u58A8\u5149\u6279\u6CE8" });
+    new import_obsidian4.Setting(containerEl).setName("\u9ED8\u8BA4\u9AD8\u4EAE\u989C\u8272").addDropdown((dropdown) => {
       for (const color of ANNOTATION_COLORS) {
         dropdown.addOption(color, color);
       }
@@ -1069,49 +1069,49 @@ var AnnotationSettingsTab = class extends import_obsidian4.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName("Sticky note width").addSlider((slider) => {
+    new import_obsidian4.Setting(containerEl).setName("\u4FBF\u7B7E\u5BBD\u5EA6").addSlider((slider) => {
       slider.setLimits(220, 420, 10).setValue(this.plugin.settings.stickyWidth).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.stickyWidth = value;
         await this.plugin.saveSettings();
         this.plugin.refreshAnnotations();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName("Sticky note side").setDesc("Right is the intended reader layout; left is kept as an advanced preference.").addDropdown((dropdown) => {
-      dropdown.addOption("right", "Right");
-      dropdown.addOption("left", "Left");
+    new import_obsidian4.Setting(containerEl).setName("\u4FBF\u7B7E\u663E\u793A\u4F4D\u7F6E").setDesc("\u53F3\u4FA7\u4E3A\u9605\u8BFB\u5E03\u5C40\u9996\u9009\uFF1B\u5DE6\u4FA7\u4E3A\u9AD8\u7EA7\u504F\u597D\u3002").addDropdown((dropdown) => {
+      dropdown.addOption("right", "\u53F3\u4FA7");
+      dropdown.addOption("left", "\u5DE6\u4FA7");
       dropdown.setValue(this.plugin.settings.stickySide).onChange(async (value) => {
         this.plugin.settings.stickySide = value;
         await this.plugin.saveSettings();
         this.plugin.refreshAnnotations();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName("Collapse sticky lane below width").setDesc("When the editor pane is narrower than this, notes open as popovers instead of a permanent lane.").addSlider((slider) => {
+    new import_obsidian4.Setting(containerEl).setName("\u7A84\u5C4F\u6298\u53E0\u9608\u503C").setDesc("\u5F53\u7F16\u8F91\u9762\u677F\u5BBD\u5EA6\u4F4E\u4E8E\u6B64\u503C\u65F6\uFF0C\u4FBF\u7B7E\u4EE5\u5F39\u5C42\u5F62\u5F0F\u663E\u793A\u3002").addSlider((slider) => {
       slider.setLimits(640, 1200, 20).setValue(this.plugin.settings.stickyCollapseWidth).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.stickyCollapseWidth = value;
         await this.plugin.saveSettings();
         this.plugin.refreshAnnotations();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName("Show leader lines").addToggle((toggle) => {
+    new import_obsidian4.Setting(containerEl).setName("\u663E\u793A\u8FDE\u63A5\u7EBF").addToggle((toggle) => {
       toggle.setValue(this.plugin.settings.showLeaderLines).onChange(async (value) => {
         this.plugin.settings.showLeaderLines = value;
         await this.plugin.saveSettings();
         this.plugin.refreshAnnotations();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName("Default author").addText((text) => {
+    new import_obsidian4.Setting(containerEl).setName("\u9ED8\u8BA4\u4F5C\u8005").addText((text) => {
       text.setValue(this.plugin.settings.defaultAuthor).onChange(async (value) => {
-        this.plugin.settings.defaultAuthor = value.trim() || "Reader";
+        this.plugin.settings.defaultAuthor = value.trim() || "\u8BFB\u8005";
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName("Data backup frequency").setDesc("Minutes between future backup hooks. The sidecar files are still saved immediately.").addSlider((slider) => {
+    new import_obsidian4.Setting(containerEl).setName("\u6570\u636E\u5907\u4EFD\u9891\u7387").setDesc("\u81EA\u52A8\u5907\u4EFD\u95F4\u9694\uFF08\u5206\u949F\uFF09\u3002sidecar \u6587\u4EF6\u4ECD\u4F1A\u5373\u65F6\u4FDD\u5B58\u3002").addSlider((slider) => {
       slider.setLimits(5, 240, 5).setValue(this.plugin.settings.backupFrequencyMinutes).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.backupFrequencyMinutes = value;
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName("Migrate annotations on rename").addToggle((toggle) => {
+    new import_obsidian4.Setting(containerEl).setName("\u91CD\u547D\u540D\u65F6\u8FC1\u79FB\u6279\u6CE8").addToggle((toggle) => {
       toggle.setValue(this.plugin.settings.migrateOnRename).onChange(async (value) => {
         this.plugin.settings.migrateOnRename = value;
         await this.plugin.saveSettings();
@@ -1424,7 +1424,7 @@ var import_obsidian6 = require("obsidian");
 var AnnotationPopover = class {
   constructor(options) {
     this.options = options;
-    this.element = document.body.createDiv({ cls: "axl-annotation-popover" });
+    this.element = document.body.createDiv({ cls: "yh-annotation-popover" });
     this.element.addEventListener("click", (event) => event.stopPropagation());
     this.hide();
   }
@@ -1434,15 +1434,15 @@ var AnnotationPopover = class {
   show(options) {
     this.element.empty();
     this.element.toggleClass("is-visible", true);
-    const header = this.element.createDiv({ cls: "axl-popover-header" });
-    header.createSpan({ cls: "axl-popover-title", text: "Annotation" });
+    const header = this.element.createDiv({ cls: "yh-popover-header" });
+    header.createSpan({ cls: "yh-popover-title", text: "\u6279\u6CE8" });
     const close = header.createEl("button", {
-      cls: "axl-icon-button",
-      attr: { type: "button", title: "Close annotation popover" }
+      cls: "yh-icon-button",
+      attr: { type: "button", title: "\u5173\u95ED\u6279\u6CE8\u5F39\u5C42" }
     });
     (0, import_obsidian6.setIcon)(close, "x");
     close.addEventListener("click", () => this.hide());
-    const list = this.element.createDiv({ cls: "axl-popover-list" });
+    const list = this.element.createDiv({ cls: "yh-popover-list" });
     for (const item of options.items) {
       this.renderItem(list, item, options.sourcePath);
     }
@@ -1465,21 +1465,21 @@ var AnnotationPopover = class {
   }
   renderItem(container, item, sourcePath) {
     const card = container.createDiv({
-      cls: "axl-popover-card",
+      cls: "yh-popover-card",
       attr: {
-        "data-axl-color": item.color,
-        "data-axl-id": item.id
+        "data-yh-color": item.color,
+        "data-yh-id": item.id
       }
     });
-    const meta = card.createDiv({ cls: "axl-popover-meta" });
-    meta.createSpan({ cls: "axl-color-chip", text: item.color, attr: { "data-axl-color": item.color } });
-    meta.createSpan({ text: item.kind === "comment" ? item.author ?? "Reader" : "highlight only" });
-    card.createDiv({ cls: "axl-popover-quote", text: item.quote });
+    const meta = card.createDiv({ cls: "yh-popover-meta" });
+    meta.createSpan({ cls: "yh-color-chip", text: item.color, attr: { "data-yh-color": item.color } });
+    meta.createSpan({ text: item.kind === "comment" ? item.author ?? "\u8BFB\u8005" : "\u4EC5\u9AD8\u4EAE" });
+    card.createDiv({ cls: "yh-popover-quote", text: item.quote });
     if (!item.content) {
-      card.createDiv({ cls: "axl-popover-empty", text: "No sticky note attached yet." });
+      card.createDiv({ cls: "yh-popover-empty", text: "\u6682\u65E0\u9644\u52A0\u4FBF\u7B7E\u3002" });
       return;
     }
-    const body = card.createDiv({ cls: "axl-popover-body" });
+    const body = card.createDiv({ cls: "yh-popover-body" });
     import_obsidian6.MarkdownRenderer.render(this.options.app, item.content, body, sourcePath, this.options.component);
   }
   place(rect) {
@@ -1498,7 +1498,7 @@ function clamp(value, min, max) {
 
 // src/views/sidebarView.ts
 var import_obsidian7 = require("obsidian");
-var ANNOTATION_SIDEBAR_VIEW = "axl-light-sidebar";
+var ANNOTATION_SIDEBAR_VIEW = "yh-inklight-sidebar";
 var AnnotationSidebarView = class extends import_obsidian7.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -1512,24 +1512,24 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
     return ANNOTATION_SIDEBAR_VIEW;
   }
   getDisplayText() {
-    return "Axl Light";
+    return "\u58A8\u5149\u6279\u6CE8";
   }
   getIcon() {
-    return "axl-light-icon";
+    return "yh-inklight-icon";
   }
   async onOpen() {
-    this.containerEl.addClass("axl-sidebar");
+    this.containerEl.addClass("yh-sidebar");
     await this.render();
   }
   async render() {
     const container = this.containerEl.children[1] ?? this.containerEl;
     container.empty();
-    container.addClass("axl-overview");
+    container.addClass("yh-overview");
     const file = this.app.workspace.getActiveFile();
     this.renderHeader(container);
     this.renderControls(container);
     if (!file) {
-      container.createDiv({ cls: "axl-empty", text: "Open a Markdown or PDF file to inspect annotations." });
+      container.createDiv({ cls: "yh-empty", text: "Open a Markdown or PDF file to inspect annotations." });
       return;
     }
     const document2 = await this.plugin.store.getDocument(file);
@@ -1542,10 +1542,10 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
     const cards = this.filterCards(rawCards);
     const highlightCount = document2.highlights.filter((highlight) => !highlight.orphaned).length + document2.pdfHighlights.filter((highlight) => !highlight.orphaned).length;
     const noteCount = document2.comments.filter((comment) => !comment.orphaned).length + document2.pdfComments.filter((comment) => !comment.orphaned).length;
-    container.createDiv({ cls: "axl-ov-count", text: `${highlightCount} highlights \xB7 ${noteCount} notes` });
-    const list = container.createDiv({ cls: "axl-ov-list" });
+    container.createDiv({ cls: "yh-ov-count", text: `${highlightCount} highlights \xB7 ${noteCount} notes` });
+    const list = container.createDiv({ cls: "yh-ov-list" });
     if (!cards.length) {
-      list.createDiv({ cls: "axl-empty", text: "No matching annotations." });
+      list.createDiv({ cls: "yh-empty", text: "No matching annotations." });
     } else {
       for (const card of cards) {
         this.renderCard(list, file, card);
@@ -1658,11 +1658,11 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
     };
   }
   renderHeader(container) {
-    const header = container.createDiv({ cls: "axl-ov-head" });
-    header.createSpan({ cls: "axl-ov-title", text: "Axl Light" });
+    const header = container.createDiv({ cls: "yh-ov-head" });
+    header.createSpan({ cls: "yh-ov-title", text: "\u58A8\u5149\u6279\u6CE8" });
     const close = header.createEl("button", {
-      cls: "axl-icon-btn axl-ov-close",
-      attr: { type: "button", title: "Close panel", "aria-label": "Close Axl Light panel" }
+      cls: "yh-icon-btn yh-ov-close",
+      attr: { type: "button", title: "Close panel", "aria-label": "\u5173\u95ED\u58A8\u5149\u6279\u6CE8\u9762\u677F" }
     });
     (0, import_obsidian7.setIcon)(close, "x");
     close.addEventListener("click", () => {
@@ -1670,21 +1670,21 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
     });
   }
   renderControls(container) {
-    const searchRow = container.createDiv({ cls: "axl-ov-search-row" });
+    const searchRow = container.createDiv({ cls: "yh-ov-search-row" });
     const search = searchRow.createEl("input", {
-      cls: "axl-ov-search",
-      attr: { type: "search", placeholder: "Search annotations..." }
+      cls: "yh-ov-search",
+      attr: { type: "search", placeholder: "\u641C\u7D22\u6279\u6CE8..." }
     });
     search.value = this.query;
     search.addEventListener("input", async () => {
       this.query = search.value;
       await this.render();
     });
-    const filterButton = searchRow.createEl("button", { cls: "axl-icon-btn", attr: { type: "button", title: "Filter" } });
+    const filterButton = searchRow.createEl("button", { cls: "yh-icon-btn", attr: { type: "button", title: "\u7B5B\u9009" } });
     (0, import_obsidian7.setIcon)(filterButton, "filter");
-    const filterRow = container.createDiv({ cls: "axl-ov-filter-row" });
-    const color = filterRow.createEl("select", { cls: "axl-filter-select" });
-    color.createEl("option", { text: "All colors", value: "all" });
+    const filterRow = container.createDiv({ cls: "yh-ov-filter-row" });
+    const color = filterRow.createEl("select", { cls: "yh-filter-select" });
+    color.createEl("option", { text: "\u5168\u90E8\u989C\u8272", value: "all" });
     for (const item of ANNOTATION_COLORS) {
       color.createEl("option", { text: item, value: item });
     }
@@ -1693,18 +1693,19 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
       this.color = color.value;
       await this.render();
     });
-    const type = filterRow.createEl("select", { cls: "axl-filter-select" });
-    type.createEl("option", { text: "All types", value: "all" });
-    type.createEl("option", { text: "highlight", value: "highlight" });
-    type.createEl("option", { text: "note", value: "note" });
+    const type = filterRow.createEl("select", { cls: "yh-filter-select" });
+    type.createEl("option", { text: "\u5168\u90E8\u7C7B\u578B", value: "all" });
+    type.createEl("option", { text: "\u9AD8\u4EAE", value: "highlight" });
+    type.createEl("option", { text: "\u7B14\u8BB0", value: "note" });
     type.value = this.type;
     type.addEventListener("change", async () => {
       this.type = type.value;
       await this.render();
     });
-    const sort = filterRow.createEl("select", { cls: "axl-filter-select" });
+    const sort = filterRow.createEl("select", { cls: "yh-filter-select" });
+    const sortOptions = { document: "\u6587\u6863\u987A\u5E8F", newest: "\u6700\u65B0\u4F18\u5148", oldest: "\u6700\u65E9\u4F18\u5148" };
     for (const item of ["document", "newest", "oldest"]) {
-      sort.createEl("option", { text: item, value: item });
+      sort.createEl("option", { text: sortOptions[item], value: item });
     }
     sort.value = this.sort;
     sort.addEventListener("change", async () => {
@@ -1714,48 +1715,48 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
   }
   renderCard(list, file, cardData) {
     const card = list.createDiv({
-      cls: `axl-ov-card axl-ov-card--${cardData.color}`,
+      cls: `yh-ov-card yh-ov-card--${cardData.color}`,
       attr: this.cardAttributes(cardData)
     });
     card.toggleClass("is-orphaned", !!cardData.orphaned);
-    const head = card.createDiv({ cls: "axl-ov-card-head" });
-    head.createSpan({ cls: `axl-ov-label axl-label--${cardData.color}`, text: cardData.color });
-    head.createSpan({ cls: "axl-ov-meta", text: cardData.mode });
-    head.createSpan({ cls: "axl-ov-dot", text: "\xB7" });
+    const head = card.createDiv({ cls: "yh-ov-card-head" });
+    head.createSpan({ cls: `yh-ov-label yh-label--${cardData.color}`, text: cardData.color });
+    head.createSpan({ cls: "yh-ov-meta", text: cardData.mode });
+    head.createSpan({ cls: "yh-ov-dot", text: "\xB7" });
     const title = cardData.note?.title ?? "";
     const type = head.createSpan({
-      cls: "axl-ov-type",
+      cls: "yh-ov-type",
       text: title ? getTitleLabel(title) : cardData.kind
     });
     if (title) {
       type.dataset.title = title;
     }
-    head.createSpan({ cls: "axl-ov-time", text: formatTime(cardData.createdAt) });
-    const quote = card.createDiv({ cls: "axl-ov-quote" });
+    head.createSpan({ cls: "yh-ov-time", text: formatTime(cardData.createdAt) });
+    const quote = card.createDiv({ cls: "yh-ov-quote" });
     quote.textContent = cardData.text;
     quote.toggleClass("is-code", cardData.isCode || isCodeLikeText(cardData.text));
     this.addExpandToggle(quote, card);
     if (cardData.content) {
-      const content = card.createDiv({ cls: "axl-ov-content" });
+      const content = card.createDiv({ cls: "yh-ov-content" });
       void import_obsidian7.MarkdownRenderer.render(this.app, cardData.content, content, file.path, this).then(() => {
         this.addExpandToggle(content, card);
       });
     }
-    const source = card.createDiv({ cls: "axl-ov-source" });
-    source.createSpan({ cls: "axl-ov-file", text: file.name });
-    source.createSpan({ cls: "axl-ov-mode", text: cardData.pageNumber ? `p.${cardData.pageNumber}` : "Markdown" });
-    const actions = card.createDiv({ cls: "axl-ov-actions" });
+    const source = card.createDiv({ cls: "yh-ov-source" });
+    source.createSpan({ cls: "yh-ov-file", text: file.name });
+    source.createSpan({ cls: "yh-ov-mode", text: cardData.pageNumber ? `p.${cardData.pageNumber}` : "Markdown" });
+    const actions = card.createDiv({ cls: "yh-ov-actions" });
     if (cardData.note) {
       const edit2 = actions.createEl("button", {
-        cls: "axl-ov-btn axl-ov-btn--icon",
-        attr: { type: "button", title: "Edit note", "data-action": "edit-note" }
+        cls: "yh-ov-btn yh-ov-btn--icon",
+        attr: { type: "button", title: "\u7F16\u8F91\u7B14\u8BB0", "data-action": "edit-note" }
       });
       (0, import_obsidian7.setIcon)(edit2, "pencil");
       edit2.addEventListener("click", () => this.openInlineEditor(card, file, cardData, cardData.content));
     } else if (cardData.highlight) {
       const addNote = actions.createEl("button", {
-        cls: "axl-ov-btn",
-        text: "Add note",
+        cls: "yh-ov-btn",
+        text: "\u6DFB\u52A0\u7B14\u8BB0",
         attr: { type: "button", "data-action": "add-note" }
       });
       addNote.addEventListener("click", () => {
@@ -1764,29 +1765,29 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
       });
     }
     const jump = actions.createEl("button", {
-      cls: "axl-ov-btn",
-      text: "Jump",
+      cls: "yh-ov-btn",
+      text: "\u8DF3\u8F6C",
       attr: { type: "button", "data-action": "jump" }
     });
     jump.addEventListener("click", () => this.jumpTo(file, cardData.startOffset, cardData.pageNumber));
     const remove = actions.createEl("button", {
-      cls: "axl-ov-btn axl-ov-btn--danger",
-      text: "Delete",
+      cls: "yh-ov-btn yh-ov-btn--danger",
+      text: "\u5220\u9664",
       attr: { type: "button", "data-action": "delete" }
     });
     remove.addEventListener("click", async () => {
       await this.deleteCard(file, cardData);
-      new import_obsidian7.Notice("Annotation deleted");
+      new import_obsidian7.Notice("\u6279\u6CE8\u5DF2\u5220\u9664");
       await this.plugin.refreshAnnotations();
     });
-    const edit = card.createDiv({ cls: "axl-ov-edit hidden" });
+    const edit = card.createDiv({ cls: "yh-ov-edit hidden" });
     const textarea = edit.createEl("textarea", {
-      cls: "axl-ov-textarea",
+      cls: "yh-ov-textarea",
       attr: { placeholder: "\u5199\u4E0B\u4F60\u7684\u60F3\u6CD5..." }
     });
-    const editActions = edit.createDiv({ cls: "axl-ov-edit-actions" });
-    editActions.createEl("button", { cls: "axl-ov-save", text: "\u4FDD\u5B58", attr: { type: "button" } });
-    editActions.createEl("button", { cls: "axl-ov-cancel", text: "\u53D6\u6D88", attr: { type: "button" } });
+    const editActions = edit.createDiv({ cls: "yh-ov-edit-actions" });
+    editActions.createEl("button", { cls: "yh-ov-save", text: "\u4FDD\u5B58", attr: { type: "button" } });
+    editActions.createEl("button", { cls: "yh-ov-cancel", text: "\u53D6\u6D88", attr: { type: "button" } });
   }
   cardAttributes(card) {
     const attrs = { "data-id": card.id };
@@ -1799,10 +1800,10 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
     return attrs;
   }
   openInlineEditor(card, file, cardData, initialValue) {
-    const edit = card.querySelector(".axl-ov-edit");
-    const textarea = card.querySelector(".axl-ov-textarea");
-    const save = card.querySelector(".axl-ov-save");
-    const cancel = card.querySelector(".axl-ov-cancel");
+    const edit = card.querySelector(".yh-ov-edit");
+    const textarea = card.querySelector(".yh-ov-textarea");
+    const save = card.querySelector(".yh-ov-save");
+    const cancel = card.querySelector(".yh-ov-cancel");
     const addNote = card.querySelector('[data-action="add-note"]');
     if (!edit || !textarea || !save || !cancel) {
       return;
@@ -1844,15 +1845,15 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
           return;
         }
         const button = document.createElement("span");
-        button.className = "axl-ov-expand-btn";
-        button.textContent = "Show more";
+        button.className = "yh-ov-expand-btn";
+        button.textContent = "\u5C55\u5F00";
         button.tabIndex = 0;
         button.setAttribute("role", "button");
         contentEl.insertAdjacentElement("afterend", button);
         const toggle = () => {
           const expanded = contentEl.hasClass("expanded");
           contentEl.toggleClass("expanded", !expanded);
-          button.setText(expanded ? "Show more" : "Show less");
+          button.setText(expanded ? "\u5C55\u5F00" : "\u6536\u8D77");
         };
         button.addEventListener("click", toggle);
         button.addEventListener("keydown", (event) => {
@@ -1953,17 +1954,17 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
     return card.note?.updatedAt ?? card.createdAt;
   }
   renderExportFooter(container, file) {
-    const footer = container.createDiv({ cls: "axl-ov-foot" });
-    const exportButton = footer.createEl("button", { cls: "axl-export-btn", text: "\u2191 Export annotations", attr: { type: "button" } });
+    const footer = container.createDiv({ cls: "yh-ov-foot" });
+    const exportButton = footer.createEl("button", { cls: "yh-export-btn", text: "\u2191 \u5BFC\u51FA\u6279\u6CE8", attr: { type: "button" } });
     exportButton.disabled = !file;
     exportButton.addEventListener("click", async () => {
       if (!file) {
         return;
       }
       const exported = await this.plugin.store.exportNotes(file);
-      new import_obsidian7.Notice(`Exported notes to ${exported.path}`);
+      new import_obsidian7.Notice(`\u5DF2\u5BFC\u51FA\u7B14\u8BB0\u81F3 ${exported.path}`);
     });
-    footer.createDiv({ cls: "axl-ov-export-note", text: "Export as Markdown summary" });
+    footer.createDiv({ cls: "yh-ov-export-note", text: "\u5BFC\u51FA\u4E3A Markdown \u6458\u8981" });
   }
   async jumpTo(file, offset, pageNumber) {
     const leaf = this.app.workspace.getLeaf(false);
@@ -1974,8 +1975,8 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
           `.workspace-leaf.mod-active .pdf-page[data-page-number="${pageNumber}"], .workspace-leaf.mod-active .page[data-page-number="${pageNumber}"]`
         );
         page?.scrollIntoView({ block: "center" });
-        page?.addClass("axl-flash-target");
-        window.setTimeout(() => page?.removeClass("axl-flash-target"), 850);
+        page?.addClass("yh-flash-target");
+        window.setTimeout(() => page?.removeClass("yh-flash-target"), 850);
       }, 120);
       return;
     }
@@ -1986,8 +1987,8 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
     const pos = view.editor.offsetToPos(offset);
     view.editor.setCursor(pos);
     view.editor.scrollIntoView({ from: pos, to: pos }, true);
-    view.containerEl.addClass("axl-flash-target");
-    window.setTimeout(() => view.containerEl.removeClass("axl-flash-target"), 850);
+    view.containerEl.addClass("yh-flash-target");
+    window.setTimeout(() => view.containerEl.removeClass("yh-flash-target"), 850);
   }
 };
 function formatTime(value) {
@@ -2010,11 +2011,11 @@ function isCodeLikeText(text) {
 
 // main.ts
 var NOTE_TITLE_OPTIONS = [
-  { value: "Insight", label: "\u{1F4A1} Insight" },
-  { value: "Question", label: "\u2753 Question" },
-  { value: "Reminder", label: "\u{1F514} Reminder" }
+  { value: "Insight", label: "\u{1F4A1} \u6D1E\u89C1" },
+  { value: "Question", label: "\u2753 \u7591\u95EE" },
+  { value: "Reminder", label: "\u{1F514} \u63D0\u9192" }
 ];
-var AXL_LIGHT_ICON = `
+var YH_INKLIGHT_ICON = `
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
     <rect x="5" y="5" width="90" height="90" rx="20" ry="20" fill="#F5C518"/>
     <g transform="translate(50,50) rotate(-45) translate(-18,-18)"
@@ -2034,7 +2035,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian8.Plugin {
     this.renameMigrationTimer = null;
   }
   async onload() {
-    (0, import_obsidian8.addIcon)("axl-light-icon", AXL_LIGHT_ICON);
+    (0, import_obsidian8.addIcon)("yh-inklight-icon", YH_INKLIGHT_ICON);
     await this.loadSettings();
     this.store = new AnnotationStore(this.app);
     await this.store.initialize();
@@ -2112,27 +2113,27 @@ var OverlayAnnotationsPlugin = class extends import_obsidian8.Plugin {
     }
   }
   registerRibbonIcon() {
-    const icon = this.addRibbonIcon("highlighter", "Open Axl Light", () => {
+    const icon = this.addRibbonIcon("highlighter", "\u6253\u5F00\u58A8\u5149\u6279\u6CE8", () => {
       void this.activateSidebar();
     });
-    icon.addClass("axl-ribbon-icon");
+    icon.addClass("yh-ribbon-icon");
   }
   registerCommands() {
     this.addCommand({
       id: "highlight-selection",
-      name: "Highlight selected text",
+      name: "\u9AD8\u4EAE\u9009\u4E2D\u6587\u672C",
       hotkeys: [{ modifiers: ["Mod", "Shift"], key: "h" }],
       callback: () => this.createHighlight(this.settings.defaultHighlightColor)
     });
     this.addCommand({
       id: "add-sticky-note",
-      name: "Add sticky note to selection",
+      name: "\u4E3A\u9009\u4E2D\u6587\u672C\u6DFB\u52A0\u4FBF\u7B7E",
       hotkeys: [{ modifiers: ["Mod", "Alt"], key: "m" }],
       callback: () => this.createComment()
     });
     this.addCommand({
       id: "toggle-sticky-notes",
-      name: "Toggle annotation popovers",
+      name: "\u5207\u6362\u6279\u6CE8\u5F39\u5C42\u663E\u793A",
       hotkeys: [{ modifiers: ["Mod", "Shift"], key: "n" }],
       callback: async () => {
         this.settings.stickyNotesVisible = !this.settings.stickyNotesVisible;
@@ -2142,14 +2143,14 @@ var OverlayAnnotationsPlugin = class extends import_obsidian8.Plugin {
     });
     this.addCommand({
       id: "open-annotation-sidebar",
-      name: "Open annotation overview",
+      name: "\u6253\u5F00\u6279\u6CE8\u603B\u89C8",
       callback: () => this.activateSidebar()
     });
   }
   registerEvents() {
     this.registerDomEvent(document, "selectionchange", () => this.toolbar.showForSelection());
     this.registerDomEvent(document, "mousedown", (event) => {
-      if (!(event.target instanceof HTMLElement) || !event.target.closest(".axl-selection-toolbar")) {
+      if (!(event.target instanceof HTMLElement) || !event.target.closest(".yh-selection-toolbar")) {
         window.setTimeout(() => this.toolbar.showForSelection(), 0);
       }
     });
@@ -2205,7 +2206,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian8.Plugin {
     }
     const snapshot = await this.resolveSelection();
     if (!snapshot) {
-      new import_obsidian8.Notice("Select text first.");
+      new import_obsidian8.Notice("\u8BF7\u5148\u9009\u4E2D\u6587\u672C\u3002");
       return;
     }
     const file = this.app.vault.getAbstractFileByPath(snapshot.filePath);
@@ -2239,7 +2240,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian8.Plugin {
     }
     const snapshot = await this.resolveSelection();
     if (!snapshot) {
-      new import_obsidian8.Notice("Select text first.");
+      new import_obsidian8.Notice("\u8BF7\u5148\u9009\u4E2D\u6587\u672C\u3002");
       return;
     }
     const file = this.app.vault.getAbstractFileByPath(snapshot.filePath);
@@ -2363,14 +2364,14 @@ var OverlayAnnotationsPlugin = class extends import_obsidian8.Plugin {
       this.popover.hide();
       return;
     }
-    const mark = target.closest(".axl-highlight, .axl-reading-highlight");
+    const mark = target.closest(".yh-highlight, .yh-reading-highlight");
     if (!mark) {
-      if (!target.closest(".axl-annotation-popover")) {
+      if (!target.closest(".yh-annotation-popover")) {
         this.popover.hide();
       }
       return;
     }
-    const annotationId = mark.dataset.axlId;
+    const annotationId = mark.dataset.yhId;
     const file = this.app.workspace.getActiveFile();
     if (!annotationId || !(file instanceof import_obsidian8.TFile)) {
       return;
@@ -2567,24 +2568,24 @@ var CommentModal = class extends import_obsidian8.Modal {
   }
   onOpen() {
     this.contentEl.empty();
-    this.contentEl.createEl("h2", { text: "Sticky note" });
-    const titleRow = this.contentEl.createDiv({ cls: "axl-modal-row" });
-    titleRow.createEl("label", { cls: "axl-modal-label", text: "Type" });
-    const title = titleRow.createEl("select", { cls: "axl-modal-select" });
+    this.contentEl.createEl("h2", { text: "\u4FBF\u7B7E" });
+    const titleRow = this.contentEl.createDiv({ cls: "yh-modal-row" });
+    titleRow.createEl("label", { cls: "yh-modal-label", text: "\u7C7B\u578B" });
+    const title = titleRow.createEl("select", { cls: "yh-modal-select" });
     for (const option of NOTE_TITLE_OPTIONS) {
       title.createEl("option", { text: option.label, attr: { value: option.value } });
     }
     title.value = normalizedNoteTitle(this.initialTitle);
-    const contentRow = this.contentEl.createDiv({ cls: "axl-modal-row" });
-    contentRow.createEl("label", { cls: "axl-modal-label", text: "Note" });
+    const contentRow = this.contentEl.createDiv({ cls: "yh-modal-row" });
+    contentRow.createEl("label", { cls: "yh-modal-label", text: "\u7B14\u8BB0" });
     const input = contentRow.createEl("textarea", {
-      cls: "axl-modal-textarea",
-      attr: { rows: "8", placeholder: "Write your thoughts..." }
+      cls: "yh-modal-textarea",
+      attr: { rows: "8", placeholder: "\u5199\u4E0B\u4F60\u7684\u60F3\u6CD5..." }
     });
     input.value = this.initialContent;
-    const actions = this.contentEl.createDiv({ cls: "axl-modal-actions" });
-    const cancel = actions.createEl("button", { text: "Cancel", cls: "axl-modal-cancel", attr: { type: "button" } });
-    const save = actions.createEl("button", { text: "Save", cls: "axl-modal-save", attr: { type: "button" } });
+    const actions = this.contentEl.createDiv({ cls: "yh-modal-actions" });
+    const cancel = actions.createEl("button", { text: "\u53D6\u6D88", cls: "yh-modal-cancel", attr: { type: "button" } });
+    const save = actions.createEl("button", { text: "\u4FDD\u5B58", cls: "yh-modal-save", attr: { type: "button" } });
     cancel.addEventListener("click", () => {
       this.value = null;
       this.close();

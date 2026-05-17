@@ -22,57 +22,57 @@ interface StickyNoteCardOptions {
 export function renderStickyNoteCard(container: HTMLElement, options: StickyNoteCardOptions): HTMLElement {
   container.empty();
   const card = container.createDiv({
-    cls: `axl-card axl-card--${options.comment.color} axl-sticky-card`,
+    cls: `yh-card yh-card--${options.comment.color} yh-sticky-card`,
     attr: {
-      "data-axl-color": options.comment.color,
-      "data-axl-id": options.comment.id,
-      "data-axl-card-id": options.comment.id,
+      "data-yh-color": options.comment.color,
+      "data-yh-id": options.comment.id,
+      "data-yh-card-id": options.comment.id,
     },
   });
 
-  const header = card.createDiv({ cls: "axl-card-head" });
+  const header = card.createDiv({ cls: "yh-card-head" });
   header.createSpan({
-    cls: `axl-card-color-label axl-label--${options.comment.color}`,
+    cls: `yh-card-color-label yh-label--${options.comment.color}`,
     text: options.comment.color,
   });
-  header.createSpan({ cls: "axl-card-page", text: "md" });
-  header.createSpan({ cls: "axl-card-time", text: formatTime(options.comment.updatedAt) });
-  header.createSpan({ cls: "axl-card-author", text: options.comment.author });
-  const tools = header.createDiv({ cls: "axl-card-tools" });
+  header.createSpan({ cls: "yh-card-page", text: "md" });
+  header.createSpan({ cls: "yh-card-time", text: formatTime(options.comment.updatedAt) });
+  header.createSpan({ cls: "yh-card-author", text: options.comment.author });
+  const tools = header.createDiv({ cls: "yh-card-tools" });
 
   const edit = tools.createEl("button", {
-    cls: "axl-icon-btn",
-    attr: { type: "button", title: "Edit note" },
+    cls: "yh-icon-btn",
+    attr: { type: "button", title: "编辑笔记" },
   });
   setIcon(edit, "pencil");
 
   const collapse = tools.createEl("button", {
-    cls: "axl-icon-btn",
-    attr: { type: "button", title: options.comment.collapsed ? "Expand" : "Collapse" },
+    cls: "yh-icon-btn",
+    attr: { type: "button", title: options.comment.collapsed ? "展开" : "折叠" },
   });
   setIcon(collapse, options.comment.collapsed ? "chevron-down" : "chevron-up");
   collapse.addEventListener("click", () => options.onToggle(options.comment));
 
   const remove = tools.createEl("button", {
-    cls: "axl-icon-btn",
-    attr: { type: "button", title: "Delete note" },
+    cls: "yh-icon-btn",
+    attr: { type: "button", title: "删除笔记" },
   });
   setIcon(remove, "trash-2");
   remove.addEventListener("click", () => options.onDelete(options.comment));
 
   if (options.comment.collapsed) {
-    const body = card.createDiv({ cls: "axl-card-body" });
-    body.createDiv({ cls: "axl-card-quote", text: options.comment.anchor.selectedText });
+    const body = card.createDiv({ cls: "yh-card-body" });
+    body.createDiv({ cls: "yh-card-quote", text: options.comment.anchor.selectedText });
     return card;
   }
 
-  const body = card.createDiv({ cls: "axl-card-body" });
-  body.createDiv({ cls: "axl-card-quote", text: options.comment.anchor.selectedText });
-  const content = body.createDiv({ cls: "axl-card-content" });
+  const body = card.createDiv({ cls: "yh-card-body" });
+  body.createDiv({ cls: "yh-card-quote", text: options.comment.anchor.selectedText });
+  const content = body.createDiv({ cls: "yh-card-content" });
   renderDisplayMode(content, options);
   edit.addEventListener("click", () => renderEditMode(content, options));
-  const foot = card.createDiv({ cls: "axl-card-foot" });
-  foot.createEl("button", { cls: "axl-card-more", text: "···", attr: { type: "button", title: "More" } });
+  const foot = card.createDiv({ cls: "yh-card-foot" });
+  foot.createEl("button", { cls: "yh-card-more", text: "···", attr: { type: "button", title: "更多" } });
 
   return card;
 }
@@ -85,21 +85,21 @@ function renderDisplayMode(container: HTMLElement, options: StickyNoteCardOption
 function renderEditMode(container: HTMLElement, options: StickyNoteCardOptions): void {
   container.empty();
   const title = container.createEl("input", {
-    cls: "axl-sticky-title-editor",
-    attr: { type: "text", placeholder: "Title" },
+    cls: "yh-sticky-title-editor",
+    attr: { type: "text", placeholder: "标题" },
   });
   title.value = options.comment.title ?? "";
   const editor = container.createEl("textarea", {
-    cls: "axl-sticky-editor",
-    attr: { rows: "5", placeholder: "Write a Markdown note..." },
+    cls: "yh-sticky-editor",
+    attr: { rows: "5", placeholder: "写下 Markdown 笔记..." },
   });
   editor.value = options.comment.content;
   editor.focus();
   editor.setSelectionRange(editor.value.length, editor.value.length);
 
-  const actions = container.createDiv({ cls: "axl-sticky-edit-actions" });
-  const save = actions.createEl("button", { text: "Save", cls: "mod-cta", attr: { type: "button" } });
-  const cancel = actions.createEl("button", { text: "Cancel", attr: { type: "button" } });
+  const actions = container.createDiv({ cls: "yh-sticky-edit-actions" });
+  const save = actions.createEl("button", { text: "保存", cls: "mod-cta", attr: { type: "button" } });
+  const cancel = actions.createEl("button", { text: "取消", attr: { type: "button" } });
 
   const saveContent = (): void => {
     options.onUpdate(options.comment, editor.value, title.value.trim());

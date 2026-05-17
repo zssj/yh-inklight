@@ -84,10 +84,10 @@ export function createHighlightExtension(options: HighlightExtensionOptions) {
             from,
             to,
             Decoration.mark({
-              class: `axl-highlight axl-highlight--${mark.color}`,
+              class: `yh-highlight yh-highlight--${mark.color}`,
               attributes: {
-                "data-axl-color": mark.color,
-                "data-axl-id": mark.id,
+                "data-yh-color": mark.color,
+                "data-yh-id": mark.id,
                 style: `background-color: ${highlightBackground(mark.color)} !important;`,
               },
             }),

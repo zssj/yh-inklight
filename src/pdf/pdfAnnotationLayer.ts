@@ -69,7 +69,7 @@ export class PdfAnnotationLayer {
   async createHighlight(color: AnnotationColor): Promise<boolean> {
     const snapshot = this.resolveSelection();
     if (!snapshot) {
-      new Notice("Select text in a PDF first.");
+      new Notice("请先在 PDF 中选中文本。");
       return true;
     }
 
@@ -87,7 +87,7 @@ export class PdfAnnotationLayer {
   async createComment(color: AnnotationColor, content: string, author: string, title = ""): Promise<boolean> {
     const snapshot = this.resolveSelection();
     if (!snapshot) {
-      new Notice("Select text in a PDF first.");
+      new Notice("请先在 PDF 中选中文本。");
       return true;
     }
 
@@ -146,12 +146,12 @@ export class PdfAnnotationLayer {
     const document = await this.options.getDocument(file);
     const settings = this.options.getSettings();
     const host = viewer.closest<HTMLElement>(".workspace-leaf-content") ?? viewer;
-    host.addClass("axl-pdf-host");
-    host.style.setProperty("--axl-sticky-width", `${settings.stickyWidth}px`);
+    host.addClass("yh-pdf-host");
+    host.style.setProperty("--yh-sticky-width", `${settings.stickyWidth}px`);
 
     if (!this.root || this.root.parentElement !== host) {
       this.root?.remove();
-      this.root = host.createDiv({ cls: "axl-pdf-layer" });
+      this.root = host.createDiv({ cls: "yh-pdf-layer" });
     }
 
     this.renderHighlights(host, document);
@@ -162,7 +162,7 @@ export class PdfAnnotationLayer {
       return;
     }
 
-    this.root.querySelectorAll(".axl-pdf-highlight").forEach((item) => item.remove());
+    this.root.querySelectorAll(".yh-pdf-highlight").forEach((item) => item.remove());
     const hostRect = host.getBoundingClientRect();
     const annotations = [...document.pdfHighlights, ...document.pdfComments].filter((item) => !item.orphaned);
 
@@ -175,10 +175,10 @@ export class PdfAnnotationLayer {
 
         const pageRect = page.getBoundingClientRect();
         const highlight = this.root.createDiv({
-          cls: `axl-pdf-highlight axl-pdf-highlight--${annotation.color}`,
+          cls: `yh-pdf-highlight yh-pdf-highlight--${annotation.color}`,
           attr: {
-            "data-axl-id": annotation.id,
-            "data-axl-color": annotation.color,
+            "data-yh-id": annotation.id,
+            "data-yh-color": annotation.color,
           },
         });
         highlight.style.left = `${pageRect.left - hostRect.left + rect.left * pageRect.width}px`;
@@ -256,16 +256,16 @@ export class PdfAnnotationLayer {
       return;
     }
 
-    const highlight = target.closest<HTMLElement>(".axl-pdf-highlight");
+    const highlight = target.closest<HTMLElement>(".yh-pdf-highlight");
     if (!highlight) {
-      if (!target.closest(".axl-pdf-popover")) {
+      if (!target.closest(".yh-pdf-popover")) {
         this.hidePopover();
       }
       return;
     }
 
     const file = this.activePdfFile();
-    const id = highlight.dataset.axlId;
+    const id = highlight.dataset.yhId;
     if (!file || !id) {
       return;
     }
@@ -284,20 +284,20 @@ export class PdfAnnotationLayer {
 
   private showPopover(sourcePath: string, rect: DOMRect, annotation: PdfHighlightAnnotation | PdfCommentAnnotation): void {
     this.hidePopover();
-    this.popover = document.body.createDiv({ cls: "axl-pdf-popover axl-annotation-popover is-visible" });
-    const header = this.popover.createDiv({ cls: "axl-popover-header" });
-    header.createSpan({ cls: "axl-popover-title", text: `PDF page ${annotation.anchor.pageNumber}` });
-    const close = header.createEl("button", { cls: "axl-icon-button", attr: { type: "button", title: "Close" } });
+    this.popover = document.body.createDiv({ cls: "yh-pdf-popover yh-annotation-popover is-visible" });
+    const header = this.popover.createDiv({ cls: "yh-popover-header" });
+    header.createSpan({ cls: "yh-popover-title", text: `PDF 第 ${annotation.anchor.pageNumber} 页` });
+    const close = header.createEl("button", { cls: "yh-icon-button", attr: { type: "button", title: "关闭" } });
     setIcon(close, "x");
     close.addEventListener("click", () => this.hidePopover());
 
     const card = this.popover.createDiv({
-      cls: "axl-popover-card",
-      attr: { "data-axl-color": annotation.color, "data-axl-id": annotation.id },
+      cls: "yh-popover-card",
+      attr: { "data-yh-color": annotation.color, "data-yh-id": annotation.id },
     });
-    card.createDiv({ cls: "axl-popover-quote", text: annotation.anchor.selectedText });
+    card.createDiv({ cls: "yh-popover-quote", text: annotation.anchor.selectedText });
     if ("content" in annotation && annotation.content) {
-      const body = card.createDiv({ cls: "axl-popover-body" });
+      const body = card.createDiv({ cls: "yh-popover-body" });
       MarkdownRenderer.render(this.options.app, annotation.content, body, sourcePath, this.options.component);
     }
 

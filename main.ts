@@ -31,12 +31,12 @@ interface CommentModalValue {
 }
 
 const NOTE_TITLE_OPTIONS = [
-  { value: "Insight", label: "💡 Insight" },
-  { value: "Question", label: "❓ Question" },
-  { value: "Reminder", label: "🔔 Reminder" },
+  { value: "Insight", label: "💡 洞见" },
+  { value: "Question", label: "❓ 疑问" },
+  { value: "Reminder", label: "🔔 提醒" },
 ] as const;
 
-const AXL_LIGHT_ICON = `
+const YH_INKLIGHT_ICON = `
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
     <rect x="5" y="5" width="90" height="90" rx="20" ry="20" fill="#F5C518"/>
     <g transform="translate(50,50) rotate(-45) translate(-18,-18)"
@@ -60,7 +60,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   private renameMigrationTimer: number | null = null;
 
   async onload(): Promise<void> {
-    addIcon("axl-light-icon", AXL_LIGHT_ICON);
+    addIcon("yh-inklight-icon", YH_INKLIGHT_ICON);
     await this.loadSettings();
     this.store = new AnnotationStore(this.app);
     await this.store.initialize();
@@ -146,30 +146,30 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   }
 
   private registerRibbonIcon(): void {
-    const icon = this.addRibbonIcon("highlighter", "Open Axl Light", () => {
+    const icon = this.addRibbonIcon("highlighter", "打开墨光批注", () => {
       void this.activateSidebar();
     });
-    icon.addClass("axl-ribbon-icon");
+    icon.addClass("yh-ribbon-icon");
   }
 
   private registerCommands(): void {
     this.addCommand({
       id: "highlight-selection",
-      name: "Highlight selected text",
+      name: "高亮选中文本",
       hotkeys: [{ modifiers: ["Mod", "Shift"], key: "h" }],
       callback: () => this.createHighlight(this.settings.defaultHighlightColor),
     });
 
     this.addCommand({
       id: "add-sticky-note",
-      name: "Add sticky note to selection",
+      name: "为选中文本添加便签",
       hotkeys: [{ modifiers: ["Mod", "Alt"], key: "m" }],
       callback: () => this.createComment(),
     });
 
     this.addCommand({
       id: "toggle-sticky-notes",
-      name: "Toggle annotation popovers",
+      name: "切换批注弹层显示",
       hotkeys: [{ modifiers: ["Mod", "Shift"], key: "n" }],
       callback: async () => {
         this.settings.stickyNotesVisible = !this.settings.stickyNotesVisible;
@@ -180,7 +180,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
 
     this.addCommand({
       id: "open-annotation-sidebar",
-      name: "Open annotation overview",
+      name: "打开批注总览",
       callback: () => this.activateSidebar(),
     });
   }
@@ -188,7 +188,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   private registerEvents(): void {
     this.registerDomEvent(document, "selectionchange", () => this.toolbar.showForSelection());
     this.registerDomEvent(document, "mousedown", (event) => {
-      if (!(event.target instanceof HTMLElement) || !event.target.closest(".axl-selection-toolbar")) {
+      if (!(event.target instanceof HTMLElement) || !event.target.closest(".yh-selection-toolbar")) {
         window.setTimeout(() => this.toolbar.showForSelection(), 0);
       }
     });
@@ -253,7 +253,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     const snapshot = await this.resolveSelection();
 
     if (!snapshot) {
-      new Notice("Select text first.");
+      new Notice("请先选中文本。");
       return;
     }
 
@@ -292,7 +292,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
 
     const snapshot = await this.resolveSelection();
     if (!snapshot) {
-      new Notice("Select text first.");
+      new Notice("请先选中文本。");
       return;
     }
 
@@ -436,15 +436,15 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       return;
     }
 
-    const mark = target.closest<HTMLElement>(".axl-highlight, .axl-reading-highlight");
+    const mark = target.closest<HTMLElement>(".yh-highlight, .yh-reading-highlight");
     if (!mark) {
-      if (!target.closest(".axl-annotation-popover")) {
+      if (!target.closest(".yh-annotation-popover")) {
         this.popover.hide();
       }
       return;
     }
 
-    const annotationId = mark.dataset.axlId;
+    const annotationId = mark.dataset.yhId;
     const file = this.app.workspace.getActiveFile();
     if (!annotationId || !(file instanceof TFile)) {
       return;
@@ -725,27 +725,27 @@ class CommentModal extends Modal {
 
   onOpen(): void {
     this.contentEl.empty();
-    this.contentEl.createEl("h2", { text: "Sticky note" });
+    this.contentEl.createEl("h2", { text: "便签" });
 
-    const titleRow = this.contentEl.createDiv({ cls: "axl-modal-row" });
-    titleRow.createEl("label", { cls: "axl-modal-label", text: "Type" });
-    const title = titleRow.createEl("select", { cls: "axl-modal-select" });
+    const titleRow = this.contentEl.createDiv({ cls: "yh-modal-row" });
+    titleRow.createEl("label", { cls: "yh-modal-label", text: "类型" });
+    const title = titleRow.createEl("select", { cls: "yh-modal-select" });
     for (const option of NOTE_TITLE_OPTIONS) {
       title.createEl("option", { text: option.label, attr: { value: option.value } });
     }
     title.value = normalizedNoteTitle(this.initialTitle);
 
-    const contentRow = this.contentEl.createDiv({ cls: "axl-modal-row" });
-    contentRow.createEl("label", { cls: "axl-modal-label", text: "Note" });
+    const contentRow = this.contentEl.createDiv({ cls: "yh-modal-row" });
+    contentRow.createEl("label", { cls: "yh-modal-label", text: "笔记" });
     const input = contentRow.createEl("textarea", {
-      cls: "axl-modal-textarea",
-      attr: { rows: "8", placeholder: "Write your thoughts..." },
+      cls: "yh-modal-textarea",
+      attr: { rows: "8", placeholder: "写下你的想法..." },
     });
     input.value = this.initialContent;
 
-    const actions = this.contentEl.createDiv({ cls: "axl-modal-actions" });
-    const cancel = actions.createEl("button", { text: "Cancel", cls: "axl-modal-cancel", attr: { type: "button" } });
-    const save = actions.createEl("button", { text: "Save", cls: "axl-modal-save", attr: { type: "button" } });
+    const actions = this.contentEl.createDiv({ cls: "yh-modal-actions" });
+    const cancel = actions.createEl("button", { text: "取消", cls: "yh-modal-cancel", attr: { type: "button" } });
+    const save = actions.createEl("button", { text: "保存", cls: "yh-modal-save", attr: { type: "button" } });
     cancel.addEventListener("click", () => {
       this.value = null;
       this.close();

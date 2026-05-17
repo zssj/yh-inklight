@@ -14,6 +14,15 @@ export const ANNOTATION_COLORS = [
   "purple",
 ] as const;
 
+export const COLOR_LABELS: Record<AnnotationColor, string> = {
+  yellow: "黄色",
+  green: "绿色",
+  blue: "蓝色",
+  pink: "粉色",
+  orange: "橙色",
+  purple: "紫色",
+};
+
 export type AnnotationColor = (typeof ANNOTATION_COLORS)[number];
 export type SidebarSide = "left" | "right";
 export type AnnotationSortMode = "newest" | "oldest" | "document";

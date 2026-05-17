@@ -8,7 +8,7 @@
 import { PluginSettingTab, Setting } from "obsidian";
 
 import type OverlayAnnotationsPlugin from "../../main";
-import { ANNOTATION_COLORS, AnnotationColor, SidebarSide } from "../storage/types";
+import { ANNOTATION_COLORS, AnnotationColor, COLOR_LABELS, SidebarSide } from "../storage/types";
 
 export class AnnotationSettingsTab extends PluginSettingTab {
   constructor(private readonly plugin: OverlayAnnotationsPlugin) {
@@ -24,7 +24,7 @@ export class AnnotationSettingsTab extends PluginSettingTab {
       .setName("默认高亮颜色")
       .addDropdown((dropdown) => {
         for (const color of ANNOTATION_COLORS) {
-          dropdown.addOption(color, color);
+          dropdown.addOption(color, COLOR_LABELS[color]);
         }
         dropdown.setValue(this.plugin.settings.defaultHighlightColor).onChange(async (value) => {
           this.plugin.settings.defaultHighlightColor = value as AnnotationColor;

@@ -5,7 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
-import { ANNOTATION_COLORS, AnnotationColor } from "../storage/types";
+import { ANNOTATION_COLORS, AnnotationColor, COLOR_LABELS } from "../storage/types";
 
 interface SelectionToolbarOptions {
   onHighlight: (color: AnnotationColor) => void;
@@ -69,7 +69,7 @@ export class SelectionToolbar {
         cls: `yh-toolbar-color yh-toolbar-color--${color}`,
         attr: {
           type: "button",
-          "aria-label": `高亮 ${color}`,
+          "aria-label": `高亮 ${COLOR_LABELS[color]}`,
           "data-yh-color": color,
         },
       });

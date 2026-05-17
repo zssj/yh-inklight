@@ -12,6 +12,7 @@ import {
   ANNOTATION_COLORS,
   AnnotationColor,
   AnnotationSortMode,
+  COLOR_LABELS,
   CommentAnnotation,
   HighlightAnnotation,
   PdfCommentAnnotation,
@@ -351,7 +352,7 @@ export class AnnotationSidebarView extends ItemView {
     const color = filterRow.createEl("select", { cls: "yh-filter-select" });
     color.createEl("option", { text: "全部颜色", value: "all" });
     for (const item of ANNOTATION_COLORS) {
-      color.createEl("option", { text: item, value: item });
+      color.createEl("option", { text: COLOR_LABELS[item], value: item });
     }
     color.value = this.color;
     color.addEventListener("change", async () => {
@@ -389,13 +390,14 @@ export class AnnotationSidebarView extends ItemView {
     card.toggleClass("is-orphaned", !!cardData.orphaned);
 
     const head = card.createDiv({ cls: "yh-ov-card-head" });
-    head.createSpan({ cls: `yh-ov-label yh-label--${cardData.color}`, text: cardData.color });
-    head.createSpan({ cls: "yh-ov-meta", text: cardData.mode });
+    head.createSpan({ cls: `yh-ov-label yh-label--${cardData.color}`, text: COLOR_LABELS[cardData.color] });
+    head.createSpan({ cls: "yh-ov-meta", text: cardData.mode === "md" ? "Markdown" : "PDF" });
     head.createSpan({ cls: "yh-ov-dot", text: "·" });
     const title = cardData.note?.title ?? "";
+    const kindLabel = cardData.kind === "highlight" ? "高亮" : "笔记";
     const type = head.createSpan({
       cls: "yh-ov-type",
-      text: title ? getTitleLabel(title) : cardData.kind,
+      text: title ? getTitleLabel(title) : kindLabel,
     });
     if (title) {
       type.dataset.title = title;
@@ -695,9 +697,9 @@ function formatTime(value: string): string {
 
 function getTitleLabel(title: string): string {
   const labels: Record<string, string> = {
-    Insight: "💡 Insight",
-    Question: "❓ Question",
-    Reminder: "🔔 Reminder",
+    Insight: "💡 洞察",
+    Question: "❓ 疑问",
+    Reminder: "🔔 提醒",
   };
   return labels[title] ?? title;
 }

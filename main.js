@@ -610,6 +610,14 @@ var ANNOTATION_COLORS = [
   "orange",
   "purple"
 ];
+var COLOR_LABELS = {
+  yellow: "\u9EC4\u8272",
+  green: "\u7EFF\u8272",
+  blue: "\u84DD\u8272",
+  pink: "\u7C89\u8272",
+  orange: "\u6A59\u8272",
+  purple: "\u7D2B\u8272"
+};
 var DEFAULT_SETTINGS = {
   defaultHighlightColor: "yellow",
   stickyWidth: 280,
@@ -674,7 +682,7 @@ var SelectionToolbar = class {
         cls: `yh-toolbar-color yh-toolbar-color--${color}`,
         attr: {
           type: "button",
-          "aria-label": `\u9AD8\u4EAE ${color}`,
+          "aria-label": `\u9AD8\u4EAE ${COLOR_LABELS[color]}`,
           "data-yh-color": color
         }
       });
@@ -1062,7 +1070,7 @@ var AnnotationSettingsTab = class extends import_obsidian4.PluginSettingTab {
     containerEl.createEl("h2", { text: "\u58A8\u5149\u6279\u6CE8" });
     new import_obsidian4.Setting(containerEl).setName("\u9ED8\u8BA4\u9AD8\u4EAE\u989C\u8272").addDropdown((dropdown) => {
       for (const color of ANNOTATION_COLORS) {
-        dropdown.addOption(color, color);
+        dropdown.addOption(color, COLOR_LABELS[color]);
       }
       dropdown.setValue(this.plugin.settings.defaultHighlightColor).onChange(async (value) => {
         this.plugin.settings.defaultHighlightColor = value;
@@ -1472,7 +1480,7 @@ var AnnotationPopover = class {
       }
     });
     const meta = card.createDiv({ cls: "yh-popover-meta" });
-    meta.createSpan({ cls: "yh-color-chip", text: item.color, attr: { "data-yh-color": item.color } });
+    meta.createSpan({ cls: "yh-color-chip", text: COLOR_LABELS[item.color], attr: { "data-yh-color": item.color } });
     meta.createSpan({ text: item.kind === "comment" ? item.author ?? "\u8BFB\u8005" : "\u4EC5\u9AD8\u4EAE" });
     card.createDiv({ cls: "yh-popover-quote", text: item.quote });
     if (!item.content) {
@@ -1686,7 +1694,7 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
     const color = filterRow.createEl("select", { cls: "yh-filter-select" });
     color.createEl("option", { text: "\u5168\u90E8\u989C\u8272", value: "all" });
     for (const item of ANNOTATION_COLORS) {
-      color.createEl("option", { text: item, value: item });
+      color.createEl("option", { text: COLOR_LABELS[item], value: item });
     }
     color.value = this.color;
     color.addEventListener("change", async () => {
@@ -1720,13 +1728,14 @@ var AnnotationSidebarView = class extends import_obsidian7.ItemView {
     });
     card.toggleClass("is-orphaned", !!cardData.orphaned);
     const head = card.createDiv({ cls: "yh-ov-card-head" });
-    head.createSpan({ cls: `yh-ov-label yh-label--${cardData.color}`, text: cardData.color });
-    head.createSpan({ cls: "yh-ov-meta", text: cardData.mode });
+    head.createSpan({ cls: `yh-ov-label yh-label--${cardData.color}`, text: COLOR_LABELS[cardData.color] });
+    head.createSpan({ cls: "yh-ov-meta", text: cardData.mode === "md" ? "Markdown" : "PDF" });
     head.createSpan({ cls: "yh-ov-dot", text: "\xB7" });
     const title = cardData.note?.title ?? "";
+    const kindLabel = cardData.kind === "highlight" ? "\u9AD8\u4EAE" : "\u7B14\u8BB0";
     const type = head.createSpan({
       cls: "yh-ov-type",
-      text: title ? getTitleLabel(title) : cardData.kind
+      text: title ? getTitleLabel(title) : kindLabel
     });
     if (title) {
       type.dataset.title = title;
@@ -1996,9 +2005,9 @@ function formatTime(value) {
 }
 function getTitleLabel(title) {
   const labels = {
-    Insight: "\u{1F4A1} Insight",
-    Question: "\u2753 Question",
-    Reminder: "\u{1F514} Reminder"
+    Insight: "\u{1F4A1} \u6D1E\u5BDF",
+    Question: "\u2753 \u7591\u95EE",
+    Reminder: "\u{1F514} \u63D0\u9192"
   };
   return labels[title] ?? title;
 }
@@ -2042,7 +2051,7 @@ function renderStickyNoteCard(container, options) {
   const header = card.createDiv({ cls: "yh-card-head" });
   header.createSpan({
     cls: `yh-card-color-label yh-label--${options.comment.color}`,
-    text: options.comment.color
+    text: COLOR_LABELS[options.comment.color]
   });
   header.createSpan({ cls: "yh-card-page", text: "md" });
   header.createSpan({ cls: "yh-card-time", text: formatTime2(options.comment.updatedAt) });

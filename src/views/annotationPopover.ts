@@ -7,7 +7,7 @@
 
 import { App, Component, MarkdownRenderer, setIcon } from "obsidian";
 
-import { AnnotationColor, CommentAnnotation, HighlightAnnotation } from "../storage/types";
+import { AnnotationColor, COLOR_LABELS, CommentAnnotation, HighlightAnnotation } from "../storage/types";
 
 interface AnnotationPopoverOptions {
   app: App;
@@ -92,7 +92,7 @@ export class AnnotationPopover {
     });
 
     const meta = card.createDiv({ cls: "yh-popover-meta" });
-    meta.createSpan({ cls: "yh-color-chip", text: item.color, attr: { "data-yh-color": item.color } });
+    meta.createSpan({ cls: "yh-color-chip", text: COLOR_LABELS[item.color], attr: { "data-yh-color": item.color } });
     meta.createSpan({ text: item.kind === "comment" ? item.author ?? "读者" : "仅高亮" });
 
     card.createDiv({ cls: "yh-popover-quote", text: item.quote });

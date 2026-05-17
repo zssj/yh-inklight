@@ -7,7 +7,7 @@
 
 import { App, Component, MarkdownRenderer, setIcon } from "obsidian";
 
-import { CommentAnnotation } from "../storage/types";
+import { COLOR_LABELS, CommentAnnotation } from "../storage/types";
 
 interface StickyNoteCardOptions {
   app: App;
@@ -33,7 +33,7 @@ export function renderStickyNoteCard(container: HTMLElement, options: StickyNote
   const header = card.createDiv({ cls: "yh-card-head" });
   header.createSpan({
     cls: `yh-card-color-label yh-label--${options.comment.color}`,
-    text: options.comment.color,
+    text: COLOR_LABELS[options.comment.color],
   });
   header.createSpan({ cls: "yh-card-page", text: "md" });
   header.createSpan({ cls: "yh-card-time", text: formatTime(options.comment.updatedAt) });

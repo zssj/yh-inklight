@@ -8,7 +8,17 @@
 import { PluginSettingTab, Setting } from "obsidian";
 
 import type OverlayAnnotationsPlugin from "../../main";
-import { ANNOTATION_COLORS, AnnotationColor, COLOR_LABELS, SidebarSide } from "../storage/types";
+import {
+  ANNOTATION_COLORS,
+  AnnotationColor,
+  COLOR_LABELS,
+  EPUB_HIGHLIGHT_STYLES,
+  EPUB_READING_THEMES,
+  EpubFlowMode,
+  EpubHighlightStyle,
+  EpubReadingTheme,
+  SidebarSide,
+} from "../storage/types";
 
 export class AnnotationSettingsTab extends PluginSettingTab {
   constructor(private readonly plugin: OverlayAnnotationsPlugin) {
@@ -98,6 +108,106 @@ export class AnnotationSettingsTab extends PluginSettingTab {
       .addToggle((toggle) => {
         toggle.setValue(this.plugin.settings.migrateOnRename).onChange(async (value) => {
           this.plugin.settings.migrateOnRename = value;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    this.renderEpubSettings();
+  }
+
+  /** EPUB 阅读相关设置：字号 / 主题 / 翻页 / 高亮样式 / 摘录目录 / 段落模式 / 脚注 / 回显 */
+  private renderEpubSettings(): void {
+    const { containerEl } = this;
+    containerEl.createEl("h3", { text: "EPUB 阅读" });
+
+    new Setting(containerEl)
+      .setName("阅读字号")
+      .setDesc("EPUB 正文基础字号（px）。修改后重新打开电子书生效。")
+      .addSlider((slider) => {
+        slider
+          .setLimits(12, 28, 1)
+          .setValue(this.plugin.settings.epubFontSize)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.epubFontSize = value;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("阅读主题")
+      .setDesc("EPUB 阅读区背景与文字配色。")
+      .addDropdown((dropdown) => {
+        for (const theme of EPUB_READING_THEMES) {
+          dropdown.addOption(theme.id, theme.label);
+        }
+        dropdown.setValue(this.plugin.settings.epubReadingTheme).onChange(async (value) => {
+          this.plugin.settings.epubReadingTheme = value as EpubReadingTheme;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("翻页模式")
+      .setDesc("翻页为分页布局；滚动为连续滚动阅读。")
+      .addDropdown((dropdown) => {
+        dropdown.addOption("paginated", "翻页");
+        dropdown.addOption("scrolled", "滚动");
+        dropdown.setValue(this.plugin.settings.epubDefaultFlow).onChange(async (value) => {
+          this.plugin.settings.epubDefaultFlow = value as EpubFlowMode;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("高亮样式")
+      .setDesc("EPUB 文本标注的默认呈现样式。")
+      .addDropdown((dropdown) => {
+        for (const style of EPUB_HIGHLIGHT_STYLES) {
+          dropdown.addOption(style.id, style.label);
+        }
+        dropdown.setValue(this.plugin.settings.epubHighlightStyle).onChange(async (value) => {
+          this.plugin.settings.epubHighlightStyle = value as EpubHighlightStyle;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("摘录导出目录")
+      .setDesc("EPUB 摘录导出到的 Vault 文件夹路径。")
+      .addText((text) => {
+        text.setValue(this.plugin.settings.epubExcerptFolder).onChange(async (value) => {
+          this.plugin.settings.epubExcerptFolder = value.trim() || "epub-excerpts";
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("段落模式")
+      .setDesc("启用后，点击段落即可进入段落聚焦阅读。")
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.epubParagraphMode).onChange(async (value) => {
+          this.plugin.settings.epubParagraphMode = value;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("脚注预览")
+      .setDesc("鼠标悬停脚注引用时显示浮动预览。")
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.epubFootnotePreview).onChange(async (value) => {
+          this.plugin.settings.epubFootnotePreview = value;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("正文回显标注")
+      .setDesc("在导出的 Markdown 摘录中渲染可回跳的标注链接。")
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.epubBacklinkRendering).onChange(async (value) => {
+          this.plugin.settings.epubBacklinkRendering = value;
           await this.plugin.saveSettings();
         });
       });

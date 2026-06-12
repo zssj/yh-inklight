@@ -18,6 +18,12 @@ import {
   HighlightAnnotation,
   PdfCommentAnnotation,
   PdfHighlightAnnotation,
+  EpubHighlightAnnotation,
+  EpubCommentAnnotation,
+  EpubReadingProgress,
+  ReadingBookmark,
+  CanvasBinding,
+  CanvasExcerptNode,
 } from "./types";
 
 const STORE_DIR = ".obsidian-annotations";
@@ -265,6 +271,9 @@ export class AnnotationStore {
       comments: document.comments.filter((item) => item.id !== annotationId),
       pdfHighlights: document.pdfHighlights.filter((item) => item.id !== annotationId),
       pdfComments: document.pdfComments.filter((item) => item.id !== annotationId),
+      epubHighlights: document.epubHighlights.filter((item) => item.id !== annotationId),
+      epubComments: document.epubComments.filter((item) => item.id !== annotationId),
+      bookmarks: document.bookmarks.filter((item) => item.id !== annotationId),
       lastModified: new Date().toISOString(),
     };
     await this.saveDocument(nextDocument);
@@ -291,6 +300,118 @@ export class AnnotationStore {
     delete this.index.files[normalizedOldPath];
     await this.writeIndex();
     this.documents.delete(this.toCacheKey(normalizedOldPath));
+  }
+
+  // ===== EPUB 标注 CRUD =====
+
+  async addEpubHighlight(file: TFile, highlight: EpubHighlightAnnotation): Promise<FileAnnotationDocument> {
+    const document = await this.getDocument(file);
+    const nextDocument: FileAnnotationDocument = {
+      ...document,
+      epubHighlights: [...document.epubHighlights, highlight],
+      lastModified: new Date().toISOString(),
+    };
+    await this.saveDocument(nextDocument);
+    return nextDocument;
+  }
+
+  async addEpubComment(file: TFile, comment: EpubCommentAnnotation): Promise<FileAnnotationDocument> {
+    const document = await this.getDocument(file);
+    const nextDocument: FileAnnotationDocument = {
+      ...document,
+      epubComments: [...document.epubComments, comment],
+      lastModified: new Date().toISOString(),
+    };
+    await this.saveDocument(nextDocument);
+    return nextDocument;
+  }
+
+  async updateEpubComment(file: TFile, comment: EpubCommentAnnotation): Promise<FileAnnotationDocument> {
+    const document = await this.getDocument(file);
+    const nextDocument: FileAnnotationDocument = {
+      ...document,
+      epubComments: document.epubComments.map((item) => (item.id === comment.id ? comment : item)),
+      lastModified: new Date().toISOString(),
+    };
+    await this.saveDocument(nextDocument);
+    return nextDocument;
+  }
+
+  // ===== EPUB 进度 =====
+
+  async getEpubProgress(file: TFile): Promise<EpubReadingProgress | null> {
+    const document = await this.getDocument(file);
+    return document.epubProgress ?? null;
+  }
+
+  async saveEpubProgress(file: TFile, progress: EpubReadingProgress): Promise<void> {
+    const document = await this.getDocument(file);
+    await this.saveDocument({
+      ...document,
+      epubProgress: progress,
+      lastModified: new Date().toISOString(),
+    });
+  }
+
+  // ===== 书签（EPUB/PDF 通用）=====
+
+  async addBookmark(file: TFile, bookmark: ReadingBookmark): Promise<FileAnnotationDocument> {
+    const document = await this.getDocument(file);
+    const nextDocument: FileAnnotationDocument = {
+      ...document,
+      bookmarks: [...document.bookmarks, bookmark],
+      lastModified: new Date().toISOString(),
+    };
+    await this.saveDocument(nextDocument);
+    return nextDocument;
+  }
+
+  async removeBookmark(file: TFile, bookmarkId: string): Promise<FileAnnotationDocument> {
+    const document = await this.getDocument(file);
+    const nextDocument: FileAnnotationDocument = {
+      ...document,
+      bookmarks: document.bookmarks.filter((item) => item.id !== bookmarkId),
+      lastModified: new Date().toISOString(),
+    };
+    await this.saveDocument(nextDocument);
+    return nextDocument;
+  }
+
+  // ===== Canvas 集成 =====
+
+  async bindCanvas(file: TFile, binding: CanvasBinding): Promise<FileAnnotationDocument> {
+    const document = await this.getDocument(file);
+    await this.saveDocument({
+      ...document,
+      canvasBinding: binding,
+      lastModified: new Date().toISOString(),
+    });
+    return this.getDocument(file);
+  }
+
+  async addCanvasNode(file: TFile, node: CanvasExcerptNode): Promise<FileAnnotationDocument> {
+    const document = await this.getDocument(file);
+    const nextDocument: FileAnnotationDocument = {
+      ...document,
+      canvasNodes: [...document.canvasNodes, node],
+      lastModified: new Date().toISOString(),
+    };
+    await this.saveDocument(nextDocument);
+    return nextDocument;
+  }
+
+  // ===== 全量查询（书架视图用）=====
+
+  async getAllEpubProgress(): Promise<Record<string, EpubReadingProgress>> {
+    const result: Record<string, EpubReadingProgress> = {};
+    const filePaths = Object.keys(this.index.files);
+    for (const filePath of filePaths) {
+      const document = this.getCachedDocument(filePath);
+      if (document?.epubProgress) {
+        result[filePath] = document.epubProgress;
+      }
+    }
+    return result;
   }
 
   async exportNotes(file: TFile, format: AnnotationExportFormat = "summary"): Promise<TFile> {
@@ -399,6 +520,10 @@ export class AnnotationStore {
       comments: [],
       pdfHighlights: [],
       pdfComments: [],
+      epubHighlights: [],
+      epubComments: [],
+      bookmarks: [],
+      canvasNodes: [],
     };
   }
 
@@ -411,6 +536,12 @@ export class AnnotationStore {
       comments: document.comments ?? [],
       pdfHighlights: document.pdfHighlights ?? [],
       pdfComments: document.pdfComments ?? [],
+      epubHighlights: document.epubHighlights ?? [],
+      epubComments: document.epubComments ?? [],
+      epubProgress: document.epubProgress,
+      bookmarks: document.bookmarks ?? [],
+      canvasBinding: document.canvasBinding,
+      canvasNodes: document.canvasNodes ?? [],
     };
   }
 
@@ -421,6 +552,9 @@ export class AnnotationStore {
       fileHash: document.fileHash,
       highlightCount: document.highlights.length + document.pdfHighlights.length,
       commentCount: document.comments.length + document.pdfComments.length,
+      epubHighlightCount: document.epubHighlights.length,
+      epubCommentCount: document.epubComments.length,
+      bookmarkCount: document.bookmarks.length,
       updatedAt: document.lastModified,
     };
   }
@@ -447,7 +581,10 @@ export class AnnotationStore {
       normalizedPersisted.highlights.length === expected.highlights.length &&
       normalizedPersisted.comments.length === expected.comments.length &&
       normalizedPersisted.pdfHighlights.length === expected.pdfHighlights.length &&
-      normalizedPersisted.pdfComments.length === expected.pdfComments.length;
+      normalizedPersisted.pdfComments.length === expected.pdfComments.length &&
+      normalizedPersisted.epubHighlights.length === expected.epubHighlights.length &&
+      normalizedPersisted.epubComments.length === expected.epubComments.length &&
+      normalizedPersisted.bookmarks.length === expected.bookmarks.length;
 
     if (
       normalizedPersisted.filePath !== expected.filePath ||

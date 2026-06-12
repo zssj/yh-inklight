@@ -25,6 +25,8 @@ import {
 import { AnnotationPopover } from "./src/views/annotationPopover";
 import { ANNOTATION_SIDEBAR_VIEW, AnnotationSidebarView } from "./src/views/sidebarView";
 import { StickyNoteLane } from "./src/views/stickyNoteLane";
+import { EpubReaderView, EPUB_READER_VIEW_TYPE } from "./src/epub/EpubReaderView";
+import { EpubBookshelfView, EPUB_BOOKSHELF_VIEW_TYPE } from "./src/epub/EpubBookshelfView";
 
 interface CommentModalValue {
   title: string;
@@ -68,6 +70,11 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     await this.store.initialize();
 
     this.registerView(ANNOTATION_SIDEBAR_VIEW, (leaf) => new AnnotationSidebarView(leaf, this));
+    this.registerView(EPUB_READER_VIEW_TYPE, (leaf) => new EpubReaderView(leaf, this.store, this.settings));
+    this.registerView(
+      EPUB_BOOKSHELF_VIEW_TYPE,
+      (leaf) => new EpubBookshelfView(leaf, this.store, (file) => this.openEpubBook(file)),
+    );
     this.registerEditorExtension([
       createHighlightExtension({
         getDocument: (filePath) => this.store.getCachedDocument(filePath),
@@ -146,6 +153,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     this.popover?.destroy();
     this.stickyLane?.destroy();
     this.app.workspace.detachLeavesOfType(ANNOTATION_SIDEBAR_VIEW);
+    this.app.workspace.detachLeavesOfType(EPUB_BOOKSHELF_VIEW_TYPE);
   }
 
   async loadSettings(): Promise<void> {
@@ -165,6 +173,12 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       const view = leaf.view;
       if (view instanceof AnnotationSidebarView) {
         view.requestRender();
+      }
+    }
+    for (const leaf of this.app.workspace.getLeavesOfType(EPUB_BOOKSHELF_VIEW_TYPE)) {
+      const view = leaf.view;
+      if (view instanceof EpubBookshelfView) {
+        view.refresh();
       }
     }
     await this.stickyLane.render();
@@ -207,6 +221,12 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       id: "open-annotation-sidebar",
       name: "打开批注总览",
       callback: () => this.activateSidebar(),
+    });
+
+    this.addCommand({
+      id: "open-epub-bookshelf",
+      name: "打开 EPUB 书架",
+      callback: () => this.activateBookshelf(),
     });
 
     this.addCommand({
@@ -467,6 +487,28 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     if (view instanceof AnnotationSidebarView) {
       view.requestRender();
     }
+  }
+
+  async activateBookshelf(): Promise<void> {
+    let leaf = this.app.workspace.getLeavesOfType(EPUB_BOOKSHELF_VIEW_TYPE)[0];
+    if (!leaf) {
+      const nextLeaf = this.app.workspace.getRightLeaf(false);
+      if (!nextLeaf) {
+        return;
+      }
+      leaf = nextLeaf;
+      await leaf.setViewState({ type: EPUB_BOOKSHELF_VIEW_TYPE, active: true });
+    }
+    this.app.workspace.revealLeaf(leaf);
+    const view = leaf.view;
+    if (view instanceof EpubBookshelfView) {
+      view.refresh();
+    }
+  }
+
+  async openEpubBook(file: TFile): Promise<void> {
+    const leaf = this.app.workspace.getLeaf(false);
+    await leaf.openFile(file);
   }
 
   private copySelection(): void {

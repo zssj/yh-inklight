@@ -31333,6 +31333,11 @@ var OverlayAnnotationsPlugin = class extends import_obsidian12.Plugin {
     await this.store.initialize();
     this.registerView(ANNOTATION_SIDEBAR_VIEW, (leaf) => new AnnotationSidebarView(leaf, this));
     this.registerView(EPUB_READER_VIEW_TYPE, (leaf) => new EpubReaderView(leaf, this.store, this.settings));
+    try {
+      this.registerExtensions(["epub"], EPUB_READER_VIEW_TYPE);
+    } catch (error) {
+      console.warn("yh-inklight: \u6CE8\u518C .epub \u6269\u5C55\u5931\u8D25\uFF08\u53EF\u80FD\u4E0E\u5176\u4ED6 EPUB \u63D2\u4EF6\u51B2\u7A81\uFF09", error);
+    }
     this.registerView(
       EPUB_BOOKSHELF_VIEW_TYPE,
       (leaf) => new EpubBookshelfView(leaf, this.store, (file) => this.openEpubBook(file))
@@ -31719,8 +31724,9 @@ var OverlayAnnotationsPlugin = class extends import_obsidian12.Plugin {
     }
   }
   async openEpubBook(file) {
-    const leaf = this.app.workspace.getLeaf(false);
+    const leaf = this.app.workspace.getLeaf("tab");
     await leaf.openFile(file);
+    this.app.workspace.revealLeaf(leaf);
   }
   copySelection() {
     const text = window.getSelection()?.toString() || this.activeEditor()?.editor.getSelection() || "";

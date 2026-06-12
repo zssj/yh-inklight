@@ -71,6 +71,16 @@ export default class OverlayAnnotationsPlugin extends Plugin {
 
     this.registerView(ANNOTATION_SIDEBAR_VIEW, (leaf) => new AnnotationSidebarView(leaf, this));
     this.registerView(EPUB_READER_VIEW_TYPE, (leaf) => new EpubReaderView(leaf, this.store, this.settings));
+    // 把 .epub 扩展名显式绑定到阅读器视图：registerView 只注册视图工厂，
+    // 还需要 registerExtensions 告诉 Obsidian「.epub 用本视图打开」，
+    // 否则双击/打开 epub 会 fallback 到系统默认程序。
+    // 参考 ob-epub-reader 与 obsidian-weave-reader 的实现；用 try/catch 防止
+    // 与其他 EPUB 插件扩展冲突时抛错导致插件加载失败。
+    try {
+      this.registerExtensions(["epub"], EPUB_READER_VIEW_TYPE);
+    } catch (error) {
+      console.warn("yh-inklight: 注册 .epub 扩展失败（可能与其他 EPUB 插件冲突）", error);
+    }
     this.registerView(
       EPUB_BOOKSHELF_VIEW_TYPE,
       (leaf) => new EpubBookshelfView(leaf, this.store, (file) => this.openEpubBook(file)),
@@ -507,8 +517,9 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   }
 
   async openEpubBook(file: TFile): Promise<void> {
-    const leaf = this.app.workspace.getLeaf(false);
+    const leaf = this.app.workspace.getLeaf("tab");
     await leaf.openFile(file);
+    this.app.workspace.revealLeaf(leaf);
   }
 
   private copySelection(): void {

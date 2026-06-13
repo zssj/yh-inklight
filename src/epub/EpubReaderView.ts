@@ -26,6 +26,7 @@ import {
 	EpubHighlightStyle,
 	EpubReadingProgress,
 	EpubReadingTheme,
+	SUPPORTED_BOOK_EXTENSIONS,
 } from "../storage/types";
 import { AnnotationStore } from "../storage/annotationStore";
 import {
@@ -233,9 +234,9 @@ export class EpubReaderView extends FileView {
 		return this.file?.basename ?? "EPUB Reader";
 	}
 
-	/** 声明此视图可以打开 epub 文件 */
+	/** 声明此视图可以打开 EPUB 及 foliate 支持的所有电子书格式 */
 	override canAcceptExtension(extension: string): boolean {
-		return extension === "epub";
+		return (SUPPORTED_BOOK_EXTENSIONS as readonly string[]).includes(extension.toLowerCase());
 	}
 
 	/** 视图打开时构建 DOM 骨架 */

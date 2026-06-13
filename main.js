@@ -10619,9 +10619,9 @@ var EpubReaderView = class extends import_obsidian9.FileView {
   getDisplayText() {
     return this.file?.basename ?? "EPUB Reader";
   }
-  /** 声明此视图可以打开 epub 文件 */
+  /** 声明此视图可以打开 EPUB 及 foliate 支持的所有电子书格式 */
   canAcceptExtension(extension) {
-    return extension === "epub";
+    return SUPPORTED_BOOK_EXTENSIONS.includes(extension.toLowerCase());
   }
   /** 视图打开时构建 DOM 骨架 */
   async onOpen() {
@@ -13723,9 +13723,9 @@ var OverlayAnnotationsPlugin = class extends import_obsidian16.Plugin {
     this.registerView(ANNOTATION_SIDEBAR_VIEW, (leaf) => new AnnotationSidebarView(leaf, this));
     this.registerView(EPUB_READER_VIEW_TYPE, (leaf) => new EpubReaderView(leaf, this.store, this.settings, () => this.refreshAnnotations()));
     try {
-      this.registerExtensions(["epub"], EPUB_READER_VIEW_TYPE);
+      this.registerExtensions([...SUPPORTED_BOOK_EXTENSIONS], EPUB_READER_VIEW_TYPE);
     } catch (error) {
-      console.warn("yh-inklight: \u6CE8\u518C .epub \u6269\u5C55\u5931\u8D25\uFF08\u53EF\u80FD\u4E0E\u5176\u4ED6 EPUB \u63D2\u4EF6\u51B2\u7A81\uFF09", error);
+      console.warn("yh-inklight: \u6CE8\u518C\u7535\u5B50\u4E66\u6269\u5C55\u540D\u5931\u8D25\uFF08\u53EF\u80FD\u4E0E\u5176\u4ED6\u63D2\u4EF6\u51B2\u7A81\uFF09", error);
     }
     this.registerView(
       EPUB_BOOKSHELF_VIEW_TYPE,

@@ -561,7 +561,26 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       });
       view.addEventListener("load", (event: Event) => {
         const detail = (event as CustomEvent).detail;
-        console.log("[yh-foliate] load section#", detail?.index, "doc?", Boolean(detail?.doc));
+        const doc = detail?.doc as Document | undefined;
+        console.log("[yh-foliate] load section#", detail?.index, "doc?", Boolean(doc));
+        // CSP 绕过：srcdoc 内 <link href="blob:"> 的 stylesheet 会被 style-src 拦，
+        // 读 blob 内容内联成 <style>（unsafe-inline 允许）。
+        if (doc) {
+          const links = Array.from(doc.querySelectorAll('link[rel="stylesheet"]'));
+          for (const link of links) {
+            const href = link.getAttribute("href") || "";
+            if (!href.startsWith("blob:")) continue;
+            fetch(href)
+              .then((r) => r.text())
+              .then((css) => {
+                const style = doc.createElement("style");
+                style.textContent = css;
+                link.replaceWith(style);
+              })
+              .catch((e) => console.warn("[yh-foliate] inline css failed", href, e));
+          }
+          console.log("[yh-foliate] blob stylesheet to inline:", links.length);
+        }
       });
       view.addEventListener("link", (event: Event) => {
         const detail = (event as CustomEvent).detail;

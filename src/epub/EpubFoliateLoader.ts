@@ -17,7 +17,7 @@
  */
 
 import { installFoliateCustomElementGuard } from "./EpubFoliateGuard";
-import { installDesktopFoliateIframeSandboxPatch, installFoliateBlobIframePatch } from "./EpubFoliatePatches";
+import { installFoliateBlobIframePatch } from "./EpubFoliatePatches";
 
 /** foliate-js 的 View 构造器所在模块（动态 import，便于 esbuild 打包）。 */
 type FoliateViewModule = {
@@ -37,9 +37,10 @@ async function ensureViewModule(): Promise<FoliateViewModule> {
 /** 确保 <foliate-view> 自定义元素已注册（带冲突保护，幂等）。 */
 export async function ensureFoliateViewRegistered(): Promise<void> {
   installFoliateCustomElementGuard();
-  // Obsidian 桌面端 CSP 兼容：foliate iframe 的 sandbox allow-scripts 与 blob: src 会被拦，
-  // 必须在 foliate-view 创建前打补丁（移植自 weave foliate-runtime-patches）。
-  installDesktopFoliateIframeSandboxPatch();
+  // Obsidian 桌面端 CSP：foliate 的 blob: iframe src 会被 style-src 拦，
+  // patch 改用 srcdoc 注入（移植自 weave）。
+  // ⚠️ 暂不装 sandbox patch：移除 allow-scripts 会让 foliate iframe 脚本不跑、内容空白。
+  //    保留 allow-scripts 让 foliate 正常渲染（实测 v0.6.4 空白根因）。
   installFoliateBlobIframePatch((error) => {
     console.warn("yh-inklight: foliate blob iframe 加载失败", error);
   });

@@ -39062,58 +39062,8 @@ function installFoliateCustomElementGuard(registry = customElements) {
 
 // src/epub/EpubFoliatePatches.ts
 var import_obsidian12 = require("obsidian");
-function normalizeDesktopFoliateSandboxValue(attributeName, value, stack, iframeElement) {
-  if (import_obsidian12.Platform.isMobile || attributeName.toLowerCase() !== "sandbox") {
-    return null;
-  }
-  const normalizedValue = String(value || "").trim();
-  if (!normalizedValue || !/allow-scripts/i.test(normalizedValue)) {
-    return null;
-  }
-  const normalizedStack = String(stack || "").toLowerCase();
-  const iframePart = String(iframeElement?.getAttribute("part") || "").toLowerCase();
-  const shadowHostTagName = String(
-    iframeElement?.getRootNode() instanceof ShadowRoot ? iframeElement.getRootNode().host?.tagName : ""
-  ).toLowerCase();
-  const isFoliateDesktopFrame = normalizedStack.includes("foliate-js/paginator.js") || normalizedStack.includes("foliate-js/fixed-layout.js") || normalizedStack.includes("foliate") || iframePart.split(/\s+/).includes("filter") || shadowHostTagName === "foliate-view";
-  if (!isFoliateDesktopFrame) {
-    return null;
-  }
-  const seenTokens = /* @__PURE__ */ new Set();
-  const filteredTokens = normalizedValue.split(/\s+/).filter(Boolean).filter((token) => {
-    const normalizedToken = token.toLowerCase();
-    if (normalizedToken === "allow-scripts" || seenTokens.has(normalizedToken)) {
-      return false;
-    }
-    seenTokens.add(normalizedToken);
-    return true;
-  });
-  return filteredTokens.join(" ");
-}
-var desktopFoliateIframeSandboxPatchInstalled = false;
 var foliateBlobIframePatchInstalled = false;
 var foliateBlobIframeLoadTokens = /* @__PURE__ */ new WeakMap();
-function installDesktopFoliateIframeSandboxPatch() {
-  if (desktopFoliateIframeSandboxPatchInstalled || typeof HTMLIFrameElement === "undefined") {
-    return;
-  }
-  const setAttributeDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "setAttribute");
-  const originalSetAttribute = setAttributeDescriptor?.value;
-  if (!originalSetAttribute) {
-    desktopFoliateIframeSandboxPatchInstalled = true;
-    return;
-  }
-  HTMLIFrameElement.prototype.setAttribute = function patchedSetAttribute(name, value) {
-    const patchedValue = normalizeDesktopFoliateSandboxValue(
-      name,
-      String(value || ""),
-      new Error().stack,
-      this
-    );
-    Reflect.apply(originalSetAttribute, this, [name, patchedValue ?? value]);
-  };
-  desktopFoliateIframeSandboxPatchInstalled = true;
-}
 async function readBlobUrlAsText(url) {
   const response = await fetch(url);
   if (!response.ok) {
@@ -39183,7 +39133,6 @@ async function ensureViewModule() {
 }
 async function ensureFoliateViewRegistered() {
   installFoliateCustomElementGuard();
-  installDesktopFoliateIframeSandboxPatch();
   installFoliateBlobIframePatch((error) => {
     console.warn("yh-inklight: foliate blob iframe \u52A0\u8F7D\u5931\u8D25", error);
   });
@@ -39666,7 +39615,21 @@ var OverlayAnnotationsPlugin = class extends import_obsidian13.Plugin {
       });
       view.addEventListener("load", (event) => {
         const detail = event.detail;
-        console.log("[yh-foliate] load section#", detail?.index, "doc?", Boolean(detail?.doc));
+        const doc = detail?.doc;
+        console.log("[yh-foliate] load section#", detail?.index, "doc?", Boolean(doc));
+        if (doc) {
+          const links = Array.from(doc.querySelectorAll('link[rel="stylesheet"]'));
+          for (const link of links) {
+            const href = link.getAttribute("href") || "";
+            if (!href.startsWith("blob:")) continue;
+            fetch(href).then((r3) => r3.text()).then((css) => {
+              const style2 = doc.createElement("style");
+              style2.textContent = css;
+              link.replaceWith(style2);
+            }).catch((e3) => console.warn("[yh-foliate] inline css failed", href, e3));
+          }
+          console.log("[yh-foliate] blob stylesheet to inline:", links.length);
+        }
       });
       view.addEventListener("link", (event) => {
         const detail = event.detail;

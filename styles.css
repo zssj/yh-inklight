@@ -1815,3 +1815,33 @@ span.yh-ov-expand-btn:hover {
   border-radius: 2px;
   padding: 0 1px;
 }
+
+/* ============================================================
+   EPUB — 摘录回跳 & 协议链接
+   ============================================================ */
+
+/* 隐藏摘录 Markdown 中的 CFI 注释行 */
+.yh-epub-cfi-hidden {
+  display: none;
+}
+
+/* 摘录 callout 可点击跳转 */
+.yh-epub-goto-callout {
+  cursor: pointer;
+}
+
+.yh-epub-goto-callout:hover {
+  filter: brightness(0.95);
+}
+
+/* 回到原文链接 */
+a.yh-epub-goto-link {
+  font-size: var(--yh-font-sm);
+  color: var(--text-accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+a.yh-epub-goto-link:hover {
+  text-decoration: underline;
+}

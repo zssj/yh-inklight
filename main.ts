@@ -27,6 +27,8 @@ import { ANNOTATION_SIDEBAR_VIEW, AnnotationSidebarView } from "./src/views/side
 import { StickyNoteLane } from "./src/views/stickyNoteLane";
 import { EpubReaderView, EPUB_READER_VIEW_TYPE } from "./src/epub/EpubReaderView";
 import { EpubBookshelfView, EPUB_BOOKSHELF_VIEW_TYPE } from "./src/epub/EpubBookshelfView";
+import { registerEpubGotoHandler } from "./src/epub/EpubGotoHandler";
+import { EpubExcerptExporter } from "./src/epub/EpubExcerptExporter";
 
 interface CommentModalValue {
   title: string;
@@ -60,6 +62,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   private popover!: AnnotationPopover;
   private pdfLayer!: PdfAnnotationLayer;
   private stickyLane!: StickyNoteLane;
+  private epubExcerptExporter!: EpubExcerptExporter;
   private lastSelection: SelectionSnapshot | null = null;
   private renameMigrationTimer: number | null = null;
 
@@ -153,6 +156,22 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     this.registerEvents();
     this.pdfLayer.register();
     this.stickyLane.register();
+    this.epubExcerptExporter = new EpubExcerptExporter({
+      app: this.app,
+      store: this.store,
+      excerptFolder: this.settings.epubExcerptFolder,
+      backlinkRendering: this.settings.epubBacklinkRendering,
+      defaultAuthor: this.settings.defaultAuthor,
+    });
+    // Phase 4-B P1: EPUB 双向溯源 + 摘录导出
+    registerEpubGotoHandler(this, (file, cfi) => this.openEpubAtCfi(file, cfi));
+    this.registerObsidianProtocolHandler("inklight-epub", (params) => {
+      const filePath = typeof params.file === "string" ? decodeURIComponent(params.file) : "";
+      const cfi = typeof params.cfi === "string" ? decodeURIComponent(params.cfi) : "";
+      if (filePath && cfi) {
+        void this.openEpubAtCfi(filePath, cfi);
+      }
+    });
     this.registerMarkdownPostProcessor((element, context) => this.renderReadingHighlights(element, context));
   }
 
@@ -245,6 +264,19 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       id: "open-epub-bookshelf",
       name: "打开 EPUB 书架",
       callback: () => this.activateBookshelf(),
+    });
+
+    this.addCommand({
+      id: "export-epub-excerpts",
+      name: "导出 EPUB 摘录",
+      callback: async () => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.extension.toLowerCase() !== "epub") {
+          new Notice("请先打开一个 EPUB 文件");
+          return;
+        }
+        await this.epubExcerptExporter.exportToFile(file);
+      },
     });
 
     this.addCommand({
@@ -531,9 +563,35 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   }
 
   /**
-   * Phase 4-A 临时实测：用 foliate-js 在 Modal 内渲染当前 epub，验证引擎可用性。
-   * 控制台输出 relocate/load 事件 payload，供 view 重写参考。验证通过后移除。
+   * 打开 EPUB 文件并导航到指定 CFI 位置。
+   * 供 EpubGotoHandler（摘录回跳）和 Obsidian 协议处理器调用。
    */
+  async openEpubAtCfi(filePath: string, cfi: string): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(filePath);
+    if (!(file instanceof TFile) || file.extension.toLowerCase() !== "epub") {
+      new Notice("无法找到对应的电子书文件");
+      return;
+    }
+
+    const leaf = this.app.workspace.getLeaf("tab");
+    await leaf.openFile(file);
+    this.app.workspace.revealLeaf(leaf);
+
+    // 等视图加载完成后导航到 CFI
+    const tryNavigate = (): void => {
+      const epubLeaf = this.app.workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE).find(
+        (l) => (l.view as { file?: TFile }).file?.path === file.path,
+      );
+      const epubView = epubLeaf?.view as { navigateToCfi?: (cfi: string) => void } | undefined;
+      if (typeof epubView?.navigateToCfi === "function") {
+        epubView.navigateToCfi(cfi);
+      } else {
+        window.setTimeout(tryNavigate, 200);
+      }
+    };
+    window.setTimeout(tryNavigate, 300);
+  }
+
   private copySelection(): void {
     const text = window.getSelection()?.toString() || this.activeEditor()?.editor.getSelection() || "";
     if (text) {

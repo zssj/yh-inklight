@@ -111,6 +111,14 @@ interface FoliateShowAnnotationDetail {
 	range?: Range;
 }
 
+interface EpubSelectionSnapshot {
+	doc: Document;
+	range: Range;
+	text: string;
+	cfiRange: string;
+	rect: DOMRect;
+}
+
 // ---- EpubReaderView ----
 
 /**
@@ -567,31 +575,21 @@ export class EpubReaderView extends FileView {
 	 * @param cfiRange - foliate 由 Range 生成的 CFI 范围字符串
 	 * @param doc - foliate load 事件提供的 section document
 	 */
-	private handleTextSelected(cfiRange: string, doc: Document): void {
-		const selection = doc.defaultView?.getSelection?.();
-		const text = selection?.toString().trim() ?? "";
-
-		if (!text) {
+	private handleTextSelected(snapshot: EpubSelectionSnapshot): void {
+		if (!snapshot.text) {
 			this.dismissContextMenu();
 			return;
 		}
 
-		this.lastSelectedCfiRange = cfiRange;
-		this.lastSelectedText = text;
+		this.lastSelectedCfiRange = snapshot.cfiRange;
+		this.lastSelectedText = snapshot.text;
 
-		const range = selection?.getRangeAt(0);
-		if (!range) {
-			return;
-		}
-
-		const selectionRect = range.getBoundingClientRect();
-		const iframeRect = this.findIframeForDocument(doc)?.getBoundingClientRect();
-		const frameLeft = iframeRect?.left ?? 0;
-		const frameTop = iframeRect?.top ?? 0;
-		const absoluteTop = frameTop + selectionRect.top;
-		const absoluteLeft = frameLeft + selectionRect.left;
-
-		this.showContextMenu(absoluteLeft, absoluteTop + selectionRect.height, text, cfiRange);
+		this.showContextMenu(
+			snapshot.rect.left,
+			snapshot.rect.top + snapshot.rect.height,
+			snapshot.text,
+			snapshot.cfiRange,
+		);
 	}
 
 	/**
@@ -648,7 +646,7 @@ export class EpubReaderView extends FileView {
 		}
 
 		const clampedLeft = Math.max(8, Math.min(left, window.innerWidth - 260));
-		const clampedTop = top + 8;
+		const clampedTop = Math.max(8, Math.min(top + 8, window.innerHeight - 48));
 		menu.style.left = `${clampedLeft}px`;
 		menu.style.top = `${clampedTop}px`;
 
@@ -1576,7 +1574,7 @@ export class EpubReaderView extends FileView {
 	}
 
 	private emitFoliateSelection(doc: Document): boolean {
-		const selection = doc.defaultView?.getSelection?.();
+		const selection = doc.getSelection?.() ?? doc.defaultView?.getSelection?.();
 		if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
 			return false;
 		}
@@ -1589,7 +1587,11 @@ export class EpubReaderView extends FileView {
 		if (!cfiRange) {
 			return false;
 		}
-		this.handleTextSelected(cfiRange, doc);
+		const rect = this.createSelectionViewportRect(doc, range);
+		if (!rect) {
+			return false;
+		}
+		this.handleTextSelected({ doc, range: range.cloneRange(), text, cfiRange, rect });
 		return true;
 	}
 
@@ -1609,6 +1611,35 @@ export class EpubReaderView extends FileView {
 			console.warn("yh-inklight: EPUB selection CFI failed", { index, error });
 			return "";
 		}
+	}
+
+	private createSelectionViewportRect(doc: Document, range: Range): DOMRect | null {
+		const rawRect = this.extractVisibleRangeRect(range);
+		if (!rawRect) {
+			return null;
+		}
+
+		const frame = this.findIframeForDocument(doc);
+		const frameRect = frame?.getBoundingClientRect();
+		if (!frameRect) {
+			return rawRect;
+		}
+
+		return new DOMRect(
+			rawRect.left + frameRect.left,
+			rawRect.top + frameRect.top,
+			rawRect.width,
+			rawRect.height,
+		);
+	}
+
+	private extractVisibleRangeRect(range: Range): DOMRect | null {
+		const rects = Array.from(range.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0);
+		const rect = rects[rects.length - 1] ?? range.getBoundingClientRect();
+		if (!rect || rect.width <= 0 || rect.height <= 0) {
+			return null;
+		}
+		return new DOMRect(rect.left, rect.top, rect.width, rect.height);
 	}
 
 	private createAnnotationOverlay(
@@ -1722,6 +1753,17 @@ export class EpubReaderView extends FileView {
 	}
 
 	private findIframeForDocument(doc: Document): HTMLIFrameElement | null {
+		const frameElement = doc.defaultView?.frameElement;
+		if (frameElement instanceof HTMLIFrameElement) {
+			return frameElement;
+		}
+
+		const contentFrame = this.foliateView?.renderer?.getContents?.()
+			.find((content) => content.doc === doc)?.doc?.defaultView?.frameElement;
+		if (contentFrame instanceof HTMLIFrameElement) {
+			return contentFrame;
+		}
+
 		const visit = (root: ParentNode): HTMLIFrameElement | null => {
 			const iframes = Array.from(root.querySelectorAll("iframe"));
 			for (const iframe of iframes) {

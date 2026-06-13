@@ -11627,26 +11627,19 @@ var EpubReaderView = class extends import_obsidian11.FileView {
    * @param cfiRange - foliate 由 Range 生成的 CFI 范围字符串
    * @param doc - foliate load 事件提供的 section document
    */
-  handleTextSelected(cfiRange, doc) {
-    const selection = doc.defaultView?.getSelection?.();
-    const text = selection?.toString().trim() ?? "";
-    if (!text) {
+  handleTextSelected(snapshot) {
+    if (!snapshot.text) {
       this.dismissContextMenu();
       return;
     }
-    this.lastSelectedCfiRange = cfiRange;
-    this.lastSelectedText = text;
-    const range = selection?.getRangeAt(0);
-    if (!range) {
-      return;
-    }
-    const selectionRect = range.getBoundingClientRect();
-    const iframeRect = this.findIframeForDocument(doc)?.getBoundingClientRect();
-    const frameLeft = iframeRect?.left ?? 0;
-    const frameTop = iframeRect?.top ?? 0;
-    const absoluteTop = frameTop + selectionRect.top;
-    const absoluteLeft = frameLeft + selectionRect.left;
-    this.showContextMenu(absoluteLeft, absoluteTop + selectionRect.height, text, cfiRange);
+    this.lastSelectedCfiRange = snapshot.cfiRange;
+    this.lastSelectedText = snapshot.text;
+    this.showContextMenu(
+      snapshot.rect.left,
+      snapshot.rect.top + snapshot.rect.height,
+      snapshot.text,
+      snapshot.cfiRange
+    );
   }
   /**
    * 在指定位置显示浮动上下文菜单。
@@ -11697,7 +11690,7 @@ var EpubReaderView = class extends import_obsidian11.FileView {
       });
     }
     const clampedLeft = Math.max(8, Math.min(left, window.innerWidth - 260));
-    const clampedTop = top + 8;
+    const clampedTop = Math.max(8, Math.min(top + 8, window.innerHeight - 48));
     menu.style.left = `${clampedLeft}px`;
     menu.style.top = `${clampedTop}px`;
     document.body.appendChild(menu);
@@ -12463,7 +12456,7 @@ var EpubReaderView = class extends import_obsidian11.FileView {
     this.documentSelectionCleanups.set(doc, cleanup);
   }
   emitFoliateSelection(doc) {
-    const selection = doc.defaultView?.getSelection?.();
+    const selection = doc.getSelection?.() ?? doc.defaultView?.getSelection?.();
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
       return false;
     }
@@ -12476,7 +12469,11 @@ var EpubReaderView = class extends import_obsidian11.FileView {
     if (!cfiRange) {
       return false;
     }
-    this.handleTextSelected(cfiRange, doc);
+    const rect = this.createSelectionViewportRect(doc, range);
+    if (!rect) {
+      return false;
+    }
+    this.handleTextSelected({ doc, range: range.cloneRange(), text, cfiRange, rect });
     return true;
   }
   resolveSelectionCfi(doc, range) {
@@ -12492,6 +12489,31 @@ var EpubReaderView = class extends import_obsidian11.FileView {
       console.warn("yh-inklight: EPUB selection CFI failed", { index, error });
       return "";
     }
+  }
+  createSelectionViewportRect(doc, range) {
+    const rawRect = this.extractVisibleRangeRect(range);
+    if (!rawRect) {
+      return null;
+    }
+    const frame = this.findIframeForDocument(doc);
+    const frameRect = frame?.getBoundingClientRect();
+    if (!frameRect) {
+      return rawRect;
+    }
+    return new DOMRect(
+      rawRect.left + frameRect.left,
+      rawRect.top + frameRect.top,
+      rawRect.width,
+      rawRect.height
+    );
+  }
+  extractVisibleRangeRect(range) {
+    const rects = Array.from(range.getClientRects()).filter((rect2) => rect2.width > 0 && rect2.height > 0);
+    const rect = rects[rects.length - 1] ?? range.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      return null;
+    }
+    return new DOMRect(rect.left, rect.top, rect.width, rect.height);
   }
   createAnnotationOverlay(rects, color, style2) {
     const svgNS = "http://www.w3.org/2000/svg";
@@ -12591,6 +12613,14 @@ var EpubReaderView = class extends import_obsidian11.FileView {
     this.foliateView.renderer?.render?.();
   }
   findIframeForDocument(doc) {
+    const frameElement = doc.defaultView?.frameElement;
+    if (frameElement instanceof HTMLIFrameElement) {
+      return frameElement;
+    }
+    const contentFrame = this.foliateView?.renderer?.getContents?.().find((content) => content.doc === doc)?.doc?.defaultView?.frameElement;
+    if (contentFrame instanceof HTMLIFrameElement) {
+      return contentFrame;
+    }
     const visit = (root) => {
       const iframes = Array.from(root.querySelectorAll("iframe"));
       for (const iframe of iframes) {

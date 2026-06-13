@@ -10713,6 +10713,21 @@ var EpubReaderView = class extends import_obsidian9.FileView {
     });
     fontSizeInc.addEventListener("click", () => this.changeFontSize(1));
     this.renderThemeSwatches();
+    const bookmarkBtn = this.toolbarEl.createEl("button", {
+      cls: "yh-epub-toolbar-btn yh-epub-bookmark-btn",
+      attr: { type: "button", title: "\u6DFB\u52A0\u4E66\u7B7E", "aria-label": "\u6DFB\u52A0\u4E66\u7B7E" }
+    });
+    (0, import_obsidian9.setIcon)(bookmarkBtn, "bookmark");
+    const updateBookmarkIcon = () => {
+      const hasBookmark = this.hasCurrentCfiBookmark();
+      bookmarkBtn.title = hasBookmark ? "\u79FB\u9664\u4E66\u7B7E" : "\u6DFB\u52A0\u4E66\u7B7E";
+      bookmarkBtn.toggleClass("is-active", hasBookmark);
+    };
+    bookmarkBtn.addEventListener("click", async () => {
+      await this.toggleBookmark();
+      updateBookmarkIcon();
+      this.renderSidebar();
+    });
     const flowBtn = this.toolbarEl.createEl("button", {
       cls: "yh-epub-toolbar-btn",
       attr: { type: "button", title: this.currentFlowMode === "paginated" ? "\u5207\u6362\u4E3A\u6EDA\u52A8" : "\u5207\u6362\u4E3A\u5206\u9875" }
@@ -10772,6 +10787,7 @@ var EpubReaderView = class extends import_obsidian9.FileView {
   renderSidebar() {
     this.sidebarContentEl.empty();
     this.renderTocList();
+    this.renderBookmarkList();
   }
   /**
    * 渲染目录列表，点击条目跳转到对应章节。
@@ -10789,6 +10805,92 @@ var EpubReaderView = class extends import_obsidian9.FileView {
         attr: { type: "button" }
       });
       item.addEventListener("click", () => this.navigateToSpineIndex(entry.spineIndex));
+    }
+  }
+  // ================================================================
+  // 书签（Phase 4-B P2）
+  // ================================================================
+  /**
+   * 检查当前 CFI 是否已有书签。
+   */
+  hasCurrentCfiBookmark() {
+    if (!this.file || !this.currentCfi) {
+      return false;
+    }
+    const document2 = this.store.getCachedDocument(this.file.path);
+    if (!document2) {
+      return false;
+    }
+    return document2.bookmarks.some((bm) => bm.type === "epub-bookmark" && bm.position === this.currentCfi);
+  }
+  /**
+   * 切换书签：若当前 CFI 已有则移除，否则添加。
+   */
+  async toggleBookmark() {
+    if (!this.file || !this.currentCfi) {
+      return;
+    }
+    const document2 = this.store.getCachedDocument(this.file.path);
+    if (!document2) {
+      return;
+    }
+    const existing = document2.bookmarks.find(
+      (bm) => bm.type === "epub-bookmark" && bm.position === this.currentCfi
+    );
+    if (existing) {
+      await this.store.removeBookmark(this.file, existing.id);
+      new import_obsidian9.Notice("\u5DF2\u79FB\u9664\u4E66\u7B7E");
+    } else {
+      const bookmark = {
+        id: crypto.randomUUID(),
+        type: "epub-bookmark",
+        label: this.currentChapter || "\u5F53\u524D\u4F4D\u7F6E",
+        position: this.currentCfi,
+        chapter: this.currentChapter || void 0,
+        color: this.pluginSettings.defaultHighlightColor,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      await this.store.addBookmark(this.file, bookmark);
+      new import_obsidian9.Notice("\u5DF2\u6DFB\u52A0\u4E66\u7B7E");
+    }
+    this.refreshAnnotations();
+  }
+  /**
+   * 在侧边栏底部渲染书签列表，点击跳转到对应 CFI。
+   */
+  renderBookmarkList() {
+    if (!this.file) {
+      return;
+    }
+    const document2 = this.store.getCachedDocument(this.file.path);
+    const bookmarks = document2?.bookmarks.filter((bm) => bm.type === "epub-bookmark") ?? [];
+    if (bookmarks.length === 0) {
+      return;
+    }
+    const section = this.sidebarContentEl.createDiv({ cls: "yh-epub-bookmark-section" });
+    section.createDiv({ cls: "yh-epub-bookmark-title", text: "\u{1F4D1} \u4E66\u7B7E" });
+    const list = section.createDiv({ cls: "yh-epub-bookmark-list" });
+    for (const bm of bookmarks) {
+      const item = list.createEl("button", {
+        cls: "yh-epub-bookmark-item",
+        attr: { type: "button", title: bm.chapter ?? "" }
+      });
+      item.createSpan({ cls: "yh-epub-bookmark-label", text: bm.label.trim() || "\u4E66\u7B7E" });
+      item.createSpan({ cls: "yh-epub-bookmark-time", text: this.formatBookmarkDate(bm.createdAt) });
+      item.addEventListener("click", () => {
+        if (this.foliateView) {
+          void this.foliateView.goTo(bm.position);
+        }
+      });
+    }
+  }
+  formatBookmarkDate(iso) {
+    try {
+      const d2 = new Date(iso);
+      const pad = (n3) => String(n3).padStart(2, "0");
+      return `${pad(d2.getMonth() + 1)}-${pad(d2.getDate())} ${pad(d2.getHours())}:${pad(d2.getMinutes())}`;
+    } catch {
+      return "";
     }
   }
   // ================================================================

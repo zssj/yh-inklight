@@ -567,7 +567,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
         const detail = (event as CustomEvent).detail;
         console.log("[yh-foliate] link", detail?.href);
       });
-      await openBookFromBuffer(view, buffer);
+      await openBookFromBuffer(view, buffer, file.name);
       new Notice("foliate 已加载，打开控制台查看事件日志（Ctrl+Shift+I）。");
     } catch (error) {
       console.error("[yh-foliate] test failed", error);

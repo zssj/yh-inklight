@@ -76,10 +76,18 @@ export async function createFoliateView(container: HTMLElement): Promise<Foliate
   return element as unknown as FoliateViewHandle;
 }
 
-/** 从 ArrayBuffer（vault readBinary 得到）打开书，foliate 自动识别格式。 */
+/**
+ * 从 ArrayBuffer（vault readBinary 得到）打开书，foliate 自动按文件名后缀识别格式。
+ *
+ * ⚠️ 必须传 File（带 filename），不能用裸 Blob：foliate-js 的 makeBook（view.js）
+ *    用 `file.name` 后缀判断格式（epub/mobi/fb2/cbz/...），裸 Blob 无 name 会导致
+ *    `Cannot read properties of undefined (reading 'endsWith')`。
+ */
 export async function openBookFromBuffer(
   view: FoliateViewHandle,
   buffer: ArrayBuffer,
+  filename: string,
 ): Promise<void> {
-  await view.open(new Blob([buffer]));
+  const file = new File([buffer], filename, { type: "application/epub+zip" });
+  await view.open(file);
 }

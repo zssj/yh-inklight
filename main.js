@@ -39085,8 +39085,9 @@ async function createFoliateView(container) {
   container.appendChild(element);
   return element;
 }
-async function openBookFromBuffer(view, buffer) {
-  await view.open(new Blob([buffer]));
+async function openBookFromBuffer(view, buffer, filename) {
+  const file = new File([buffer], filename, { type: "application/epub+zip" });
+  await view.open(file);
 }
 
 // main.ts
@@ -39554,7 +39555,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian12.Plugin {
         const detail = event.detail;
         console.log("[yh-foliate] link", detail?.href);
       });
-      await openBookFromBuffer(view, buffer);
+      await openBookFromBuffer(view, buffer, file.name);
       new import_obsidian12.Notice("foliate \u5DF2\u52A0\u8F7D\uFF0C\u6253\u5F00\u63A7\u5236\u53F0\u67E5\u770B\u4E8B\u4EF6\u65E5\u5FD7\uFF08Ctrl+Shift+I\uFF09\u3002");
     } catch (error) {
       console.error("[yh-foliate] test failed", error);

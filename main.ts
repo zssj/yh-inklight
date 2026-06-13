@@ -27,6 +27,7 @@ import { ANNOTATION_SIDEBAR_VIEW, AnnotationSidebarView } from "./src/views/side
 import { StickyNoteLane } from "./src/views/stickyNoteLane";
 import { EpubReaderView, EPUB_READER_VIEW_TYPE } from "./src/epub/EpubReaderView";
 import { EpubBookshelfView, EPUB_BOOKSHELF_VIEW_TYPE } from "./src/epub/EpubBookshelfView";
+import { createFoliateView, openBookFromBuffer } from "./src/epub/EpubFoliateLoader";
 
 interface CommentModalValue {
   title: string;
@@ -237,6 +238,15 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       id: "open-epub-bookshelf",
       name: "打开 EPUB 书架",
       callback: () => this.activateBookshelf(),
+    });
+
+    // Phase 4-A 临时实测脚手架：在 Modal 里用 foliate-js 渲染当前 epub，
+    // 验证 foliate 引擎可在 yh-inklight 打包运行 + 摸清 relocate/load 事件 payload。
+    // view 重写（4-A-3）验证通过后移除。
+    this.addCommand({
+      id: "test-foliate-engine",
+      name: "测试 foliate 引擎（开发）",
+      callback: () => this.testFoliateEngine(),
     });
 
     this.addCommand({
@@ -520,6 +530,49 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     const leaf = this.app.workspace.getLeaf("tab");
     await leaf.openFile(file);
     this.app.workspace.revealLeaf(leaf);
+  }
+
+  /**
+   * Phase 4-A 临时实测：用 foliate-js 在 Modal 内渲染当前 epub，验证引擎可用性。
+   * 控制台输出 relocate/load 事件 payload，供 view 重写参考。验证通过后移除。
+   */
+  private async testFoliateEngine(): Promise<void> {
+    const file = this.app.workspace.getActiveFile();
+    if (!(file instanceof TFile) || file.extension !== "epub") {
+      new Notice("请先选中一个 .epub 文件再运行此命令。");
+      return;
+    }
+
+    const modal = new Modal(this.app);
+    modal.titleEl.setText("foliate 引擎测试（开发）");
+    modal.modalEl.style.width = "80vw";
+    modal.modalEl.style.height = "85vh";
+    const container = modal.contentEl.createDiv({ cls: "yh-foliate-test" });
+    container.style.height = "70vh";
+    container.style.overflow = "hidden";
+    modal.open();
+
+    try {
+      const buffer = await this.app.vault.readBinary(file);
+      const view = await createFoliateView(container);
+      view.addEventListener("relocate", (event: Event) => {
+        const detail = (event as CustomEvent).detail;
+        console.log("[yh-foliate] relocate", detail);
+      });
+      view.addEventListener("load", (event: Event) => {
+        const detail = (event as CustomEvent).detail;
+        console.log("[yh-foliate] load section#", detail?.index, "doc?", Boolean(detail?.doc));
+      });
+      view.addEventListener("link", (event: Event) => {
+        const detail = (event as CustomEvent).detail;
+        console.log("[yh-foliate] link", detail?.href);
+      });
+      await openBookFromBuffer(view, buffer);
+      new Notice("foliate 已加载，打开控制台查看事件日志（Ctrl+Shift+I）。");
+    } catch (error) {
+      console.error("[yh-foliate] test failed", error);
+      new Notice(`foliate 测试失败: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private copySelection(): void {

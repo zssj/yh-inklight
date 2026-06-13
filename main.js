@@ -10425,6 +10425,7 @@ var EpubNoteModal = class extends import_obsidian8.Modal {
     for (const c2 of ANNOTATION_COLORS) {
       const dot = dots.createDiv({ cls: "yh-epub-color-dot" });
       dot.setAttribute("data-color", c2);
+      dot.style.background = EPUB_COLOR_MAP[c2];
       dot.title = COLOR_LABELS[c2];
       if (c2 === this.color) {
         dot.addClass("is-active");
@@ -10523,6 +10524,9 @@ var EpubReaderView = class extends import_obsidian9.FileView {
     this.foliateView = null;
     this.loadedSectionDocs = /* @__PURE__ */ new WeakMap();
     this.documentSelectionCleanups = /* @__PURE__ */ new WeakMap();
+    // 跟踪 foliate 高亮层实际已渲染的标注（id → 渲染时传入 foliate 的 meta）。
+    // 全量刷新时据此 remove，不依赖 sidecar 缓存——否则外部删除（侧栏）后被删的标注无法从 foliate 层移除。
+    this.renderedAnnotationMeta = /* @__PURE__ */ new Map();
     this.currentCfi = "";
     this.currentSectionIndex = 0;
     // ---- 状态 ----
@@ -11007,13 +11011,14 @@ var EpubReaderView = class extends import_obsidian9.FileView {
     if (!this.foliateView) {
       return;
     }
-    const cfiRange = annotation.anchor.cfiRange;
-    void this.foliateView.addAnnotation({
-      value: cfiRange,
+    const meta = {
+      value: annotation.anchor.cfiRange,
       id: annotation.id,
       color: annotation.color,
       style: annotation.style
-    });
+    };
+    this.renderedAnnotationMeta.set(annotation.id, meta);
+    void this.foliateView.addAnnotation(meta);
   }
   /**
    * 恢复已保存的所有标注到 foliate 高亮层。
@@ -11135,13 +11140,13 @@ var EpubReaderView = class extends import_obsidian9.FileView {
     if (!this.foliateView || !this.file) {
       return;
     }
-    const document2 = this.store.getCachedDocument(this.file.path);
-    if (document2) {
-      const allAnnotations = [...document2.epubHighlights, ...document2.epubComments];
-      for (const annotation of allAnnotations) {
-        this.removeFoliateAnnotation(annotation);
+    for (const meta of this.renderedAnnotationMeta.values()) {
+      try {
+        this.foliateView.deleteAnnotation(meta);
+      } catch {
       }
     }
+    this.renderedAnnotationMeta.clear();
     this.restoreAnnotations();
   }
   // ================================================================
@@ -11614,6 +11619,7 @@ var EpubReaderView = class extends import_obsidian9.FileView {
       }
       this.foliateView = null;
     }
+    this.renderedAnnotationMeta.clear();
     if (this.readerContainerEl) {
       this.readerContainerEl.empty();
     }
@@ -11803,15 +11809,17 @@ var EpubReaderView = class extends import_obsidian9.FileView {
     if (!this.foliateView) {
       return;
     }
+    const meta = this.renderedAnnotationMeta.get(annotation.id) ?? {
+      value: annotation.anchor.cfiRange,
+      id: annotation.id,
+      color: annotation.color,
+      style: annotation.style
+    };
     try {
-      this.foliateView.deleteAnnotation({
-        value: annotation.anchor.cfiRange,
-        id: annotation.id,
-        color: annotation.color,
-        style: annotation.style
-      });
+      this.foliateView.deleteAnnotation(meta);
     } catch {
     }
+    this.renderedAnnotationMeta.delete(annotation.id);
   }
   applyFoliateAppearance(size = this.currentFontSize) {
     if (!this.foliateView) {

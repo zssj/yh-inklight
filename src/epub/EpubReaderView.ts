@@ -145,6 +145,9 @@ export class EpubReaderView extends FileView {
 	private foliateView: FoliateViewHandle | null = null;
 	private loadedSectionDocs = new WeakMap<Document, number>();
 	private documentSelectionCleanups = new WeakMap<Document, () => void>();
+	// 跟踪 foliate 高亮层实际已渲染的标注（id → 渲染时传入 foliate 的 meta）。
+	// 全量刷新时据此 remove，不依赖 sidecar 缓存——否则外部删除（侧栏）后被删的标注无法从 foliate 层移除。
+	private renderedAnnotationMeta = new Map<string, { value: string; id: string; color: AnnotationColor; style: EpubHighlightStyle }>();
 	private currentCfi = "";
 	private currentSectionIndex = 0;
 
@@ -694,14 +697,15 @@ export class EpubReaderView extends FileView {
 			return;
 		}
 
-		const cfiRange = annotation.anchor.cfiRange;
-
-		void this.foliateView.addAnnotation({
-			value: cfiRange,
+		const meta = {
+			value: annotation.anchor.cfiRange,
 			id: annotation.id,
 			color: annotation.color,
 			style: annotation.style,
-		});
+		};
+		this.renderedAnnotationMeta.set(annotation.id, meta);
+
+		void this.foliateView.addAnnotation(meta);
 	}
 
 	/**
@@ -848,13 +852,16 @@ export class EpubReaderView extends FileView {
 			return;
 		}
 
-		const document = this.store.getCachedDocument(this.file.path);
-		if (document) {
-			const allAnnotations = [...document.epubHighlights, ...document.epubComments];
-			for (const annotation of allAnnotations) {
-				this.removeFoliateAnnotation(annotation);
+		// 用 tracked meta remove 所有已渲染标注，不依赖 sidecar 缓存——
+		// 这样外部删除（侧栏）后被删的标注也能从 foliate 层正确移除，再按当前 sidecar 全量重绘。
+		for (const meta of this.renderedAnnotationMeta.values()) {
+			try {
+				this.foliateView.deleteAnnotation(meta);
+			} catch {
+				/* foliate may already have cleared the overlay */
 			}
 		}
+		this.renderedAnnotationMeta.clear();
 
 		this.restoreAnnotations();
 	}
@@ -1407,6 +1414,7 @@ export class EpubReaderView extends FileView {
 			}
 			this.foliateView = null;
 		}
+		this.renderedAnnotationMeta.clear();
 
 		if (this.readerContainerEl) {
 			this.readerContainerEl.empty();
@@ -1659,16 +1667,18 @@ export class EpubReaderView extends FileView {
 		if (!this.foliateView) {
 			return;
 		}
+		const meta = this.renderedAnnotationMeta.get(annotation.id) ?? {
+			value: annotation.anchor.cfiRange,
+			id: annotation.id,
+			color: annotation.color,
+			style: annotation.style,
+		};
 		try {
-			this.foliateView.deleteAnnotation({
-				value: annotation.anchor.cfiRange,
-				id: annotation.id,
-				color: annotation.color,
-				style: annotation.style,
-			});
+			this.foliateView.deleteAnnotation(meta);
 		} catch {
 			/* foliate may already have cleared the visible overlay */
 		}
+		this.renderedAnnotationMeta.delete(annotation.id);
 	}
 
 	private applyFoliateAppearance(size = this.currentFontSize): void {

@@ -9,6 +9,7 @@ import {
   AnnotationColor,
   ANNOTATION_COLORS,
   COLOR_LABELS,
+  EPUB_COLOR_MAP,
   EpubHighlightStyle,
   EPUB_HIGHLIGHT_STYLES,
 } from "../storage/types";
@@ -94,6 +95,7 @@ export class EpubNoteModal extends Modal {
     for (const c of ANNOTATION_COLORS) {
       const dot = dots.createDiv({ cls: "yh-epub-color-dot" });
       dot.setAttribute("data-color", c);
+      dot.style.background = EPUB_COLOR_MAP[c];
       dot.title = COLOR_LABELS[c];
       if (c === this.color) {
         dot.addClass("is-active");

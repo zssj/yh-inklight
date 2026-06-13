@@ -165,6 +165,11 @@ export class EpubReaderView extends FileView {
 	private lastSelectedText = "";
 	private lastPointerClientX = 0;
 	private lastPointerClientY = 0;
+	private footnotePopoverEl: HTMLElement | null = null;
+	private footnoteHoverTimer: number | null = null;
+	private searchInputEl: HTMLInputElement | null = null;
+	private searchResultsEl: HTMLElement | null = null;
+	private canvasSendBtn: HTMLElement | null = null;
 
 	// ---- 定时器 / 追踪 ----
 

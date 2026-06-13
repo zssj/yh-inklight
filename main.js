@@ -10539,6 +10539,11 @@ var EpubReaderView = class extends import_obsidian9.FileView {
     this.lastSelectedText = "";
     this.lastPointerClientX = 0;
     this.lastPointerClientY = 0;
+    this.footnotePopoverEl = null;
+    this.footnoteHoverTimer = null;
+    this.searchInputEl = null;
+    this.searchResultsEl = null;
+    this.canvasSendBtn = null;
     // ---- 定时器 / 追踪 ----
     this.readingTimeSeconds = 0;
     this.readingTimeFlushTimer = null;

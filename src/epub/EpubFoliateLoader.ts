@@ -258,12 +258,50 @@ function attachFoliateTransformPipeline(book: FoliateBookHandle): void {
  * ⚠️ 必须传 File（带 filename），不能用裸 Blob：foliate-js 的 makeBook（view.js）
  *    用 `file.name` 后缀判断格式（epub/mobi/fb2/cbz/...），裸 Blob 无 name 会导致
  *    `Cannot read properties of undefined (reading 'endsWith')`。
+ *
+ * 特殊处理 .txt 文件：foliate makeBook 不支持纯文本，需要自制 book object。
  */
 export async function openBookFromBuffer(
   view: FoliateViewHandle,
   buffer: ArrayBuffer,
   filename: string,
 ): Promise<void> {
+  const isTxt = /\.txt$/i.test(filename);
+  if (isTxt) {
+    const text = new TextDecoder().decode(buffer);
+    const html = buildTxtHtml(filename, text);
+    const parser = new DOMParser();
+    const sectionId = "txt-section-1.xhtml";
+    const createDoc = (): Document => parser.parseFromString(html, "application/xhtml+xml");
+    const book = {
+      sections: [{
+        id: sectionId,
+        cfi: "epubcfi(/6/2)",
+        linear: "yes",
+        size: text.length,
+        load: () => html,
+        createDocument: () => createDoc(),
+      }],
+      toc: [{ label: filename.replace(/\.txt$/i, ""), href: sectionId }],
+      metadata: { title: filename.replace(/\.txt$/i, ""), author: "", language: "zh-CN" },
+      rendition: {},
+      splitTOCHref: (href: string): [number, string | null] => {
+        const [sid] = String(href || "").split("#");
+        return [sid === sectionId ? 0 : -1, null];
+      },
+      getTOCFragment: (_doc: Document, _fragment: string | null) => null,
+      isExternal: (href: string) => /^\w+:/i.test(String(href || "")),
+      resolveCFI: () => null,
+      resolveHref: (href: string) => {
+        const [sid] = String(href || "").split("#");
+        return sid === sectionId ? { index: 0, anchor: (doc: Document) => doc.documentElement } : null;
+      },
+      destroy: () => {},
+    };
+    await view.open(book as any);
+    return;
+  }
+
   const file = new File([buffer], filename, { type: "application/epub+zip" });
   const mod = await ensureViewModule();
   const book = mod.makeBook ? await mod.makeBook(file) : file;
@@ -271,6 +309,23 @@ export async function openBookFromBuffer(
     attachFoliateTransformPipeline(book as FoliateBookHandle);
   }
   await view.open(book);
+}
+
+function buildTxtHtml(filename: string, text: string): string {
+  const title = filename.replace(/\.txt$/i, "");
+  const paragraphs = text
+    .replace(/\r\n?/g, "\n")
+    .split(/\n{2,}/)
+    .map((block) => block.replace(/\s+$/g, "").trim())
+    .filter(Boolean);
+  const body = paragraphs
+    .map((p) => `<p>${escapeHtml(p.replace(/\n/g, "<br />"))}</p>`)
+    .join("\n");
+  return `<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml"><head><meta charset="utf-8" /><title>${escapeHtml(title)}</title><style>body{margin:0;padding:1em 1.5em;font-family:inherit;font-size:1em;line-height:1.8;word-break:break-word;overflow-wrap:anywhere;}p{margin:0 0 0.95em;text-indent:2em;white-space:pre-wrap;}</style></head><body>${body}</body></html>`;
+}
+
+function escapeHtml(s: string): string {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 /** foliate open() only mounts the renderer; callers must explicitly navigate/render the first page. */

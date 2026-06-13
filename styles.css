@@ -1542,6 +1542,34 @@ span.yh-ov-expand-btn:hover {
   background: var(--background-modifier-hover);
 }
 
+/* EPUB — 标注编辑/删除浮层（点击已有高亮时弹出） */
+.yh-epub-edit-menu {
+  position: fixed;
+  z-index: var(--layer-popover, 100000);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--yh-border);
+  border-radius: var(--yh-radius);
+  background: var(--background-primary);
+  box-shadow: var(--yh-shadow-lg);
+}
+
+.yh-epub-edit-menu-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--yh-border);
+  border-radius: var(--yh-radius-sm);
+  background: var(--background-modifier-error);
+  color: var(--text-error, #fff);
+  font-size: var(--yh-font-sm);
+  cursor: pointer;
+}
+
+.yh-epub-edit-menu-btn:hover {
+  background: var(--background-modifier-error-hover);
+}
+
 /* ============================================================
    EPUB — 想法/标注弹窗（EpubNoteModal）
    ============================================================ */

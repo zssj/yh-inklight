@@ -8,6 +8,7 @@
 import { ItemView, MarkdownRenderer, MarkdownView, Notice, setIcon, TFile, WorkspaceLeaf } from "obsidian";
 
 import type OverlayAnnotationsPlugin from "../../main";
+import { EPUB_READER_VIEW_TYPE } from "../epub/EpubReaderView";
 import {
   ANNOTATION_COLORS,
   AnnotationColor,
@@ -15,6 +16,8 @@ import {
   AnnotationSortMode,
   COLOR_LABELS,
   CommentAnnotation,
+  EpubCommentAnnotation,
+  EpubHighlightAnnotation,
   FileAnnotationDocument,
   HighlightAnnotation,
   PdfCommentAnnotation,
@@ -24,7 +27,7 @@ import {
 export const ANNOTATION_SIDEBAR_VIEW = "yh-inklight-sidebar";
 
 type AnnotationKind = "highlight" | "note";
-type AnnotationMode = "md" | "pdf";
+type AnnotationMode = "md" | "pdf" | "epub";
 type AnnotationScope = "current" | "all";
 type TypeFilter = "all" | AnnotationKind;
 
@@ -40,10 +43,12 @@ type SidebarCard =
       createdAt: string;
       startOffset: number;
       pageNumber: number | null;
+      cfiRange?: string;
+      chapter?: string;
       orphaned?: boolean;
       isCode: boolean;
-      highlight: HighlightAnnotation | PdfHighlightAnnotation;
-      note: CommentAnnotation | PdfCommentAnnotation | null;
+      highlight: HighlightAnnotation | PdfHighlightAnnotation | EpubHighlightAnnotation;
+      note: CommentAnnotation | PdfCommentAnnotation | EpubCommentAnnotation | null;
     }
   | {
       id: string;
@@ -56,10 +61,12 @@ type SidebarCard =
       createdAt: string;
       startOffset: number;
       pageNumber: number | null;
+      cfiRange?: string;
+      chapter?: string;
       orphaned?: boolean;
       isCode: boolean;
       highlight: null;
-      note: CommentAnnotation | PdfCommentAnnotation;
+      note: CommentAnnotation | PdfCommentAnnotation | EpubCommentAnnotation;
     };
 
 export class AnnotationSidebarView extends ItemView {
@@ -193,6 +200,31 @@ export class AnnotationSidebarView extends ItemView {
       });
     }
 
+    for (const highlight of document.epubHighlights) {
+      const note = this.findAttachedEpubNote(highlight, document.epubComments, usedNotes);
+      if (note) {
+        usedNotes.add(note.id);
+      }
+      cards.push({
+        id: highlight.id,
+        kind: "highlight",
+        mode: "epub",
+        sourcePath: document.filePath,
+        color: highlight.color,
+        text: highlight.anchor.selectedText,
+        content: note?.note ?? "",
+        createdAt: highlight.createdAt,
+        startOffset: Number.MAX_SAFE_INTEGER,
+        pageNumber: null,
+        cfiRange: highlight.anchor.cfiRange,
+        chapter: highlight.anchor.chapter,
+        orphaned: highlight.orphaned || note?.orphaned,
+        isCode: false,
+        highlight,
+        note,
+      });
+    }
+
     for (const note of document.comments.filter((item) => !usedNotes.has(item.id))) {
       cards.push({
         id: note.id,
@@ -224,6 +256,27 @@ export class AnnotationSidebarView extends ItemView {
         createdAt: note.createdAt,
         startOffset: Number.MAX_SAFE_INTEGER,
         pageNumber: note.anchor.pageNumber,
+        orphaned: note.orphaned,
+        isCode: false,
+        highlight: null,
+        note,
+      });
+    }
+
+    for (const note of document.epubComments.filter((item) => !usedNotes.has(item.id))) {
+      cards.push({
+        id: note.id,
+        kind: "note",
+        mode: "epub",
+        sourcePath: document.filePath,
+        color: note.color,
+        text: note.anchor.selectedText,
+        content: note.note,
+        createdAt: note.createdAt,
+        startOffset: Number.MAX_SAFE_INTEGER,
+        pageNumber: null,
+        cfiRange: note.anchor.cfiRange,
+        chapter: note.anchor.chapter,
         orphaned: note.orphaned,
         isCode: false,
         highlight: null,
@@ -268,6 +321,17 @@ export class AnnotationSidebarView extends ItemView {
           note.anchor.selectedText === highlight.anchor.selectedText
         );
       }) ??
+      null
+    );
+  }
+
+  private findAttachedEpubNote(
+    highlight: EpubHighlightAnnotation,
+    comments: EpubCommentAnnotation[],
+    usedNotes: Set<string>,
+  ): EpubCommentAnnotation | null {
+    return (
+      comments.find((note) => !usedNotes.has(note.id) && note.anchor.cfiRange === highlight.anchor.cfiRange) ??
       null
     );
   }
@@ -372,9 +436,9 @@ export class AnnotationSidebarView extends ItemView {
 
     const head = card.createDiv({ cls: "yh-ov-card-head" });
     head.createSpan({ cls: `yh-ov-label yh-label--${cardData.color}`, text: COLOR_LABELS[cardData.color] });
-    head.createSpan({ cls: "yh-ov-meta", text: cardData.mode === "md" ? "Markdown" : "PDF" });
+    head.createSpan({ cls: "yh-ov-meta", text: cardData.mode === "md" ? "Markdown" : cardData.mode === "pdf" ? "PDF" : "EPUB" });
     head.createSpan({ cls: "yh-ov-dot", text: "·" });
-    const title = cardData.note?.title ?? "";
+    const title = (cardData.note && "title" in cardData.note ? cardData.note.title : "") ?? "";
     const kindLabel = cardData.kind === "highlight" ? "高亮" : "笔记";
     const type = head.createSpan({
       cls: "yh-ov-type",
@@ -398,7 +462,14 @@ export class AnnotationSidebarView extends ItemView {
 
     const source = card.createDiv({ cls: "yh-ov-source" });
     source.createSpan({ cls: "yh-ov-file", text: file?.name ?? cardData.sourcePath });
-    source.createSpan({ cls: "yh-ov-mode", text: cardData.pageNumber ? `p.${cardData.pageNumber}` : "Markdown" });
+    source.createSpan({
+      cls: "yh-ov-mode",
+      text: cardData.mode === "epub"
+        ? (cardData.chapter ?? "EPUB")
+        : cardData.pageNumber
+          ? `p.${cardData.pageNumber}`
+          : "Markdown",
+    });
 
     const actions = card.createDiv({ cls: "yh-ov-actions" });
     if (cardData.note) {
@@ -436,7 +507,7 @@ export class AnnotationSidebarView extends ItemView {
     jump.disabled = !file;
     jump.addEventListener("click", () => {
       if (file) {
-        this.jumpTo(file, cardData.startOffset, cardData.pageNumber);
+        this.jumpTo(file, cardData.startOffset, cardData.pageNumber, cardData.mode, cardData.cfiRange);
       }
     });
 
@@ -566,6 +637,15 @@ export class AnnotationSidebarView extends ItemView {
       return;
     }
 
+    if (card.note && card.mode === "epub") {
+      await this.plugin.store.updateEpubComment(file, {
+        ...(card.note as EpubCommentAnnotation),
+        note: content,
+        updatedAt: new Date().toISOString(),
+      });
+      return;
+    }
+
     if (card.highlight && card.mode === "pdf") {
       const now = new Date().toISOString();
       const highlight = card.highlight as PdfHighlightAnnotation;
@@ -599,6 +679,26 @@ export class AnnotationSidebarView extends ItemView {
         collapsed: false,
         author: this.plugin.settings.defaultAuthor,
         createdAt: now,
+        updatedAt: now,
+        replies: [],
+        resolved: false,
+      });
+      return;
+    }
+
+    if (card.highlight && card.mode === "epub") {
+      const now = new Date().toISOString();
+      const highlight = card.highlight as EpubHighlightAnnotation;
+      await this.plugin.store.addEpubComment(file, {
+        id: crypto.randomUUID(),
+        type: "epub-comment",
+        color: highlight.color,
+        style: highlight.style,
+        anchor: highlight.anchor,
+        note: content,
+        createdAt: now,
+        collapsed: false,
+        author: this.plugin.settings.defaultAuthor,
         updatedAt: now,
         replies: [],
         resolved: false,
@@ -678,9 +778,29 @@ export class AnnotationSidebarView extends ItemView {
     return labels[this.exportFormat];
   }
 
-  private async jumpTo(file: TFile, offset: number, pageNumber: number | null): Promise<void> {
+  private async jumpTo(
+    file: TFile,
+    offset: number,
+    pageNumber: number | null,
+    mode: AnnotationMode = "md",
+    cfiRange?: string,
+  ): Promise<void> {
     const leaf = this.app.workspace.getLeaf(false);
     await leaf.openFile(file);
+
+    if (mode === "epub" && cfiRange) {
+      window.setTimeout(() => {
+        const epubLeaf = this.app.workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE).find(
+          (l) => (l.view as { file?: TFile }).file?.path === file.path,
+        );
+        const epubView = epubLeaf?.view as { navigateToCfi?: (cfi: string) => void } | undefined;
+        if (typeof epubView?.navigateToCfi === "function") {
+          epubView.navigateToCfi(cfiRange);
+        }
+      }, 200);
+      return;
+    }
+
     if (file.extension.toLowerCase() === "pdf") {
       window.setTimeout(() => {
         const page = document.querySelector<HTMLElement>(

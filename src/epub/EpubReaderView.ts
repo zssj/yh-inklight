@@ -42,6 +42,7 @@ import {
 	openBookFromBuffer,
 	showFoliateStart,
 } from "./EpubFoliateLoader";
+import { EpubNoteModal, EpubNoteResult } from "./EpubNoteModal";
 
 // ---- 常量 ----
 
@@ -140,6 +141,7 @@ export class EpubReaderView extends FileView {
 	private readonly store: AnnotationStore;
 	private readonly pluginSettings: AnnotationPluginSettings;
 	private readonly themeManager: EpubThemeManager;
+	private readonly refreshAnnotations: () => void;
 
 	// ---- foliate 实例 ----
 
@@ -162,6 +164,8 @@ export class EpubReaderView extends FileView {
 	private contextMenuEl: HTMLElement | null = null;
 	private lastSelectedCfiRange = "";
 	private lastSelectedText = "";
+	private lastPointerClientX = 0;
+	private lastPointerClientY = 0;
 
 	// ---- 定时器 / 追踪 ----
 
@@ -191,10 +195,12 @@ export class EpubReaderView extends FileView {
 		leaf: WorkspaceLeaf,
 		store: AnnotationStore,
 		settings: AnnotationPluginSettings,
+		refreshAnnotations: () => void,
 	) {
 		super(leaf);
 		this.store = store;
 		this.pluginSettings = settings;
+		this.refreshAnnotations = refreshAnnotations;
 		this.themeManager = new EpubThemeManager();
 		this.currentFlowMode = settings.epubDefaultFlow;
 		this.currentFontSize = settings.epubFontSize;
@@ -315,6 +321,11 @@ export class EpubReaderView extends FileView {
 
 		this.containerEl.addEventListener("keydown", (event) => this.handleKeydown(event));
 		this.readerContainerEl.addEventListener("wheel", (event) => this.handleWheel(event), { passive: false });
+		// 追踪点击位置，供标注编辑菜单定位（foliate show-annotation 触发时使用）
+		this.readerContainerEl.addEventListener("pointerdown", (event: PointerEvent) => {
+			this.lastPointerClientX = event.clientX;
+			this.lastPointerClientY = event.clientY;
+		}, { passive: true });
 	}
 
 	// ================================================================
@@ -708,6 +719,7 @@ export class EpubReaderView extends FileView {
 			await this.store.addEpubHighlight(this.file, annotation);
 			this.renderAnnotationOnRendition(annotation);
 			this.renderSidebar();
+			this.refreshAnnotations();
 			new Notice(`已添加${COLOR_LABELS[color]}画线`);
 		} catch (error) {
 			console.error("yh-inklight: EPUB highlight creation failed", error);
@@ -721,46 +733,52 @@ export class EpubReaderView extends FileView {
 	 * @param cfiRange - CFI 范围
 	 * @param text - 选中的文本
 	 */
-	private async openNoteModal(cfiRange: string, text: string): Promise<void> {
+	private openNoteModal(cfiRange: string, text: string): void {
 		if (!this.file || !this.foliateView) {
 			return;
 		}
 
-		const note = prompt(`标注: "${text.slice(0, 60)}${text.length > 60 ? "..." : ""}"`);
-		if (note === null || !note.trim()) {
-			return;
-		}
-
 		const chapter = this.currentChapter;
-		const color = this.pluginSettings.defaultHighlightColor;
-		const style = this.pluginSettings.epubHighlightStyle;
-		const now = new Date().toISOString();
-		const id = crypto.randomUUID();
 
-		const annotation: EpubCommentAnnotation = {
-			id,
-			type: "epub-comment",
-			color,
-			style,
-			anchor: { cfiRange, chapter, selectedText: text },
-			note: note.trim(),
-			createdAt: now,
-			collapsed: false,
-			author: this.pluginSettings.defaultAuthor,
-			updatedAt: now,
-			replies: [],
-			resolved: false,
-		};
+		new EpubNoteModal(
+			this.app,
+			text,
+			{
+				color: this.pluginSettings.defaultHighlightColor,
+				style: this.pluginSettings.epubHighlightStyle,
+			},
+			async (result: EpubNoteResult) => {
+				if (!result.note.trim()) {
+					return;
+				}
+				const now = new Date().toISOString();
+				const annotation: EpubCommentAnnotation = {
+					id: crypto.randomUUID(),
+					type: "epub-comment",
+					color: result.color,
+					style: result.style,
+					anchor: { cfiRange, chapter, selectedText: text },
+					note: result.note.trim(),
+					createdAt: now,
+					collapsed: false,
+					author: this.pluginSettings.defaultAuthor,
+					updatedAt: now,
+					replies: [],
+					resolved: false,
+				};
 
-		try {
-			await this.store.addEpubComment(this.file, annotation);
-			this.renderAnnotationOnRendition(annotation);
-			this.renderSidebar();
-			new Notice("已添加标注");
-		} catch (error) {
-			console.error("yh-inklight: EPUB comment creation failed", error);
-			new Notice("标注创建失败");
-		}
+				try {
+					await this.store.addEpubComment(this.file!, annotation);
+					this.renderAnnotationOnRendition(annotation);
+					this.renderSidebar();
+					this.refreshAnnotations();
+					new Notice("已添加标注");
+				} catch (error) {
+					console.error("yh-inklight: EPUB comment creation failed", error);
+					new Notice("标注创建失败");
+				}
+			},
+		).open();
 	}
 
 	/**
@@ -872,6 +890,14 @@ export class EpubReaderView extends FileView {
 			close();
 		});
 
+		// 定位到点击位置附近（用最近一次 pointerdown 坐标，foliate show-annotation 在点击后触发）
+		const left = this.lastPointerClientX || window.innerWidth / 2;
+		const top = this.lastPointerClientY || window.innerHeight / 2;
+		const clampedLeft = Math.max(8, Math.min(left + 8, window.innerWidth - 120));
+		const clampedTop = Math.max(8, Math.min(top + 8, window.innerHeight - 48));
+		menu.style.left = `${clampedLeft}px`;
+		menu.style.top = `${clampedTop}px`;
+
 		document.body.appendChild(menu);
 		window.setTimeout(() => {
 			menu.addEventListener("click", (event) => {
@@ -903,6 +929,7 @@ export class EpubReaderView extends FileView {
 			}
 			this.refreshRenditionAnnotations();
 			this.renderSidebar();
+			this.refreshAnnotations();
 			new Notice("标注已删除");
 		} catch (error) {
 			console.error("yh-inklight: EPUB annotation deletion failed", error);
@@ -1396,6 +1423,28 @@ export class EpubReaderView extends FileView {
 			readingTimeSeconds: this.readingTimeSeconds,
 			lastFlushTimestamp: this.lastFlushTimestamp,
 		};
+	}
+
+	// ================================================================
+	// 外部跳转（供共用 AnnotationSidebarView 的 jumpTo 调用）
+	// ================================================================
+
+	/**
+	 * 导航到指定 CFI 位置。
+	 * 供共用 AnnotationSidebarView 的「跳转」按钮调用，
+	 * 实现从总览面板跳回 EPUB 正文对应位置。
+	 *
+	 * @param cfiRange - CFI 范围字符串
+	 */
+	navigateToCfi(cfiRange: string): void {
+		if (!this.foliateView) {
+			return;
+		}
+		try {
+			void this.foliateView.goTo(cfiRange);
+		} catch (error) {
+			console.warn("yh-inklight: navigateToCfi failed", error);
+		}
 	}
 
 	// ================================================================

@@ -7758,7 +7758,7 @@ __export(main_exports, {
   default: () => OverlayAnnotationsPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian13 = require("obsidian");
+var import_obsidian14 = require("obsidian");
 
 // src/anchor/fuzzyMatch.ts
 function findBestFuzzyMatch(source, target, expectedStart) {
@@ -9758,864 +9758,10 @@ function clamp(value, min, max) {
 }
 
 // src/views/sidebarView.ts
-var import_obsidian7 = require("obsidian");
-var ANNOTATION_SIDEBAR_VIEW = "yh-inklight-sidebar";
-var AnnotationSidebarView = class extends import_obsidian7.ItemView {
-  constructor(leaf, plugin) {
-    super(leaf);
-    this.plugin = plugin;
-    this.annotationScope = "current";
-    this.query = "";
-    this.color = "all";
-    this.type = "all";
-    this.sort = "document";
-    this.exportFormat = "summary";
-    this.renderToken = 0;
-    this.renderTimer = null;
-  }
-  getViewType() {
-    return ANNOTATION_SIDEBAR_VIEW;
-  }
-  getDisplayText() {
-    return "\u58A8\u5149\u6279\u6CE8";
-  }
-  getIcon() {
-    return "yh-inklight-icon";
-  }
-  async onOpen() {
-    this.containerEl.addClass("yh-sidebar");
-    await this.render();
-  }
-  requestRender() {
-    if (this.renderTimer !== null) {
-      window.clearTimeout(this.renderTimer);
-    }
-    this.renderTimer = window.setTimeout(() => {
-      this.renderTimer = null;
-      void this.render();
-    }, 0);
-  }
-  async render() {
-    const token = ++this.renderToken;
-    const container = this.containerEl.children[1] ?? this.containerEl;
-    container.empty();
-    container.addClass("yh-overview");
-    const file = this.app.workspace.getActiveFile();
-    this.renderHeader(container);
-    this.renderControls(container);
-    if (this.annotationScope === "current" && !file) {
-      container.createDiv({ cls: "yh-empty", text: "Open a Markdown or PDF file to inspect annotations." });
-      this.renderExportFooter(container, null);
-      return;
-    }
-    const documents = this.annotationScope === "all" ? await this.plugin.store.getIndexedDocuments() : [await this.plugin.store.getDocument(file)];
-    if (token !== this.renderToken) {
-      return;
-    }
-    const rawCards = documents.flatMap((document2) => this.buildCards(document2));
-    const cards = this.filterCards(rawCards);
-    const highlightCount = rawCards.filter((card) => card.kind === "highlight" && !card.orphaned).length;
-    const noteCount = rawCards.filter((card) => card.note && !card.orphaned).length;
-    const scopeLabel = this.annotationScope === "all" ? `${documents.length} files` : "current file";
-    container.createDiv({ cls: "yh-ov-count", text: `${scopeLabel} \xB7 ${highlightCount} highlights \xB7 ${noteCount} notes` });
-    const list = container.createDiv({ cls: "yh-ov-list" });
-    if (!cards.length) {
-      list.createDiv({ cls: "yh-empty", text: "No matching annotations." });
-    } else {
-      for (const card of cards) {
-        this.renderCard(list, card);
-      }
-    }
-    this.renderExportFooter(container, this.annotationScope === "current" ? file : null);
-  }
-  buildCards(document2) {
-    const usedNotes = /* @__PURE__ */ new Set();
-    const cards = [];
-    for (const highlight of document2.highlights) {
-      const note = this.findAttachedMarkdownNote(highlight, document2.comments, usedNotes);
-      if (note) {
-        usedNotes.add(note.id);
-      }
-      cards.push({
-        id: highlight.id,
-        kind: "highlight",
-        mode: "md",
-        sourcePath: document2.filePath,
-        color: highlight.color,
-        text: highlight.anchor.selectedText,
-        content: note?.content ?? "",
-        createdAt: highlight.createdAt,
-        startOffset: highlight.anchor.startOffset,
-        pageNumber: null,
-        orphaned: highlight.orphaned || note?.orphaned,
-        isCode: isCodeAnchor(highlight.anchor),
-        highlight,
-        note
-      });
-    }
-    for (const highlight of document2.pdfHighlights) {
-      const note = this.findAttachedPdfNote(highlight, document2.pdfComments, usedNotes);
-      if (note) {
-        usedNotes.add(note.id);
-      }
-      cards.push({
-        id: highlight.id,
-        kind: "highlight",
-        mode: "pdf",
-        sourcePath: document2.filePath,
-        color: highlight.color,
-        text: highlight.anchor.selectedText,
-        content: note?.content ?? "",
-        createdAt: highlight.createdAt,
-        startOffset: Number.MAX_SAFE_INTEGER,
-        pageNumber: highlight.anchor.pageNumber,
-        orphaned: highlight.orphaned || note?.orphaned,
-        isCode: false,
-        highlight,
-        note
-      });
-    }
-    for (const note of document2.comments.filter((item) => !usedNotes.has(item.id))) {
-      cards.push({
-        id: note.id,
-        kind: "note",
-        mode: "md",
-        sourcePath: document2.filePath,
-        color: note.color,
-        text: note.anchor.selectedText,
-        content: note.content,
-        createdAt: note.createdAt,
-        startOffset: note.anchor.startOffset,
-        pageNumber: null,
-        orphaned: note.orphaned,
-        isCode: isCodeAnchor(note.anchor),
-        highlight: null,
-        note
-      });
-    }
-    for (const note of document2.pdfComments.filter((item) => !usedNotes.has(item.id))) {
-      cards.push({
-        id: note.id,
-        kind: "note",
-        mode: "pdf",
-        sourcePath: document2.filePath,
-        color: note.color,
-        text: note.anchor.selectedText,
-        content: note.content,
-        createdAt: note.createdAt,
-        startOffset: Number.MAX_SAFE_INTEGER,
-        pageNumber: note.anchor.pageNumber,
-        orphaned: note.orphaned,
-        isCode: false,
-        highlight: null,
-        note
-      });
-    }
-    return cards;
-  }
-  findAttachedMarkdownNote(highlight, comments, usedNotes) {
-    return comments.find((note) => !usedNotes.has(note.id) && note.highlightId === highlight.id) ?? comments.find((note) => {
-      return !usedNotes.has(note.id) && !note.highlightId && note.anchor.startOffset === highlight.anchor.startOffset && note.anchor.selectedText === highlight.anchor.selectedText;
-    }) ?? null;
-  }
-  findAttachedPdfNote(highlight, comments, usedNotes) {
-    return comments.find((note) => !usedNotes.has(note.id) && note.highlightId === highlight.id) ?? comments.find((note) => {
-      return !usedNotes.has(note.id) && !note.highlightId && note.anchor.pageNumber === highlight.anchor.pageNumber && note.anchor.selectedText === highlight.anchor.selectedText;
-    }) ?? null;
-  }
-  renderHeader(container) {
-    const header = container.createDiv({ cls: "yh-ov-head" });
-    header.createSpan({ cls: "yh-ov-title", text: "\u58A8\u5149\u6279\u6CE8" });
-    const actions = header.createDiv({ cls: "yh-ov-head-actions" });
-    const refresh = actions.createEl("button", {
-      cls: "yh-icon-btn yh-ov-refresh",
-      attr: { type: "button", title: "\u5237\u65B0\u6279\u6CE8", "aria-label": "\u5237\u65B0\u6279\u6CE8" }
-    });
-    (0, import_obsidian7.setIcon)(refresh, "refresh-cw");
-    refresh.addEventListener("click", () => this.requestRender());
-    const close = actions.createEl("button", {
-      cls: "yh-icon-btn yh-ov-close",
-      attr: { type: "button", title: "Close panel", "aria-label": "\u5173\u95ED\u58A8\u5149\u6279\u6CE8\u9762\u677F" }
-    });
-    (0, import_obsidian7.setIcon)(close, "x");
-    close.addEventListener("click", () => {
-      void this.leaf.detach();
-    });
-  }
-  renderControls(container) {
-    const searchRow = container.createDiv({ cls: "yh-ov-search-row" });
-    const search2 = searchRow.createEl("input", {
-      cls: "yh-ov-search",
-      attr: { type: "search", placeholder: "\u641C\u7D22\u6279\u6CE8..." }
-    });
-    search2.value = this.query;
-    search2.addEventListener("input", async () => {
-      this.query = search2.value;
-      await this.render();
-    });
-    const scope = searchRow.createEl("select", { cls: "yh-filter-select" });
-    scope.createEl("option", { text: "\u5F53\u524D\u6587\u4EF6", value: "current" });
-    scope.createEl("option", { text: "\u5168\u5E93", value: "all" });
-    scope.value = this.annotationScope;
-    scope.addEventListener("change", async () => {
-      this.annotationScope = scope.value;
-      await this.render();
-    });
-    const filterButton = searchRow.createEl("button", { cls: "yh-icon-btn", attr: { type: "button", title: "\u7B5B\u9009" } });
-    (0, import_obsidian7.setIcon)(filterButton, "filter");
-    const filterRow = container.createDiv({ cls: "yh-ov-filter-row" });
-    const color = filterRow.createEl("select", { cls: "yh-filter-select" });
-    color.createEl("option", { text: "\u5168\u90E8\u989C\u8272", value: "all" });
-    for (const item of ANNOTATION_COLORS) {
-      color.createEl("option", { text: COLOR_LABELS[item], value: item });
-    }
-    color.value = this.color;
-    color.addEventListener("change", async () => {
-      this.color = color.value;
-      await this.render();
-    });
-    const type = filterRow.createEl("select", { cls: "yh-filter-select" });
-    type.createEl("option", { text: "\u5168\u90E8\u7C7B\u578B", value: "all" });
-    type.createEl("option", { text: "\u9AD8\u4EAE", value: "highlight" });
-    type.createEl("option", { text: "\u7B14\u8BB0", value: "note" });
-    type.value = this.type;
-    type.addEventListener("change", async () => {
-      this.type = type.value;
-      await this.render();
-    });
-    const sort = filterRow.createEl("select", { cls: "yh-filter-select" });
-    const sortOptions = { document: "\u6587\u6863\u987A\u5E8F", newest: "\u6700\u65B0\u4F18\u5148", oldest: "\u6700\u65E9\u4F18\u5148" };
-    for (const item of ["document", "newest", "oldest"]) {
-      sort.createEl("option", { text: sortOptions[item], value: item });
-    }
-    sort.value = this.sort;
-    sort.addEventListener("change", async () => {
-      this.sort = sort.value;
-      await this.render();
-    });
-    const exportFormat = filterRow.createEl("select", { cls: "yh-filter-select" });
-    exportFormat.createEl("option", { text: "\u9ED8\u8BA4\u6458\u8981", value: "summary" });
-    exportFormat.createEl("option", { text: "\u6309\u989C\u8272\u5206\u7EC4", value: "by-color" });
-    exportFormat.createEl("option", { text: "\u53EA\u5BFC\u51FA\u7B14\u8BB0", value: "notes-only" });
-    exportFormat.createEl("option", { text: "\u9605\u8BFB\u7B14\u8BB0", value: "reading-notes" });
-    exportFormat.value = this.exportFormat;
-    exportFormat.addEventListener("change", async () => {
-      this.exportFormat = exportFormat.value;
-      await this.render();
-    });
-  }
-  renderCard(list, cardData) {
-    const file = this.fileForCard(cardData);
-    const card = list.createDiv({
-      cls: `yh-ov-card yh-ov-card--${cardData.color}`,
-      attr: this.cardAttributes(cardData)
-    });
-    card.toggleClass("is-orphaned", !!cardData.orphaned);
-    const head = card.createDiv({ cls: "yh-ov-card-head" });
-    head.createSpan({ cls: `yh-ov-label yh-label--${cardData.color}`, text: COLOR_LABELS[cardData.color] });
-    head.createSpan({ cls: "yh-ov-meta", text: cardData.mode === "md" ? "Markdown" : "PDF" });
-    head.createSpan({ cls: "yh-ov-dot", text: "\xB7" });
-    const title = cardData.note?.title ?? "";
-    const kindLabel = cardData.kind === "highlight" ? "\u9AD8\u4EAE" : "\u7B14\u8BB0";
-    const type = head.createSpan({
-      cls: "yh-ov-type",
-      text: title ? getTitleLabel(title) : kindLabel
-    });
-    if (title) {
-      type.dataset.title = title;
-    }
-    head.createSpan({ cls: "yh-ov-time", text: formatTime(cardData.createdAt) });
-    const quote = card.createDiv({ cls: "yh-ov-quote" });
-    quote.textContent = cardData.text;
-    quote.toggleClass("is-code", cardData.isCode || isCodeLikeText(cardData.text));
-    this.addExpandToggle(quote, card);
-    if (cardData.content) {
-      const content = card.createDiv({ cls: "yh-ov-content" });
-      void import_obsidian7.MarkdownRenderer.render(this.app, cardData.content, content, cardData.sourcePath, this).then(() => {
-        this.addExpandToggle(content, card);
-      });
-    }
-    const source = card.createDiv({ cls: "yh-ov-source" });
-    source.createSpan({ cls: "yh-ov-file", text: file?.name ?? cardData.sourcePath });
-    source.createSpan({ cls: "yh-ov-mode", text: cardData.pageNumber ? `p.${cardData.pageNumber}` : "Markdown" });
-    const actions = card.createDiv({ cls: "yh-ov-actions" });
-    if (cardData.note) {
-      const edit2 = actions.createEl("button", {
-        cls: "yh-ov-btn yh-ov-btn--icon",
-        attr: { type: "button", title: "\u7F16\u8F91\u7B14\u8BB0", "data-action": "edit-note" }
-      });
-      (0, import_obsidian7.setIcon)(edit2, "pencil");
-      edit2.disabled = !file;
-      edit2.addEventListener("click", () => {
-        if (file) {
-          this.openInlineEditor(card, file, cardData, cardData.content);
-        }
-      });
-    } else if (cardData.highlight) {
-      const addNote = actions.createEl("button", {
-        cls: "yh-ov-btn",
-        text: "\u6DFB\u52A0\u7B14\u8BB0",
-        attr: { type: "button", "data-action": "add-note" }
-      });
-      addNote.disabled = !file;
-      addNote.addEventListener("click", () => {
-        if (file) {
-          addNote.addClass("hidden");
-          this.openInlineEditor(card, file, cardData, "");
-        }
-      });
-    }
-    const jump = actions.createEl("button", {
-      cls: "yh-ov-btn",
-      text: "\u8DF3\u8F6C",
-      attr: { type: "button", "data-action": "jump" }
-    });
-    jump.disabled = !file;
-    jump.addEventListener("click", () => {
-      if (file) {
-        this.jumpTo(file, cardData.startOffset, cardData.pageNumber);
-      }
-    });
-    const remove = actions.createEl("button", {
-      cls: "yh-ov-btn yh-ov-btn--danger",
-      text: "\u5220\u9664",
-      attr: { type: "button", "data-action": "delete" }
-    });
-    remove.disabled = !file;
-    remove.addEventListener("click", async () => {
-      if (file) {
-        await this.deleteCard(file, cardData);
-        new import_obsidian7.Notice("\u6279\u6CE8\u5DF2\u5220\u9664");
-        await this.plugin.refreshAnnotations();
-      }
-    });
-    const edit = card.createDiv({ cls: "yh-ov-edit hidden" });
-    const textarea = edit.createEl("textarea", {
-      cls: "yh-ov-textarea",
-      attr: { placeholder: "\u5199\u4E0B\u4F60\u7684\u60F3\u6CD5..." }
-    });
-    const editActions = edit.createDiv({ cls: "yh-ov-edit-actions" });
-    editActions.createEl("button", { cls: "yh-ov-save", text: "\u4FDD\u5B58", attr: { type: "button" } });
-    editActions.createEl("button", { cls: "yh-ov-cancel", text: "\u53D6\u6D88", attr: { type: "button" } });
-  }
-  cardAttributes(card) {
-    const attrs = { "data-id": card.id, "data-source-path": card.sourcePath };
-    if (card.highlight) {
-      attrs["data-highlight-id"] = card.highlight.id;
-    }
-    if (card.note) {
-      attrs["data-note-id"] = card.note.id;
-    }
-    return attrs;
-  }
-  openInlineEditor(card, file, cardData, initialValue) {
-    const edit = card.querySelector(".yh-ov-edit");
-    const textarea = card.querySelector(".yh-ov-textarea");
-    const save = card.querySelector(".yh-ov-save");
-    const cancel = card.querySelector(".yh-ov-cancel");
-    const addNote = card.querySelector('[data-action="add-note"]');
-    if (!edit || !textarea || !save || !cancel) {
-      return;
-    }
-    textarea.value = initialValue;
-    edit.removeClass("hidden");
-    textarea.focus();
-    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-    const saveContent = async () => {
-      await this.saveCardContent(file, cardData, textarea.value);
-      await this.plugin.refreshAnnotations();
-    };
-    save.onclick = () => {
-      void saveContent();
-    };
-    cancel.onclick = () => {
-      textarea.value = initialValue;
-      edit.addClass("hidden");
-      addNote?.removeClass("hidden");
-    };
-    textarea.onkeydown = (event) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-        event.preventDefault();
-        void saveContent();
-      }
-      if (event.key === "Escape") {
-        textarea.value = initialValue;
-        edit.addClass("hidden");
-        addNote?.removeClass("hidden");
-      }
-    };
-  }
-  addExpandToggle(contentEl, wrapperEl) {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const lineHeight = parseFloat(getComputedStyle(contentEl).lineHeight);
-        const threshold = lineHeight * 3 + 10;
-        if (contentEl.scrollHeight <= threshold + 2) {
-          return;
-        }
-        const button = document.createElement("span");
-        button.className = "yh-ov-expand-btn";
-        button.textContent = "\u5C55\u5F00";
-        button.tabIndex = 0;
-        button.setAttribute("role", "button");
-        contentEl.insertAdjacentElement("afterend", button);
-        const toggle = () => {
-          const expanded = contentEl.hasClass("expanded");
-          contentEl.toggleClass("expanded", !expanded);
-          button.setText(expanded ? "\u5C55\u5F00" : "\u6536\u8D77");
-        };
-        button.addEventListener("click", toggle);
-        button.addEventListener("keydown", (event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            toggle();
-          }
-        });
-      });
-    });
-  }
-  async saveCardContent(file, card, content) {
-    if (card.note && card.mode === "pdf") {
-      await this.plugin.store.updatePdfComment(file, {
-        ...card.note,
-        content,
-        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-      });
-      return;
-    }
-    if (card.note && card.mode === "md") {
-      await this.plugin.store.updateComment(file, {
-        ...card.note,
-        content,
-        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-      });
-      return;
-    }
-    if (card.highlight && card.mode === "pdf") {
-      const now = (/* @__PURE__ */ new Date()).toISOString();
-      const highlight = card.highlight;
-      await this.plugin.store.addPdfComment(file, {
-        id: crypto.randomUUID(),
-        highlightId: highlight.id,
-        anchor: highlight.anchor,
-        content,
-        color: highlight.color,
-        position: { offsetX: 20, offsetY: 0 },
-        collapsed: false,
-        author: this.plugin.settings.defaultAuthor,
-        createdAt: now,
-        updatedAt: now,
-        replies: [],
-        resolved: false
-      });
-      return;
-    }
-    if (card.highlight && card.mode === "md") {
-      const now = (/* @__PURE__ */ new Date()).toISOString();
-      const highlight = card.highlight;
-      await this.plugin.store.addComment(file, {
-        id: crypto.randomUUID(),
-        highlightId: highlight.id,
-        anchor: highlight.anchor,
-        content,
-        color: highlight.color,
-        position: { offsetX: 20, offsetY: 0 },
-        collapsed: false,
-        author: this.plugin.settings.defaultAuthor,
-        createdAt: now,
-        updatedAt: now,
-        replies: [],
-        resolved: false
-      });
-    }
-  }
-  async deleteCard(file, card) {
-    if (card.highlight) {
-      await this.plugin.store.removeAnnotation(file, card.highlight.id);
-    }
-    if (card.note) {
-      await this.plugin.store.removeAnnotation(file, card.note.id);
-    }
-  }
-  fileForCard(card) {
-    const file = this.app.vault.getAbstractFileByPath(card.sourcePath);
-    return file instanceof import_obsidian7.TFile ? file : null;
-  }
-  filterCards(cards) {
-    return cards.filter((card) => this.color === "all" || card.color === this.color).filter((card) => {
-      if (this.type === "all") {
-        return true;
-      }
-      if (this.type === "highlight") {
-        return card.kind === "highlight";
-      }
-      return Boolean(card.note);
-    }).filter((card) => {
-      const haystack = `${card.sourcePath} ${card.text} ${card.content}`.toLowerCase();
-      return haystack.includes(this.query.toLowerCase());
-    }).sort((a3, b3) => {
-      if (this.sort === "newest") {
-        return this.cardUpdatedAt(b3).localeCompare(this.cardUpdatedAt(a3));
-      }
-      if (this.sort === "oldest") {
-        return this.cardUpdatedAt(a3).localeCompare(this.cardUpdatedAt(b3));
-      }
-      return a3.sourcePath.localeCompare(b3.sourcePath) || (a3.pageNumber ?? 0) - (b3.pageNumber ?? 0) || a3.startOffset - b3.startOffset;
-    });
-  }
-  cardUpdatedAt(card) {
-    return card.note?.updatedAt ?? card.createdAt;
-  }
-  renderExportFooter(container, file) {
-    const footer = container.createDiv({ cls: "yh-ov-foot" });
-    const exportButton = footer.createEl("button", { cls: "yh-export-btn", text: "\u2191 \u5BFC\u51FA\u6279\u6CE8", attr: { type: "button" } });
-    exportButton.disabled = this.annotationScope === "current" && !file;
-    exportButton.addEventListener("click", async () => {
-      if (this.annotationScope === "current" && !file) {
-        return;
-      }
-      const exported = this.annotationScope === "all" ? await this.plugin.store.exportAllNotes(this.exportFormat) : await this.plugin.store.exportNotes(file, this.exportFormat);
-      new import_obsidian7.Notice(`\u5DF2\u5BFC\u51FA\u7B14\u8BB0\u81F3 ${exported.path}`);
-    });
-    footer.createDiv({ cls: "yh-ov-export-note", text: this.exportFormatLabel() });
-  }
-  exportFormatLabel() {
-    const labels = {
-      summary: "\u5BFC\u51FA\u4E3A Markdown \u6458\u8981",
-      "by-color": "\u6309\u989C\u8272\u5206\u7EC4\u5BFC\u51FA",
-      "notes-only": "\u53EA\u5BFC\u51FA\u5E26\u7B14\u8BB0\u7684\u6279\u6CE8",
-      "reading-notes": "\u5BFC\u51FA\u4E3A\u9605\u8BFB\u7B14\u8BB0\u683C\u5F0F"
-    };
-    return labels[this.exportFormat];
-  }
-  async jumpTo(file, offset, pageNumber) {
-    const leaf = this.app.workspace.getLeaf(false);
-    await leaf.openFile(file);
-    if (file.extension.toLowerCase() === "pdf") {
-      window.setTimeout(() => {
-        const page = document.querySelector(
-          `.workspace-leaf.mod-active .pdf-page[data-page-number="${pageNumber}"], .workspace-leaf.mod-active .page[data-page-number="${pageNumber}"]`
-        );
-        page?.scrollIntoView({ block: "center" });
-        page?.addClass("yh-flash-target");
-        window.setTimeout(() => page?.removeClass("yh-flash-target"), 850);
-      }, 120);
-      return;
-    }
-    const view = leaf.view instanceof import_obsidian7.MarkdownView ? leaf.view : this.app.workspace.getActiveViewOfType(import_obsidian7.MarkdownView);
-    if (!view) {
-      return;
-    }
-    const pos = view.editor.offsetToPos(offset);
-    view.editor.setCursor(pos);
-    view.editor.scrollIntoView({ from: pos, to: pos }, true);
-    view.containerEl.addClass("yh-flash-target");
-    window.setTimeout(() => view.containerEl.removeClass("yh-flash-target"), 850);
-  }
-};
-function formatTime(value) {
-  return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-function getTitleLabel(title) {
-  const labels = {
-    Insight: "\u6D1E\u5BDF",
-    Question: "\u7591\u95EE",
-    Reminder: "\u63D0\u9192"
-  };
-  return labels[title] ?? title;
-}
-function isCodeAnchor(anchor) {
-  return "isCode" in anchor && Boolean(anchor.isCode);
-}
-function isCodeLikeText(text) {
-  return /^[ \t]{2,}/m.test(text) || /\n[ \t]{2,}\S/.test(text);
-}
-
-// src/views/stickyNoteLane.ts
-var import_obsidian9 = require("obsidian");
-
-// src/utils/positioning.ts
-var GAP = 10;
-function layoutStickyNotes(items) {
-  const sorted = [...items].sort((a3, b3) => a3.anchorTop - b3.anchorTop);
-  const output = [];
-  let cursor = 0;
-  for (const item of sorted) {
-    const preferred = Math.max(0, item.anchorTop + item.offsetY);
-    const top = Math.max(preferred, cursor);
-    output.push({ id: item.id, top });
-    cursor = top + item.height + GAP;
-  }
-  return output;
-}
-
-// src/views/stickyNoteView.ts
-var import_obsidian8 = require("obsidian");
-function renderStickyNoteCard(container, options) {
-  container.empty();
-  const card = container.createDiv({
-    cls: `yh-card yh-card--${options.comment.color} yh-sticky-card`,
-    attr: {
-      "data-yh-color": options.comment.color,
-      "data-yh-id": options.comment.id,
-      "data-yh-card-id": options.comment.id
-    }
-  });
-  const header = card.createDiv({ cls: "yh-card-head" });
-  header.createSpan({
-    cls: `yh-card-color-label yh-label--${options.comment.color}`,
-    text: COLOR_LABELS[options.comment.color]
-  });
-  header.createSpan({ cls: "yh-card-page", text: "md" });
-  header.createSpan({ cls: "yh-card-time", text: formatTime2(options.comment.updatedAt) });
-  header.createSpan({ cls: "yh-card-author", text: options.comment.author });
-  const tools = header.createDiv({ cls: "yh-card-tools" });
-  const edit = tools.createEl("button", {
-    cls: "yh-icon-btn",
-    attr: { type: "button", title: "\u7F16\u8F91\u7B14\u8BB0" }
-  });
-  (0, import_obsidian8.setIcon)(edit, "pencil");
-  const collapse2 = tools.createEl("button", {
-    cls: "yh-icon-btn",
-    attr: { type: "button", title: options.comment.collapsed ? "\u5C55\u5F00" : "\u6298\u53E0" }
-  });
-  (0, import_obsidian8.setIcon)(collapse2, options.comment.collapsed ? "chevron-down" : "chevron-up");
-  collapse2.addEventListener("click", () => options.onToggle(options.comment));
-  const remove = tools.createEl("button", {
-    cls: "yh-icon-btn",
-    attr: { type: "button", title: "\u5220\u9664\u7B14\u8BB0" }
-  });
-  (0, import_obsidian8.setIcon)(remove, "trash-2");
-  remove.addEventListener("click", () => options.onDelete(options.comment));
-  if (options.comment.collapsed) {
-    const body2 = card.createDiv({ cls: "yh-card-body" });
-    body2.createDiv({ cls: "yh-card-quote", text: options.comment.anchor.selectedText });
-    return card;
-  }
-  const body = card.createDiv({ cls: "yh-card-body" });
-  body.createDiv({ cls: "yh-card-quote", text: options.comment.anchor.selectedText });
-  const content = body.createDiv({ cls: "yh-card-content" });
-  renderDisplayMode(content, options);
-  edit.addEventListener("click", () => renderEditMode(content, options));
-  const foot = card.createDiv({ cls: "yh-card-foot" });
-  foot.createEl("button", { cls: "yh-card-more", text: "\xB7\xB7\xB7", attr: { type: "button", title: "\u66F4\u591A" } });
-  return card;
-}
-function renderDisplayMode(container, options) {
-  container.empty();
-  import_obsidian8.MarkdownRenderer.render(options.app, options.comment.content, container, options.sourcePath, options.component);
-}
-function renderEditMode(container, options) {
-  container.empty();
-  const title = container.createEl("input", {
-    cls: "yh-sticky-title-editor",
-    attr: { type: "text", placeholder: "\u6807\u9898" }
-  });
-  title.value = options.comment.title ?? "";
-  const editor = container.createEl("textarea", {
-    cls: "yh-sticky-editor",
-    attr: { rows: "5", placeholder: "\u5199\u4E0B Markdown \u7B14\u8BB0..." }
-  });
-  editor.value = options.comment.content;
-  editor.focus();
-  editor.setSelectionRange(editor.value.length, editor.value.length);
-  const actions = container.createDiv({ cls: "yh-sticky-edit-actions" });
-  const save = actions.createEl("button", { text: "\u4FDD\u5B58", cls: "mod-cta", attr: { type: "button" } });
-  const cancel = actions.createEl("button", { text: "\u53D6\u6D88", attr: { type: "button" } });
-  const saveContent = () => {
-    options.onUpdate(options.comment, editor.value, title.value.trim());
-    renderDisplayMode(container, {
-      ...options,
-      comment: {
-        ...options.comment,
-        title: title.value.trim(),
-        content: editor.value
-      }
-    });
-  };
-  save.addEventListener("click", saveContent);
-  cancel.addEventListener("click", () => renderDisplayMode(container, options));
-  editor.addEventListener("keydown", (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-      event.preventDefault();
-      saveContent();
-    }
-  });
-}
-function formatTime2(value) {
-  return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-// src/views/stickyNoteLane.ts
-var StickyNoteLane = class {
-  constructor(options) {
-    this.options = options;
-    this.container = null;
-    this.lane = null;
-    this.observer = null;
-  }
-  register() {
-    this.options.component.registerEvent(
-      this.options.app.workspace.on("active-leaf-change", () => this.render())
-    );
-    this.options.component.registerEvent(
-      this.options.app.workspace.on("layout-change", () => this.render())
-    );
-    this.observer = new ResizeObserver(() => this.render());
-    this.options.component.register(() => this.destroy());
-  }
-  async render() {
-    const view = this.options.app.workspace.getActiveViewOfType(import_obsidian9.MarkdownView);
-    if (!view || !view.file || view.file.extension !== "md") {
-      this.hide();
-      return;
-    }
-    const settings = this.options.getSettings();
-    if (!settings.stickyNotesVisible) {
-      this.hide();
-      return;
-    }
-    const document2 = this.options.getCachedDocument(view.file.path);
-    if (!document2 || document2.comments.length === 0) {
-      this.hide();
-      return;
-    }
-    const visibleComments = document2.comments.filter((comment) => !comment.orphaned);
-    if (visibleComments.length === 0) {
-      this.hide();
-      return;
-    }
-    const editorWidth = view.containerEl.offsetWidth;
-    if (editorWidth < settings.stickyCollapseWidth) {
-      this.hide();
-      return;
-    }
-    this.ensureContainer(view);
-    this.renderLane(view, visibleComments, settings);
-  }
-  ensureContainer(view) {
-    if (this.container && this.container.parentElement === view.containerEl) {
-      return;
-    }
-    this.container?.remove();
-    this.container = view.containerEl.createDiv({ cls: "yh-sticky-lane-container" });
-    this.lane = this.container.createDiv({ cls: "yh-sticky-lane" });
-    if (this.observer) {
-      this.observer.observe(view.containerEl);
-    }
-  }
-  renderLane(view, comments, settings) {
-    if (!this.lane) {
-      return;
-    }
-    this.lane.empty();
-    this.lane.toggleClass("yh-sticky-lane--left", settings.stickySide === "left");
-    const layoutInputs = [];
-    const commentElements = /* @__PURE__ */ new Map();
-    for (const comment of comments) {
-      const anchorTop = this.getAnchorTop(view, comment);
-      if (anchorTop === null) {
-        continue;
-      }
-      const tempCard = this.lane.createDiv({ cls: "yh-card yh-card--temp" });
-      tempCard.style.visibility = "hidden";
-      tempCard.style.position = "absolute";
-      renderStickyNoteCard(tempCard, {
-        app: this.options.app,
-        component: this.options.component,
-        sourcePath: view.file.path,
-        comment,
-        onToggle: (c2) => this.handleToggle(view.file, c2),
-        onUpdate: (c2, content, title) => this.handleUpdate(view.file, c2, content, title),
-        onDelete: (c2) => this.handleDelete(view.file, c2)
-      });
-      const height = tempCard.offsetHeight;
-      tempCard.remove();
-      layoutInputs.push({
-        id: comment.id,
-        anchorTop,
-        height,
-        offsetY: comment.position?.offsetY ?? 0
-      });
-    }
-    const layoutOutputs = layoutStickyNotes(layoutInputs);
-    for (const output of layoutOutputs) {
-      const comment = comments.find((c2) => c2.id === output.id);
-      if (!comment) {
-        continue;
-      }
-      const card = this.lane.createDiv({
-        cls: `yh-card yh-card--${comment.color} yh-sticky-card`,
-        attr: {
-          "data-yh-color": comment.color,
-          "data-yh-id": comment.id,
-          "data-yh-card-id": comment.id
-        }
-      });
-      card.style.position = "absolute";
-      card.style.top = `${output.top}px`;
-      renderStickyNoteCard(card, {
-        app: this.options.app,
-        component: this.options.component,
-        sourcePath: view.file.path,
-        comment,
-        onToggle: (c2) => this.handleToggle(view.file, c2),
-        onUpdate: (c2, content, title) => this.handleUpdate(view.file, c2, content, title),
-        onDelete: (c2) => this.handleDelete(view.file, c2)
-      });
-      if (settings.showLeaderLines && settings.stickySide === "right") {
-        const line = this.lane.createDiv({ cls: "yh-leader-line" });
-        line.style.position = "absolute";
-        line.style.left = "0";
-        line.style.top = `${output.top + 20}px`;
-        line.style.width = "20px";
-        line.style.height = "1px";
-        line.style.background = `var(--yh-${comment.color})`;
-      }
-    }
-  }
-  getAnchorTop(view, comment) {
-    const mark = view.containerEl.querySelector(`.yh-highlight[data-yh-id="${comment.id}"]`);
-    if (mark) {
-      const rect = mark.getBoundingClientRect();
-      const containerRect = view.containerEl.getBoundingClientRect();
-      return rect.top - containerRect.top + view.containerEl.scrollTop;
-    }
-    try {
-      const pos = view.editor.offsetToPos(comment.anchor.startOffset);
-      const lineHeight = 20;
-      return pos.line * lineHeight;
-    } catch {
-      return null;
-    }
-  }
-  hide() {
-    this.container?.remove();
-    this.container = null;
-    this.lane = null;
-  }
-  async handleToggle(file, comment) {
-    await this.options.onToggleCollapse(file, { ...comment, collapsed: !comment.collapsed });
-    await this.render();
-  }
-  async handleUpdate(file, comment, content, title) {
-    await this.options.onUpdateComment(file, comment, content, title);
-    await this.render();
-  }
-  async handleDelete(file, comment) {
-    await this.options.onDeleteAnnotation(file, comment.id);
-    await this.render();
-  }
-  destroy() {
-    this.observer?.disconnect();
-    this.container?.remove();
-    this.container = null;
-    this.lane = null;
-  }
-};
+var import_obsidian10 = require("obsidian");
 
 // src/epub/EpubReaderView.ts
-var import_obsidian11 = require("obsidian");
+var import_obsidian9 = require("obsidian");
 
 // src/epub/EpubChapterResolver.ts
 function resolveChapterLabel(entries, spineIndex) {
@@ -10960,7 +10106,7 @@ function installFoliateCustomElementGuard(registry = customElements) {
 }
 
 // src/epub/EpubFoliatePatches.ts
-var import_obsidian10 = require("obsidian");
+var import_obsidian7 = require("obsidian");
 var foliateBlobIframePatchInstalled = false;
 var foliateBlobIframeLoadTokens = /* @__PURE__ */ new WeakMap();
 async function readBlobUrlAsText(url) {
@@ -11235,17 +10381,143 @@ async function showFoliateStart(view) {
   }
 }
 
+// src/epub/EpubNoteModal.ts
+var import_obsidian8 = require("obsidian");
+var NOTE_TYPE_OPTIONS = [
+  { value: "insight", label: "\u{1F4A1} \u6D1E\u89C1" },
+  { value: "question", label: "\u2753 \u7591\u95EE" },
+  { value: "reminder", label: "\u{1F514} \u63D0\u9192" }
+];
+var EpubNoteModal = class extends import_obsidian8.Modal {
+  constructor(app, selectedText, initial, onSubmit, titleText = "\u5199\u4E0B\u4F60\u7684\u60F3\u6CD5") {
+    super(app);
+    this.selectedText = selectedText;
+    this.note = initial.note ?? "";
+    this.color = initial.color ?? "yellow";
+    this.style = initial.style ?? "fill";
+    this.noteType = initial.noteType ?? "insight";
+    this.onSubmit = onSubmit;
+    this.titleText = titleText;
+  }
+  submit(ta) {
+    this.note = ta.value.trim();
+    this.close();
+    this.onSubmit({
+      note: this.note,
+      color: this.color,
+      style: this.style,
+      noteType: this.note ? this.noteType : "insight"
+    });
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("yh-epub-note-modal");
+    contentEl.createEl("h3", { text: this.titleText });
+    const quote = contentEl.createDiv({ cls: "yh-epub-note-quote" });
+    quote.setText(
+      this.selectedText.length > 240 ? this.selectedText.slice(0, 240) + "\u2026" : this.selectedText
+    );
+    const colorRow = contentEl.createDiv({ cls: "yh-epub-note-colors" });
+    colorRow.createEl("span", { cls: "yh-epub-note-label", text: "\u753B\u7EBF\u989C\u8272" });
+    const dots = colorRow.createDiv({ cls: "yh-epub-color-dots" });
+    const dotEls = {};
+    for (const c2 of ANNOTATION_COLORS) {
+      const dot = dots.createDiv({ cls: "yh-epub-color-dot" });
+      dot.setAttribute("data-color", c2);
+      dot.title = COLOR_LABELS[c2];
+      if (c2 === this.color) {
+        dot.addClass("is-active");
+      }
+      dot.addEventListener("click", () => {
+        this.color = c2;
+        Object.values(dotEls).forEach((d2) => d2.removeClass("is-active"));
+        dot.addClass("is-active");
+      });
+      dotEls[c2] = dot;
+    }
+    const styleRow = contentEl.createDiv({ cls: "yh-epub-note-styles" });
+    styleRow.createEl("span", { cls: "yh-epub-note-label", text: "\u6807\u6CE8\u6837\u5F0F" });
+    const styleChips = styleRow.createDiv({ cls: "yh-epub-style-chips" });
+    const styleEls = {};
+    for (const s3 of EPUB_HIGHLIGHT_STYLES) {
+      const chip = styleChips.createDiv({ cls: "yh-epub-style-chip" });
+      chip.setText(s3.label);
+      chip.title = s3.label;
+      chip.setAttribute("data-style", s3.id);
+      if (s3.id === this.style) {
+        chip.addClass("is-active");
+      }
+      chip.addEventListener("click", () => {
+        this.style = s3.id;
+        Object.values(styleEls).forEach((c2) => c2.removeClass("is-active"));
+        chip.addClass("is-active");
+      });
+      styleEls[s3.id] = chip;
+    }
+    const typeRow = contentEl.createDiv({ cls: "yh-epub-note-type-row" });
+    typeRow.createEl("span", { cls: "yh-epub-note-label", text: "\u60F3\u6CD5\u7C7B\u578B" });
+    const chips = typeRow.createDiv({ cls: "yh-epub-note-type-chips" });
+    const chipEls = {};
+    for (const t3 of NOTE_TYPE_OPTIONS) {
+      const chip = chips.createDiv({ cls: "yh-epub-note-type-chip" });
+      chip.setText(t3.label);
+      chip.title = t3.label;
+      chip.setAttribute("data-type", t3.value);
+      if (t3.value === this.noteType) {
+        chip.addClass("is-active");
+      }
+      chip.addEventListener("click", () => {
+        this.noteType = t3.value;
+        Object.values(chipEls).forEach((c2) => c2.removeClass("is-active"));
+        chip.addClass("is-active");
+      });
+      chipEls[t3.value] = chip;
+    }
+    const ta = contentEl.createEl("textarea", { cls: "yh-epub-note-textarea" });
+    ta.placeholder = "\u5728\u8FD9\u91CC\u5199\u4E0B\u4F60\u7684\u60F3\u6CD5\u3001\u7591\u95EE\u6216\u8054\u60F3\u2026";
+    ta.value = this.note;
+    ta.rows = 6;
+    window.setTimeout(() => ta.focus(), 30);
+    const actions = contentEl.createDiv({ cls: "yh-epub-note-actions" });
+    const cancelBtn = actions.createEl("button", {
+      text: "\u53D6\u6D88",
+      cls: "yh-epub-note-cancel"
+    });
+    const saveBtn = actions.createEl("button", {
+      text: "\u4FDD\u5B58",
+      cls: "yh-epub-note-save"
+    });
+    saveBtn.addClass("mod-cta");
+    cancelBtn.addEventListener("click", () => this.close());
+    saveBtn.addEventListener("click", () => this.submit(ta));
+    ta.addEventListener("keydown", (e3) => {
+      if ((e3.ctrlKey || e3.metaKey) && e3.key === "Enter") {
+        e3.preventDefault();
+        this.submit(ta);
+      }
+      if (e3.key === "Escape") {
+        e3.preventDefault();
+        this.close();
+      }
+    });
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+
 // src/epub/EpubReaderView.ts
 var EPUB_READER_VIEW_TYPE = "inklight-epub-reader";
 var READING_TIME_FLUSH_INTERVAL_MS = 6e4;
 var WHEEL_DEBOUNCE_MS = 400;
 var PROGRESS_SAVE_DEBOUNCE_MS = 2e3;
 var SELECTION_SYNC_RETRY_DELAY_MS = 120;
-var EpubReaderView = class extends import_obsidian11.FileView {
+var EpubReaderView = class extends import_obsidian9.FileView {
   // ================================================================
   // 构造 & 生命周期
   // ================================================================
-  constructor(leaf, store, settings) {
+  constructor(leaf, store, settings, refreshAnnotations) {
     super(leaf);
     // ---- foliate 实例 ----
     this.foliateView = null;
@@ -11262,6 +10534,8 @@ var EpubReaderView = class extends import_obsidian11.FileView {
     this.contextMenuEl = null;
     this.lastSelectedCfiRange = "";
     this.lastSelectedText = "";
+    this.lastPointerClientX = 0;
+    this.lastPointerClientY = 0;
     // ---- 定时器 / 追踪 ----
     this.readingTimeSeconds = 0;
     this.readingTimeFlushTimer = null;
@@ -11306,6 +10580,7 @@ var EpubReaderView = class extends import_obsidian11.FileView {
     };
     this.store = store;
     this.pluginSettings = settings;
+    this.refreshAnnotations = refreshAnnotations;
     this.themeManager = new EpubThemeManager();
     this.currentFlowMode = settings.epubDefaultFlow;
     this.currentFontSize = settings.epubFontSize;
@@ -11360,7 +10635,7 @@ var EpubReaderView = class extends import_obsidian11.FileView {
       this.renderSidebar();
     } catch (error) {
       console.error("yh-inklight: EPUB load failed", error);
-      new import_obsidian11.Notice(`\u58A8\u5149 EPUB \u52A0\u8F7D\u5931\u8D25: ${error instanceof Error ? error.message : String(error)}`);
+      new import_obsidian9.Notice(`\u58A8\u5149 EPUB \u52A0\u8F7D\u5931\u8D25: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   /**
@@ -11405,6 +10680,10 @@ var EpubReaderView = class extends import_obsidian11.FileView {
     this.progressEl = this.containerEl.createDiv({ cls: "yh-epub-progress" });
     this.containerEl.addEventListener("keydown", (event) => this.handleKeydown(event));
     this.readerContainerEl.addEventListener("wheel", (event) => this.handleWheel(event), { passive: false });
+    this.readerContainerEl.addEventListener("pointerdown", (event) => {
+      this.lastPointerClientX = event.clientX;
+      this.lastPointerClientY = event.clientY;
+    }, { passive: true });
   }
   // ================================================================
   // 工具栏
@@ -11418,7 +10697,7 @@ var EpubReaderView = class extends import_obsidian11.FileView {
       cls: "yh-epub-toolbar-btn",
       attr: { type: "button", title: "\u5207\u6362\u4FA7\u8FB9\u680F", "aria-label": "\u5207\u6362\u4FA7\u8FB9\u680F" }
     });
-    (0, import_obsidian11.setIcon)(toggleBtn, "menu");
+    (0, import_obsidian9.setIcon)(toggleBtn, "menu");
     toggleBtn.addEventListener("click", () => this.toggleSidebar());
     this.toolbarEl.createDiv({
       cls: "yh-epub-toolbar-title",
@@ -11441,19 +10720,19 @@ var EpubReaderView = class extends import_obsidian11.FileView {
       cls: "yh-epub-toolbar-btn",
       attr: { type: "button", title: this.currentFlowMode === "paginated" ? "\u5207\u6362\u4E3A\u6EDA\u52A8" : "\u5207\u6362\u4E3A\u5206\u9875" }
     });
-    (0, import_obsidian11.setIcon)(flowBtn, this.currentFlowMode === "paginated" ? "lines-of-text" : "sheets");
+    (0, import_obsidian9.setIcon)(flowBtn, this.currentFlowMode === "paginated" ? "lines-of-text" : "sheets");
     flowBtn.addEventListener("click", () => this.toggleFlowMode());
     const prevBtn = this.toolbarEl.createEl("button", {
       cls: "yh-epub-toolbar-btn",
       attr: { type: "button", title: "\u4E0A\u4E00\u9875", "aria-label": "\u4E0A\u4E00\u9875" }
     });
-    (0, import_obsidian11.setIcon)(prevBtn, "chevron-left");
+    (0, import_obsidian9.setIcon)(prevBtn, "chevron-left");
     prevBtn.addEventListener("click", () => this.prevPage());
     const nextBtn = this.toolbarEl.createEl("button", {
       cls: "yh-epub-toolbar-btn",
       attr: { type: "button", title: "\u4E0B\u4E00\u9875", "aria-label": "\u4E0B\u4E00\u9875" }
     });
-    (0, import_obsidian11.setIcon)(nextBtn, "chevron-right");
+    (0, import_obsidian9.setIcon)(nextBtn, "chevron-right");
     nextBtn.addEventListener("click", () => this.nextPage());
   }
   /**
@@ -11743,10 +11022,11 @@ var EpubReaderView = class extends import_obsidian11.FileView {
       await this.store.addEpubHighlight(this.file, annotation);
       this.renderAnnotationOnRendition(annotation);
       this.renderSidebar();
-      new import_obsidian11.Notice(`\u5DF2\u6DFB\u52A0${COLOR_LABELS[color]}\u753B\u7EBF`);
+      this.refreshAnnotations();
+      new import_obsidian9.Notice(`\u5DF2\u6DFB\u52A0${COLOR_LABELS[color]}\u753B\u7EBF`);
     } catch (error) {
       console.error("yh-inklight: EPUB highlight creation failed", error);
-      new import_obsidian11.Notice("\u753B\u7EBF\u521B\u5EFA\u5931\u8D25");
+      new import_obsidian9.Notice("\u753B\u7EBF\u521B\u5EFA\u5931\u8D25");
     }
   }
   /**
@@ -11755,42 +11035,49 @@ var EpubReaderView = class extends import_obsidian11.FileView {
    * @param cfiRange - CFI 范围
    * @param text - 选中的文本
    */
-  async openNoteModal(cfiRange, text) {
+  openNoteModal(cfiRange, text) {
     if (!this.file || !this.foliateView) {
       return;
     }
-    const note = prompt(`\u6807\u6CE8: "${text.slice(0, 60)}${text.length > 60 ? "..." : ""}"`);
-    if (note === null || !note.trim()) {
-      return;
-    }
     const chapter = this.currentChapter;
-    const color = this.pluginSettings.defaultHighlightColor;
-    const style2 = this.pluginSettings.epubHighlightStyle;
-    const now = (/* @__PURE__ */ new Date()).toISOString();
-    const id = crypto.randomUUID();
-    const annotation = {
-      id,
-      type: "epub-comment",
-      color,
-      style: style2,
-      anchor: { cfiRange, chapter, selectedText: text },
-      note: note.trim(),
-      createdAt: now,
-      collapsed: false,
-      author: this.pluginSettings.defaultAuthor,
-      updatedAt: now,
-      replies: [],
-      resolved: false
-    };
-    try {
-      await this.store.addEpubComment(this.file, annotation);
-      this.renderAnnotationOnRendition(annotation);
-      this.renderSidebar();
-      new import_obsidian11.Notice("\u5DF2\u6DFB\u52A0\u6807\u6CE8");
-    } catch (error) {
-      console.error("yh-inklight: EPUB comment creation failed", error);
-      new import_obsidian11.Notice("\u6807\u6CE8\u521B\u5EFA\u5931\u8D25");
-    }
+    new EpubNoteModal(
+      this.app,
+      text,
+      {
+        color: this.pluginSettings.defaultHighlightColor,
+        style: this.pluginSettings.epubHighlightStyle
+      },
+      async (result) => {
+        if (!result.note.trim()) {
+          return;
+        }
+        const now = (/* @__PURE__ */ new Date()).toISOString();
+        const annotation = {
+          id: crypto.randomUUID(),
+          type: "epub-comment",
+          color: result.color,
+          style: result.style,
+          anchor: { cfiRange, chapter, selectedText: text },
+          note: result.note.trim(),
+          createdAt: now,
+          collapsed: false,
+          author: this.pluginSettings.defaultAuthor,
+          updatedAt: now,
+          replies: [],
+          resolved: false
+        };
+        try {
+          await this.store.addEpubComment(this.file, annotation);
+          this.renderAnnotationOnRendition(annotation);
+          this.renderSidebar();
+          this.refreshAnnotations();
+          new import_obsidian9.Notice("\u5DF2\u6DFB\u52A0\u6807\u6CE8");
+        } catch (error) {
+          console.error("yh-inklight: EPUB comment creation failed", error);
+          new import_obsidian9.Notice("\u6807\u6CE8\u521B\u5EFA\u5931\u8D25");
+        }
+      }
+    ).open();
   }
   /**
    * 将单个标注渲染到 foliate 的高亮层。
@@ -11882,6 +11169,12 @@ var EpubReaderView = class extends import_obsidian11.FileView {
     menu.addEventListener("mouseleave", () => {
       close();
     });
+    const left = this.lastPointerClientX || window.innerWidth / 2;
+    const top = this.lastPointerClientY || window.innerHeight / 2;
+    const clampedLeft = Math.max(8, Math.min(left + 8, window.innerWidth - 120));
+    const clampedTop = Math.max(8, Math.min(top + 8, window.innerHeight - 48));
+    menu.style.left = `${clampedLeft}px`;
+    menu.style.top = `${clampedTop}px`;
     document.body.appendChild(menu);
     window.setTimeout(() => {
       menu.addEventListener("click", (event) => {
@@ -11909,10 +11202,11 @@ var EpubReaderView = class extends import_obsidian11.FileView {
       }
       this.refreshRenditionAnnotations();
       this.renderSidebar();
-      new import_obsidian11.Notice("\u6807\u6CE8\u5DF2\u5220\u9664");
+      this.refreshAnnotations();
+      new import_obsidian9.Notice("\u6807\u6CE8\u5DF2\u5220\u9664");
     } catch (error) {
       console.error("yh-inklight: EPUB annotation deletion failed", error);
-      new import_obsidian11.Notice("\u6807\u6CE8\u5220\u9664\u5931\u8D25");
+      new import_obsidian9.Notice("\u6807\u6CE8\u5220\u9664\u5931\u8D25");
     }
   }
   /**
@@ -12332,6 +11626,26 @@ var EpubReaderView = class extends import_obsidian11.FileView {
     };
   }
   // ================================================================
+  // 外部跳转（供共用 AnnotationSidebarView 的 jumpTo 调用）
+  // ================================================================
+  /**
+   * 导航到指定 CFI 位置。
+   * 供共用 AnnotationSidebarView 的「跳转」按钮调用，
+   * 实现从总览面板跳回 EPUB 正文对应位置。
+   *
+   * @param cfiRange - CFI 范围字符串
+   */
+  navigateToCfi(cfiRange) {
+    if (!this.foliateView) {
+      return;
+    }
+    try {
+      void this.foliateView.goTo(cfiRange);
+    } catch (error) {
+      console.warn("yh-inklight: navigateToCfi failed", error);
+    }
+  }
+  // ================================================================
   // AI 预留
   // ================================================================
   /**
@@ -12342,7 +11656,7 @@ var EpubReaderView = class extends import_obsidian11.FileView {
    * @param _text - 选中的文本
    */
   handleAiAction(_text) {
-    new import_obsidian11.Notice("AI \u5206\u6790\u529F\u80FD\u5373\u5C06\u4E0A\u7EBF");
+    new import_obsidian9.Notice("AI \u5206\u6790\u529F\u80FD\u5373\u5C06\u4E0A\u7EBF");
   }
   // ================================================================
   // 资源清理
@@ -12648,10 +11962,955 @@ var EpubReaderView = class extends import_obsidian11.FileView {
   }
 };
 
-// src/epub/EpubBookshelfView.ts
+// src/views/sidebarView.ts
+var ANNOTATION_SIDEBAR_VIEW = "yh-inklight-sidebar";
+var AnnotationSidebarView = class extends import_obsidian10.ItemView {
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.plugin = plugin;
+    this.annotationScope = "current";
+    this.query = "";
+    this.color = "all";
+    this.type = "all";
+    this.sort = "document";
+    this.exportFormat = "summary";
+    this.renderToken = 0;
+    this.renderTimer = null;
+  }
+  getViewType() {
+    return ANNOTATION_SIDEBAR_VIEW;
+  }
+  getDisplayText() {
+    return "\u58A8\u5149\u6279\u6CE8";
+  }
+  getIcon() {
+    return "yh-inklight-icon";
+  }
+  async onOpen() {
+    this.containerEl.addClass("yh-sidebar");
+    await this.render();
+  }
+  requestRender() {
+    if (this.renderTimer !== null) {
+      window.clearTimeout(this.renderTimer);
+    }
+    this.renderTimer = window.setTimeout(() => {
+      this.renderTimer = null;
+      void this.render();
+    }, 0);
+  }
+  async render() {
+    const token = ++this.renderToken;
+    const container = this.containerEl.children[1] ?? this.containerEl;
+    container.empty();
+    container.addClass("yh-overview");
+    const file = this.app.workspace.getActiveFile();
+    this.renderHeader(container);
+    this.renderControls(container);
+    if (this.annotationScope === "current" && !file) {
+      container.createDiv({ cls: "yh-empty", text: "Open a Markdown or PDF file to inspect annotations." });
+      this.renderExportFooter(container, null);
+      return;
+    }
+    const documents = this.annotationScope === "all" ? await this.plugin.store.getIndexedDocuments() : [await this.plugin.store.getDocument(file)];
+    if (token !== this.renderToken) {
+      return;
+    }
+    const rawCards = documents.flatMap((document2) => this.buildCards(document2));
+    const cards = this.filterCards(rawCards);
+    const highlightCount = rawCards.filter((card) => card.kind === "highlight" && !card.orphaned).length;
+    const noteCount = rawCards.filter((card) => card.note && !card.orphaned).length;
+    const scopeLabel = this.annotationScope === "all" ? `${documents.length} files` : "current file";
+    container.createDiv({ cls: "yh-ov-count", text: `${scopeLabel} \xB7 ${highlightCount} highlights \xB7 ${noteCount} notes` });
+    const list = container.createDiv({ cls: "yh-ov-list" });
+    if (!cards.length) {
+      list.createDiv({ cls: "yh-empty", text: "No matching annotations." });
+    } else {
+      for (const card of cards) {
+        this.renderCard(list, card);
+      }
+    }
+    this.renderExportFooter(container, this.annotationScope === "current" ? file : null);
+  }
+  buildCards(document2) {
+    const usedNotes = /* @__PURE__ */ new Set();
+    const cards = [];
+    for (const highlight of document2.highlights) {
+      const note = this.findAttachedMarkdownNote(highlight, document2.comments, usedNotes);
+      if (note) {
+        usedNotes.add(note.id);
+      }
+      cards.push({
+        id: highlight.id,
+        kind: "highlight",
+        mode: "md",
+        sourcePath: document2.filePath,
+        color: highlight.color,
+        text: highlight.anchor.selectedText,
+        content: note?.content ?? "",
+        createdAt: highlight.createdAt,
+        startOffset: highlight.anchor.startOffset,
+        pageNumber: null,
+        orphaned: highlight.orphaned || note?.orphaned,
+        isCode: isCodeAnchor(highlight.anchor),
+        highlight,
+        note
+      });
+    }
+    for (const highlight of document2.pdfHighlights) {
+      const note = this.findAttachedPdfNote(highlight, document2.pdfComments, usedNotes);
+      if (note) {
+        usedNotes.add(note.id);
+      }
+      cards.push({
+        id: highlight.id,
+        kind: "highlight",
+        mode: "pdf",
+        sourcePath: document2.filePath,
+        color: highlight.color,
+        text: highlight.anchor.selectedText,
+        content: note?.content ?? "",
+        createdAt: highlight.createdAt,
+        startOffset: Number.MAX_SAFE_INTEGER,
+        pageNumber: highlight.anchor.pageNumber,
+        orphaned: highlight.orphaned || note?.orphaned,
+        isCode: false,
+        highlight,
+        note
+      });
+    }
+    for (const highlight of document2.epubHighlights) {
+      const note = this.findAttachedEpubNote(highlight, document2.epubComments, usedNotes);
+      if (note) {
+        usedNotes.add(note.id);
+      }
+      cards.push({
+        id: highlight.id,
+        kind: "highlight",
+        mode: "epub",
+        sourcePath: document2.filePath,
+        color: highlight.color,
+        text: highlight.anchor.selectedText,
+        content: note?.note ?? "",
+        createdAt: highlight.createdAt,
+        startOffset: Number.MAX_SAFE_INTEGER,
+        pageNumber: null,
+        cfiRange: highlight.anchor.cfiRange,
+        chapter: highlight.anchor.chapter,
+        orphaned: highlight.orphaned || note?.orphaned,
+        isCode: false,
+        highlight,
+        note
+      });
+    }
+    for (const note of document2.comments.filter((item) => !usedNotes.has(item.id))) {
+      cards.push({
+        id: note.id,
+        kind: "note",
+        mode: "md",
+        sourcePath: document2.filePath,
+        color: note.color,
+        text: note.anchor.selectedText,
+        content: note.content,
+        createdAt: note.createdAt,
+        startOffset: note.anchor.startOffset,
+        pageNumber: null,
+        orphaned: note.orphaned,
+        isCode: isCodeAnchor(note.anchor),
+        highlight: null,
+        note
+      });
+    }
+    for (const note of document2.pdfComments.filter((item) => !usedNotes.has(item.id))) {
+      cards.push({
+        id: note.id,
+        kind: "note",
+        mode: "pdf",
+        sourcePath: document2.filePath,
+        color: note.color,
+        text: note.anchor.selectedText,
+        content: note.content,
+        createdAt: note.createdAt,
+        startOffset: Number.MAX_SAFE_INTEGER,
+        pageNumber: note.anchor.pageNumber,
+        orphaned: note.orphaned,
+        isCode: false,
+        highlight: null,
+        note
+      });
+    }
+    for (const note of document2.epubComments.filter((item) => !usedNotes.has(item.id))) {
+      cards.push({
+        id: note.id,
+        kind: "note",
+        mode: "epub",
+        sourcePath: document2.filePath,
+        color: note.color,
+        text: note.anchor.selectedText,
+        content: note.note,
+        createdAt: note.createdAt,
+        startOffset: Number.MAX_SAFE_INTEGER,
+        pageNumber: null,
+        cfiRange: note.anchor.cfiRange,
+        chapter: note.anchor.chapter,
+        orphaned: note.orphaned,
+        isCode: false,
+        highlight: null,
+        note
+      });
+    }
+    return cards;
+  }
+  findAttachedMarkdownNote(highlight, comments, usedNotes) {
+    return comments.find((note) => !usedNotes.has(note.id) && note.highlightId === highlight.id) ?? comments.find((note) => {
+      return !usedNotes.has(note.id) && !note.highlightId && note.anchor.startOffset === highlight.anchor.startOffset && note.anchor.selectedText === highlight.anchor.selectedText;
+    }) ?? null;
+  }
+  findAttachedPdfNote(highlight, comments, usedNotes) {
+    return comments.find((note) => !usedNotes.has(note.id) && note.highlightId === highlight.id) ?? comments.find((note) => {
+      return !usedNotes.has(note.id) && !note.highlightId && note.anchor.pageNumber === highlight.anchor.pageNumber && note.anchor.selectedText === highlight.anchor.selectedText;
+    }) ?? null;
+  }
+  findAttachedEpubNote(highlight, comments, usedNotes) {
+    return comments.find((note) => !usedNotes.has(note.id) && note.anchor.cfiRange === highlight.anchor.cfiRange) ?? null;
+  }
+  renderHeader(container) {
+    const header = container.createDiv({ cls: "yh-ov-head" });
+    header.createSpan({ cls: "yh-ov-title", text: "\u58A8\u5149\u6279\u6CE8" });
+    const actions = header.createDiv({ cls: "yh-ov-head-actions" });
+    const refresh = actions.createEl("button", {
+      cls: "yh-icon-btn yh-ov-refresh",
+      attr: { type: "button", title: "\u5237\u65B0\u6279\u6CE8", "aria-label": "\u5237\u65B0\u6279\u6CE8" }
+    });
+    (0, import_obsidian10.setIcon)(refresh, "refresh-cw");
+    refresh.addEventListener("click", () => this.requestRender());
+    const close = actions.createEl("button", {
+      cls: "yh-icon-btn yh-ov-close",
+      attr: { type: "button", title: "Close panel", "aria-label": "\u5173\u95ED\u58A8\u5149\u6279\u6CE8\u9762\u677F" }
+    });
+    (0, import_obsidian10.setIcon)(close, "x");
+    close.addEventListener("click", () => {
+      void this.leaf.detach();
+    });
+  }
+  renderControls(container) {
+    const searchRow = container.createDiv({ cls: "yh-ov-search-row" });
+    const search2 = searchRow.createEl("input", {
+      cls: "yh-ov-search",
+      attr: { type: "search", placeholder: "\u641C\u7D22\u6279\u6CE8..." }
+    });
+    search2.value = this.query;
+    search2.addEventListener("input", async () => {
+      this.query = search2.value;
+      await this.render();
+    });
+    const scope = searchRow.createEl("select", { cls: "yh-filter-select" });
+    scope.createEl("option", { text: "\u5F53\u524D\u6587\u4EF6", value: "current" });
+    scope.createEl("option", { text: "\u5168\u5E93", value: "all" });
+    scope.value = this.annotationScope;
+    scope.addEventListener("change", async () => {
+      this.annotationScope = scope.value;
+      await this.render();
+    });
+    const filterButton = searchRow.createEl("button", { cls: "yh-icon-btn", attr: { type: "button", title: "\u7B5B\u9009" } });
+    (0, import_obsidian10.setIcon)(filterButton, "filter");
+    const filterRow = container.createDiv({ cls: "yh-ov-filter-row" });
+    const color = filterRow.createEl("select", { cls: "yh-filter-select" });
+    color.createEl("option", { text: "\u5168\u90E8\u989C\u8272", value: "all" });
+    for (const item of ANNOTATION_COLORS) {
+      color.createEl("option", { text: COLOR_LABELS[item], value: item });
+    }
+    color.value = this.color;
+    color.addEventListener("change", async () => {
+      this.color = color.value;
+      await this.render();
+    });
+    const type = filterRow.createEl("select", { cls: "yh-filter-select" });
+    type.createEl("option", { text: "\u5168\u90E8\u7C7B\u578B", value: "all" });
+    type.createEl("option", { text: "\u9AD8\u4EAE", value: "highlight" });
+    type.createEl("option", { text: "\u7B14\u8BB0", value: "note" });
+    type.value = this.type;
+    type.addEventListener("change", async () => {
+      this.type = type.value;
+      await this.render();
+    });
+    const sort = filterRow.createEl("select", { cls: "yh-filter-select" });
+    const sortOptions = { document: "\u6587\u6863\u987A\u5E8F", newest: "\u6700\u65B0\u4F18\u5148", oldest: "\u6700\u65E9\u4F18\u5148" };
+    for (const item of ["document", "newest", "oldest"]) {
+      sort.createEl("option", { text: sortOptions[item], value: item });
+    }
+    sort.value = this.sort;
+    sort.addEventListener("change", async () => {
+      this.sort = sort.value;
+      await this.render();
+    });
+    const exportFormat = filterRow.createEl("select", { cls: "yh-filter-select" });
+    exportFormat.createEl("option", { text: "\u9ED8\u8BA4\u6458\u8981", value: "summary" });
+    exportFormat.createEl("option", { text: "\u6309\u989C\u8272\u5206\u7EC4", value: "by-color" });
+    exportFormat.createEl("option", { text: "\u53EA\u5BFC\u51FA\u7B14\u8BB0", value: "notes-only" });
+    exportFormat.createEl("option", { text: "\u9605\u8BFB\u7B14\u8BB0", value: "reading-notes" });
+    exportFormat.value = this.exportFormat;
+    exportFormat.addEventListener("change", async () => {
+      this.exportFormat = exportFormat.value;
+      await this.render();
+    });
+  }
+  renderCard(list, cardData) {
+    const file = this.fileForCard(cardData);
+    const card = list.createDiv({
+      cls: `yh-ov-card yh-ov-card--${cardData.color}`,
+      attr: this.cardAttributes(cardData)
+    });
+    card.toggleClass("is-orphaned", !!cardData.orphaned);
+    const head = card.createDiv({ cls: "yh-ov-card-head" });
+    head.createSpan({ cls: `yh-ov-label yh-label--${cardData.color}`, text: COLOR_LABELS[cardData.color] });
+    head.createSpan({ cls: "yh-ov-meta", text: cardData.mode === "md" ? "Markdown" : cardData.mode === "pdf" ? "PDF" : "EPUB" });
+    head.createSpan({ cls: "yh-ov-dot", text: "\xB7" });
+    const title = (cardData.note && "title" in cardData.note ? cardData.note.title : "") ?? "";
+    const kindLabel = cardData.kind === "highlight" ? "\u9AD8\u4EAE" : "\u7B14\u8BB0";
+    const type = head.createSpan({
+      cls: "yh-ov-type",
+      text: title ? getTitleLabel(title) : kindLabel
+    });
+    if (title) {
+      type.dataset.title = title;
+    }
+    head.createSpan({ cls: "yh-ov-time", text: formatTime(cardData.createdAt) });
+    const quote = card.createDiv({ cls: "yh-ov-quote" });
+    quote.textContent = cardData.text;
+    quote.toggleClass("is-code", cardData.isCode || isCodeLikeText(cardData.text));
+    this.addExpandToggle(quote, card);
+    if (cardData.content) {
+      const content = card.createDiv({ cls: "yh-ov-content" });
+      void import_obsidian10.MarkdownRenderer.render(this.app, cardData.content, content, cardData.sourcePath, this).then(() => {
+        this.addExpandToggle(content, card);
+      });
+    }
+    const source = card.createDiv({ cls: "yh-ov-source" });
+    source.createSpan({ cls: "yh-ov-file", text: file?.name ?? cardData.sourcePath });
+    source.createSpan({
+      cls: "yh-ov-mode",
+      text: cardData.mode === "epub" ? cardData.chapter ?? "EPUB" : cardData.pageNumber ? `p.${cardData.pageNumber}` : "Markdown"
+    });
+    const actions = card.createDiv({ cls: "yh-ov-actions" });
+    if (cardData.note) {
+      const edit2 = actions.createEl("button", {
+        cls: "yh-ov-btn yh-ov-btn--icon",
+        attr: { type: "button", title: "\u7F16\u8F91\u7B14\u8BB0", "data-action": "edit-note" }
+      });
+      (0, import_obsidian10.setIcon)(edit2, "pencil");
+      edit2.disabled = !file;
+      edit2.addEventListener("click", () => {
+        if (file) {
+          this.openInlineEditor(card, file, cardData, cardData.content);
+        }
+      });
+    } else if (cardData.highlight) {
+      const addNote = actions.createEl("button", {
+        cls: "yh-ov-btn",
+        text: "\u6DFB\u52A0\u7B14\u8BB0",
+        attr: { type: "button", "data-action": "add-note" }
+      });
+      addNote.disabled = !file;
+      addNote.addEventListener("click", () => {
+        if (file) {
+          addNote.addClass("hidden");
+          this.openInlineEditor(card, file, cardData, "");
+        }
+      });
+    }
+    const jump = actions.createEl("button", {
+      cls: "yh-ov-btn",
+      text: "\u8DF3\u8F6C",
+      attr: { type: "button", "data-action": "jump" }
+    });
+    jump.disabled = !file;
+    jump.addEventListener("click", () => {
+      if (file) {
+        this.jumpTo(file, cardData.startOffset, cardData.pageNumber, cardData.mode, cardData.cfiRange);
+      }
+    });
+    const remove = actions.createEl("button", {
+      cls: "yh-ov-btn yh-ov-btn--danger",
+      text: "\u5220\u9664",
+      attr: { type: "button", "data-action": "delete" }
+    });
+    remove.disabled = !file;
+    remove.addEventListener("click", async () => {
+      if (file) {
+        await this.deleteCard(file, cardData);
+        new import_obsidian10.Notice("\u6279\u6CE8\u5DF2\u5220\u9664");
+        await this.plugin.refreshAnnotations();
+      }
+    });
+    const edit = card.createDiv({ cls: "yh-ov-edit hidden" });
+    const textarea = edit.createEl("textarea", {
+      cls: "yh-ov-textarea",
+      attr: { placeholder: "\u5199\u4E0B\u4F60\u7684\u60F3\u6CD5..." }
+    });
+    const editActions = edit.createDiv({ cls: "yh-ov-edit-actions" });
+    editActions.createEl("button", { cls: "yh-ov-save", text: "\u4FDD\u5B58", attr: { type: "button" } });
+    editActions.createEl("button", { cls: "yh-ov-cancel", text: "\u53D6\u6D88", attr: { type: "button" } });
+  }
+  cardAttributes(card) {
+    const attrs = { "data-id": card.id, "data-source-path": card.sourcePath };
+    if (card.highlight) {
+      attrs["data-highlight-id"] = card.highlight.id;
+    }
+    if (card.note) {
+      attrs["data-note-id"] = card.note.id;
+    }
+    return attrs;
+  }
+  openInlineEditor(card, file, cardData, initialValue) {
+    const edit = card.querySelector(".yh-ov-edit");
+    const textarea = card.querySelector(".yh-ov-textarea");
+    const save = card.querySelector(".yh-ov-save");
+    const cancel = card.querySelector(".yh-ov-cancel");
+    const addNote = card.querySelector('[data-action="add-note"]');
+    if (!edit || !textarea || !save || !cancel) {
+      return;
+    }
+    textarea.value = initialValue;
+    edit.removeClass("hidden");
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    const saveContent = async () => {
+      await this.saveCardContent(file, cardData, textarea.value);
+      await this.plugin.refreshAnnotations();
+    };
+    save.onclick = () => {
+      void saveContent();
+    };
+    cancel.onclick = () => {
+      textarea.value = initialValue;
+      edit.addClass("hidden");
+      addNote?.removeClass("hidden");
+    };
+    textarea.onkeydown = (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        void saveContent();
+      }
+      if (event.key === "Escape") {
+        textarea.value = initialValue;
+        edit.addClass("hidden");
+        addNote?.removeClass("hidden");
+      }
+    };
+  }
+  addExpandToggle(contentEl, wrapperEl) {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const lineHeight = parseFloat(getComputedStyle(contentEl).lineHeight);
+        const threshold = lineHeight * 3 + 10;
+        if (contentEl.scrollHeight <= threshold + 2) {
+          return;
+        }
+        const button = document.createElement("span");
+        button.className = "yh-ov-expand-btn";
+        button.textContent = "\u5C55\u5F00";
+        button.tabIndex = 0;
+        button.setAttribute("role", "button");
+        contentEl.insertAdjacentElement("afterend", button);
+        const toggle = () => {
+          const expanded = contentEl.hasClass("expanded");
+          contentEl.toggleClass("expanded", !expanded);
+          button.setText(expanded ? "\u5C55\u5F00" : "\u6536\u8D77");
+        };
+        button.addEventListener("click", toggle);
+        button.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            toggle();
+          }
+        });
+      });
+    });
+  }
+  async saveCardContent(file, card, content) {
+    if (card.note && card.mode === "pdf") {
+      await this.plugin.store.updatePdfComment(file, {
+        ...card.note,
+        content,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+      return;
+    }
+    if (card.note && card.mode === "md") {
+      await this.plugin.store.updateComment(file, {
+        ...card.note,
+        content,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+      return;
+    }
+    if (card.note && card.mode === "epub") {
+      await this.plugin.store.updateEpubComment(file, {
+        ...card.note,
+        note: content,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+      return;
+    }
+    if (card.highlight && card.mode === "pdf") {
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      const highlight = card.highlight;
+      await this.plugin.store.addPdfComment(file, {
+        id: crypto.randomUUID(),
+        highlightId: highlight.id,
+        anchor: highlight.anchor,
+        content,
+        color: highlight.color,
+        position: { offsetX: 20, offsetY: 0 },
+        collapsed: false,
+        author: this.plugin.settings.defaultAuthor,
+        createdAt: now,
+        updatedAt: now,
+        replies: [],
+        resolved: false
+      });
+      return;
+    }
+    if (card.highlight && card.mode === "md") {
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      const highlight = card.highlight;
+      await this.plugin.store.addComment(file, {
+        id: crypto.randomUUID(),
+        highlightId: highlight.id,
+        anchor: highlight.anchor,
+        content,
+        color: highlight.color,
+        position: { offsetX: 20, offsetY: 0 },
+        collapsed: false,
+        author: this.plugin.settings.defaultAuthor,
+        createdAt: now,
+        updatedAt: now,
+        replies: [],
+        resolved: false
+      });
+      return;
+    }
+    if (card.highlight && card.mode === "epub") {
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      const highlight = card.highlight;
+      await this.plugin.store.addEpubComment(file, {
+        id: crypto.randomUUID(),
+        type: "epub-comment",
+        color: highlight.color,
+        style: highlight.style,
+        anchor: highlight.anchor,
+        note: content,
+        createdAt: now,
+        collapsed: false,
+        author: this.plugin.settings.defaultAuthor,
+        updatedAt: now,
+        replies: [],
+        resolved: false
+      });
+    }
+  }
+  async deleteCard(file, card) {
+    if (card.highlight) {
+      await this.plugin.store.removeAnnotation(file, card.highlight.id);
+    }
+    if (card.note) {
+      await this.plugin.store.removeAnnotation(file, card.note.id);
+    }
+  }
+  fileForCard(card) {
+    const file = this.app.vault.getAbstractFileByPath(card.sourcePath);
+    return file instanceof import_obsidian10.TFile ? file : null;
+  }
+  filterCards(cards) {
+    return cards.filter((card) => this.color === "all" || card.color === this.color).filter((card) => {
+      if (this.type === "all") {
+        return true;
+      }
+      if (this.type === "highlight") {
+        return card.kind === "highlight";
+      }
+      return Boolean(card.note);
+    }).filter((card) => {
+      const haystack = `${card.sourcePath} ${card.text} ${card.content}`.toLowerCase();
+      return haystack.includes(this.query.toLowerCase());
+    }).sort((a3, b3) => {
+      if (this.sort === "newest") {
+        return this.cardUpdatedAt(b3).localeCompare(this.cardUpdatedAt(a3));
+      }
+      if (this.sort === "oldest") {
+        return this.cardUpdatedAt(a3).localeCompare(this.cardUpdatedAt(b3));
+      }
+      return a3.sourcePath.localeCompare(b3.sourcePath) || (a3.pageNumber ?? 0) - (b3.pageNumber ?? 0) || a3.startOffset - b3.startOffset;
+    });
+  }
+  cardUpdatedAt(card) {
+    return card.note?.updatedAt ?? card.createdAt;
+  }
+  renderExportFooter(container, file) {
+    const footer = container.createDiv({ cls: "yh-ov-foot" });
+    const exportButton = footer.createEl("button", { cls: "yh-export-btn", text: "\u2191 \u5BFC\u51FA\u6279\u6CE8", attr: { type: "button" } });
+    exportButton.disabled = this.annotationScope === "current" && !file;
+    exportButton.addEventListener("click", async () => {
+      if (this.annotationScope === "current" && !file) {
+        return;
+      }
+      const exported = this.annotationScope === "all" ? await this.plugin.store.exportAllNotes(this.exportFormat) : await this.plugin.store.exportNotes(file, this.exportFormat);
+      new import_obsidian10.Notice(`\u5DF2\u5BFC\u51FA\u7B14\u8BB0\u81F3 ${exported.path}`);
+    });
+    footer.createDiv({ cls: "yh-ov-export-note", text: this.exportFormatLabel() });
+  }
+  exportFormatLabel() {
+    const labels = {
+      summary: "\u5BFC\u51FA\u4E3A Markdown \u6458\u8981",
+      "by-color": "\u6309\u989C\u8272\u5206\u7EC4\u5BFC\u51FA",
+      "notes-only": "\u53EA\u5BFC\u51FA\u5E26\u7B14\u8BB0\u7684\u6279\u6CE8",
+      "reading-notes": "\u5BFC\u51FA\u4E3A\u9605\u8BFB\u7B14\u8BB0\u683C\u5F0F"
+    };
+    return labels[this.exportFormat];
+  }
+  async jumpTo(file, offset, pageNumber, mode = "md", cfiRange) {
+    const leaf = this.app.workspace.getLeaf(false);
+    await leaf.openFile(file);
+    if (mode === "epub" && cfiRange) {
+      window.setTimeout(() => {
+        const epubLeaf = this.app.workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE).find(
+          (l3) => l3.view.file?.path === file.path
+        );
+        const epubView = epubLeaf?.view;
+        if (typeof epubView?.navigateToCfi === "function") {
+          epubView.navigateToCfi(cfiRange);
+        }
+      }, 200);
+      return;
+    }
+    if (file.extension.toLowerCase() === "pdf") {
+      window.setTimeout(() => {
+        const page = document.querySelector(
+          `.workspace-leaf.mod-active .pdf-page[data-page-number="${pageNumber}"], .workspace-leaf.mod-active .page[data-page-number="${pageNumber}"]`
+        );
+        page?.scrollIntoView({ block: "center" });
+        page?.addClass("yh-flash-target");
+        window.setTimeout(() => page?.removeClass("yh-flash-target"), 850);
+      }, 120);
+      return;
+    }
+    const view = leaf.view instanceof import_obsidian10.MarkdownView ? leaf.view : this.app.workspace.getActiveViewOfType(import_obsidian10.MarkdownView);
+    if (!view) {
+      return;
+    }
+    const pos = view.editor.offsetToPos(offset);
+    view.editor.setCursor(pos);
+    view.editor.scrollIntoView({ from: pos, to: pos }, true);
+    view.containerEl.addClass("yh-flash-target");
+    window.setTimeout(() => view.containerEl.removeClass("yh-flash-target"), 850);
+  }
+};
+function formatTime(value) {
+  return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+function getTitleLabel(title) {
+  const labels = {
+    Insight: "\u6D1E\u5BDF",
+    Question: "\u7591\u95EE",
+    Reminder: "\u63D0\u9192"
+  };
+  return labels[title] ?? title;
+}
+function isCodeAnchor(anchor) {
+  return "isCode" in anchor && Boolean(anchor.isCode);
+}
+function isCodeLikeText(text) {
+  return /^[ \t]{2,}/m.test(text) || /\n[ \t]{2,}\S/.test(text);
+}
+
+// src/views/stickyNoteLane.ts
 var import_obsidian12 = require("obsidian");
+
+// src/utils/positioning.ts
+var GAP = 10;
+function layoutStickyNotes(items) {
+  const sorted = [...items].sort((a3, b3) => a3.anchorTop - b3.anchorTop);
+  const output = [];
+  let cursor = 0;
+  for (const item of sorted) {
+    const preferred = Math.max(0, item.anchorTop + item.offsetY);
+    const top = Math.max(preferred, cursor);
+    output.push({ id: item.id, top });
+    cursor = top + item.height + GAP;
+  }
+  return output;
+}
+
+// src/views/stickyNoteView.ts
+var import_obsidian11 = require("obsidian");
+function renderStickyNoteCard(container, options) {
+  container.empty();
+  const card = container.createDiv({
+    cls: `yh-card yh-card--${options.comment.color} yh-sticky-card`,
+    attr: {
+      "data-yh-color": options.comment.color,
+      "data-yh-id": options.comment.id,
+      "data-yh-card-id": options.comment.id
+    }
+  });
+  const header = card.createDiv({ cls: "yh-card-head" });
+  header.createSpan({
+    cls: `yh-card-color-label yh-label--${options.comment.color}`,
+    text: COLOR_LABELS[options.comment.color]
+  });
+  header.createSpan({ cls: "yh-card-page", text: "md" });
+  header.createSpan({ cls: "yh-card-time", text: formatTime2(options.comment.updatedAt) });
+  header.createSpan({ cls: "yh-card-author", text: options.comment.author });
+  const tools = header.createDiv({ cls: "yh-card-tools" });
+  const edit = tools.createEl("button", {
+    cls: "yh-icon-btn",
+    attr: { type: "button", title: "\u7F16\u8F91\u7B14\u8BB0" }
+  });
+  (0, import_obsidian11.setIcon)(edit, "pencil");
+  const collapse2 = tools.createEl("button", {
+    cls: "yh-icon-btn",
+    attr: { type: "button", title: options.comment.collapsed ? "\u5C55\u5F00" : "\u6298\u53E0" }
+  });
+  (0, import_obsidian11.setIcon)(collapse2, options.comment.collapsed ? "chevron-down" : "chevron-up");
+  collapse2.addEventListener("click", () => options.onToggle(options.comment));
+  const remove = tools.createEl("button", {
+    cls: "yh-icon-btn",
+    attr: { type: "button", title: "\u5220\u9664\u7B14\u8BB0" }
+  });
+  (0, import_obsidian11.setIcon)(remove, "trash-2");
+  remove.addEventListener("click", () => options.onDelete(options.comment));
+  if (options.comment.collapsed) {
+    const body2 = card.createDiv({ cls: "yh-card-body" });
+    body2.createDiv({ cls: "yh-card-quote", text: options.comment.anchor.selectedText });
+    return card;
+  }
+  const body = card.createDiv({ cls: "yh-card-body" });
+  body.createDiv({ cls: "yh-card-quote", text: options.comment.anchor.selectedText });
+  const content = body.createDiv({ cls: "yh-card-content" });
+  renderDisplayMode(content, options);
+  edit.addEventListener("click", () => renderEditMode(content, options));
+  const foot = card.createDiv({ cls: "yh-card-foot" });
+  foot.createEl("button", { cls: "yh-card-more", text: "\xB7\xB7\xB7", attr: { type: "button", title: "\u66F4\u591A" } });
+  return card;
+}
+function renderDisplayMode(container, options) {
+  container.empty();
+  import_obsidian11.MarkdownRenderer.render(options.app, options.comment.content, container, options.sourcePath, options.component);
+}
+function renderEditMode(container, options) {
+  container.empty();
+  const title = container.createEl("input", {
+    cls: "yh-sticky-title-editor",
+    attr: { type: "text", placeholder: "\u6807\u9898" }
+  });
+  title.value = options.comment.title ?? "";
+  const editor = container.createEl("textarea", {
+    cls: "yh-sticky-editor",
+    attr: { rows: "5", placeholder: "\u5199\u4E0B Markdown \u7B14\u8BB0..." }
+  });
+  editor.value = options.comment.content;
+  editor.focus();
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  const actions = container.createDiv({ cls: "yh-sticky-edit-actions" });
+  const save = actions.createEl("button", { text: "\u4FDD\u5B58", cls: "mod-cta", attr: { type: "button" } });
+  const cancel = actions.createEl("button", { text: "\u53D6\u6D88", attr: { type: "button" } });
+  const saveContent = () => {
+    options.onUpdate(options.comment, editor.value, title.value.trim());
+    renderDisplayMode(container, {
+      ...options,
+      comment: {
+        ...options.comment,
+        title: title.value.trim(),
+        content: editor.value
+      }
+    });
+  };
+  save.addEventListener("click", saveContent);
+  cancel.addEventListener("click", () => renderDisplayMode(container, options));
+  editor.addEventListener("keydown", (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      event.preventDefault();
+      saveContent();
+    }
+  });
+}
+function formatTime2(value) {
+  return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+// src/views/stickyNoteLane.ts
+var StickyNoteLane = class {
+  constructor(options) {
+    this.options = options;
+    this.container = null;
+    this.lane = null;
+    this.observer = null;
+  }
+  register() {
+    this.options.component.registerEvent(
+      this.options.app.workspace.on("active-leaf-change", () => this.render())
+    );
+    this.options.component.registerEvent(
+      this.options.app.workspace.on("layout-change", () => this.render())
+    );
+    this.observer = new ResizeObserver(() => this.render());
+    this.options.component.register(() => this.destroy());
+  }
+  async render() {
+    const view = this.options.app.workspace.getActiveViewOfType(import_obsidian12.MarkdownView);
+    if (!view || !view.file || view.file.extension !== "md") {
+      this.hide();
+      return;
+    }
+    const settings = this.options.getSettings();
+    if (!settings.stickyNotesVisible) {
+      this.hide();
+      return;
+    }
+    const document2 = this.options.getCachedDocument(view.file.path);
+    if (!document2 || document2.comments.length === 0) {
+      this.hide();
+      return;
+    }
+    const visibleComments = document2.comments.filter((comment) => !comment.orphaned);
+    if (visibleComments.length === 0) {
+      this.hide();
+      return;
+    }
+    const editorWidth = view.containerEl.offsetWidth;
+    if (editorWidth < settings.stickyCollapseWidth) {
+      this.hide();
+      return;
+    }
+    this.ensureContainer(view);
+    this.renderLane(view, visibleComments, settings);
+  }
+  ensureContainer(view) {
+    if (this.container && this.container.parentElement === view.containerEl) {
+      return;
+    }
+    this.container?.remove();
+    this.container = view.containerEl.createDiv({ cls: "yh-sticky-lane-container" });
+    this.lane = this.container.createDiv({ cls: "yh-sticky-lane" });
+    if (this.observer) {
+      this.observer.observe(view.containerEl);
+    }
+  }
+  renderLane(view, comments, settings) {
+    if (!this.lane) {
+      return;
+    }
+    this.lane.empty();
+    this.lane.toggleClass("yh-sticky-lane--left", settings.stickySide === "left");
+    const layoutInputs = [];
+    const commentElements = /* @__PURE__ */ new Map();
+    for (const comment of comments) {
+      const anchorTop = this.getAnchorTop(view, comment);
+      if (anchorTop === null) {
+        continue;
+      }
+      const tempCard = this.lane.createDiv({ cls: "yh-card yh-card--temp" });
+      tempCard.style.visibility = "hidden";
+      tempCard.style.position = "absolute";
+      renderStickyNoteCard(tempCard, {
+        app: this.options.app,
+        component: this.options.component,
+        sourcePath: view.file.path,
+        comment,
+        onToggle: (c2) => this.handleToggle(view.file, c2),
+        onUpdate: (c2, content, title) => this.handleUpdate(view.file, c2, content, title),
+        onDelete: (c2) => this.handleDelete(view.file, c2)
+      });
+      const height = tempCard.offsetHeight;
+      tempCard.remove();
+      layoutInputs.push({
+        id: comment.id,
+        anchorTop,
+        height,
+        offsetY: comment.position?.offsetY ?? 0
+      });
+    }
+    const layoutOutputs = layoutStickyNotes(layoutInputs);
+    for (const output of layoutOutputs) {
+      const comment = comments.find((c2) => c2.id === output.id);
+      if (!comment) {
+        continue;
+      }
+      const card = this.lane.createDiv({
+        cls: `yh-card yh-card--${comment.color} yh-sticky-card`,
+        attr: {
+          "data-yh-color": comment.color,
+          "data-yh-id": comment.id,
+          "data-yh-card-id": comment.id
+        }
+      });
+      card.style.position = "absolute";
+      card.style.top = `${output.top}px`;
+      renderStickyNoteCard(card, {
+        app: this.options.app,
+        component: this.options.component,
+        sourcePath: view.file.path,
+        comment,
+        onToggle: (c2) => this.handleToggle(view.file, c2),
+        onUpdate: (c2, content, title) => this.handleUpdate(view.file, c2, content, title),
+        onDelete: (c2) => this.handleDelete(view.file, c2)
+      });
+      if (settings.showLeaderLines && settings.stickySide === "right") {
+        const line = this.lane.createDiv({ cls: "yh-leader-line" });
+        line.style.position = "absolute";
+        line.style.left = "0";
+        line.style.top = `${output.top + 20}px`;
+        line.style.width = "20px";
+        line.style.height = "1px";
+        line.style.background = `var(--yh-${comment.color})`;
+      }
+    }
+  }
+  getAnchorTop(view, comment) {
+    const mark = view.containerEl.querySelector(`.yh-highlight[data-yh-id="${comment.id}"]`);
+    if (mark) {
+      const rect = mark.getBoundingClientRect();
+      const containerRect = view.containerEl.getBoundingClientRect();
+      return rect.top - containerRect.top + view.containerEl.scrollTop;
+    }
+    try {
+      const pos = view.editor.offsetToPos(comment.anchor.startOffset);
+      const lineHeight = 20;
+      return pos.line * lineHeight;
+    } catch {
+      return null;
+    }
+  }
+  hide() {
+    this.container?.remove();
+    this.container = null;
+    this.lane = null;
+  }
+  async handleToggle(file, comment) {
+    await this.options.onToggleCollapse(file, { ...comment, collapsed: !comment.collapsed });
+    await this.render();
+  }
+  async handleUpdate(file, comment, content, title) {
+    await this.options.onUpdateComment(file, comment, content, title);
+    await this.render();
+  }
+  async handleDelete(file, comment) {
+    await this.options.onDeleteAnnotation(file, comment.id);
+    await this.render();
+  }
+  destroy() {
+    this.observer?.disconnect();
+    this.container?.remove();
+    this.container = null;
+    this.lane = null;
+  }
+};
+
+// src/epub/EpubBookshelfView.ts
+var import_obsidian13 = require("obsidian");
 var EPUB_BOOKSHELF_VIEW_TYPE = "inklight-epub-bookshelf";
-var EpubBookshelfView = class extends import_obsidian12.ItemView {
+var EpubBookshelfView = class extends import_obsidian13.ItemView {
   constructor(leaf, store, onOpen) {
     super(leaf);
     this.store = store;
@@ -12769,7 +13028,7 @@ var YH_INKLIGHT_ICON = `
     </g>
   </svg>
 `;
-var OverlayAnnotationsPlugin = class extends import_obsidian13.Plugin {
+var OverlayAnnotationsPlugin = class extends import_obsidian14.Plugin {
   constructor() {
     super(...arguments);
     this.settings = DEFAULT_SETTINGS;
@@ -12777,13 +13036,13 @@ var OverlayAnnotationsPlugin = class extends import_obsidian13.Plugin {
     this.renameMigrationTimer = null;
   }
   async onload() {
-    (0, import_obsidian13.addIcon)("yh-inklight-icon", YH_INKLIGHT_ICON);
+    (0, import_obsidian14.addIcon)("yh-inklight-icon", YH_INKLIGHT_ICON);
     await this.loadSettings();
     console.info(`yh-inklight loaded v${this.manifest.version}`);
     this.store = new AnnotationStore(this.app);
     await this.store.initialize();
     this.registerView(ANNOTATION_SIDEBAR_VIEW, (leaf) => new AnnotationSidebarView(leaf, this));
-    this.registerView(EPUB_READER_VIEW_TYPE, (leaf) => new EpubReaderView(leaf, this.store, this.settings));
+    this.registerView(EPUB_READER_VIEW_TYPE, (leaf) => new EpubReaderView(leaf, this.store, this.settings, () => this.refreshAnnotations()));
     try {
       this.registerExtensions(["epub"], EPUB_READER_VIEW_TYPE);
     } catch (error) {
@@ -12944,9 +13203,9 @@ var OverlayAnnotationsPlugin = class extends import_obsidian13.Plugin {
       callback: async () => {
         try {
           const path = await this.store.testWriteAccess();
-          new import_obsidian13.Notice(`\u58A8\u5149\u6279\u6CE8\u5B58\u50A8\u53EF\u5199\uFF1A${path}`);
+          new import_obsidian14.Notice(`\u58A8\u5149\u6279\u6CE8\u5B58\u50A8\u53EF\u5199\uFF1A${path}`);
         } catch {
-          new import_obsidian13.Notice("\u58A8\u5149\u6279\u6CE8\u5B58\u50A8\u4E0D\u53EF\u5199\uFF0C\u8BF7\u68C0\u67E5 .obsidian-annotations \u76EE\u5F55\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001\u3002");
+          new import_obsidian14.Notice("\u58A8\u5149\u6279\u6CE8\u5B58\u50A8\u4E0D\u53EF\u5199\uFF0C\u8BF7\u68C0\u67E5 .obsidian-annotations \u76EE\u5F55\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001\u3002");
         }
       }
     });
@@ -12963,7 +13222,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian13.Plugin {
     });
     this.registerEvent(
       this.app.vault.on("modify", async (file) => {
-        if (!(file instanceof import_obsidian13.TFile) || file.extension !== "md") {
+        if (!(file instanceof import_obsidian14.TFile) || file.extension !== "md") {
           return;
         }
         const document2 = await this.store.getDocument(file);
@@ -12979,7 +13238,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian13.Plugin {
     );
     this.registerEvent(
       this.app.vault.on("rename", async (file, oldPath) => {
-        if (!this.settings.migrateOnRename || !(file instanceof import_obsidian13.TFile) || file.extension !== "md") {
+        if (!this.settings.migrateOnRename || !(file instanceof import_obsidian14.TFile) || file.extension !== "md") {
           return;
         }
         if (this.renameMigrationTimer !== null) {
@@ -12994,7 +13253,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian13.Plugin {
     );
     this.registerEvent(
       this.app.workspace.on("file-open", async (file) => {
-        if (file instanceof import_obsidian13.TFile && ["md", "pdf"].includes(file.extension.toLowerCase())) {
+        if (file instanceof import_obsidian14.TFile && ["md", "pdf"].includes(file.extension.toLowerCase())) {
           this.popover.hide();
           await this.store.getDocument(file);
           await this.refreshAnnotations();
@@ -13010,11 +13269,11 @@ var OverlayAnnotationsPlugin = class extends import_obsidian13.Plugin {
     }
     const snapshot = await this.resolveSelection();
     if (!snapshot) {
-      new import_obsidian13.Notice("\u8BF7\u5148\u9009\u4E2D\u6587\u672C\u3002");
+      new import_obsidian14.Notice("\u8BF7\u5148\u9009\u4E2D\u6587\u672C\u3002");
       return;
     }
     const file = this.app.vault.getAbstractFileByPath(snapshot.filePath);
-    if (!(file instanceof import_obsidian13.TFile)) {
+    if (!(file instanceof import_obsidian14.TFile)) {
       return;
     }
     const highlight = {
@@ -13044,11 +13303,11 @@ var OverlayAnnotationsPlugin = class extends import_obsidian13.Plugin {
     }
     const snapshot = await this.resolveSelection();
     if (!snapshot) {
-      new import_obsidian13.Notice("\u8BF7\u5148\u9009\u4E2D\u6587\u672C\u3002");
+      new import_obsidian14.Notice("\u8BF7\u5148\u9009\u4E2D\u6587\u672C\u3002");
       return;
     }
     const file = this.app.vault.getAbstractFileByPath(snapshot.filePath);
-    if (!(file instanceof import_obsidian13.TFile)) {
+    if (!(file instanceof import_obsidian14.TFile)) {
       return;
     }
     const note = await new CommentModal(this.app, "", "").openAndRead();
@@ -13077,7 +13336,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian13.Plugin {
   }
   async refreshActiveReadingViewHighlights(filePath) {
     const file = this.app.vault.getAbstractFileByPath(filePath);
-    if (!(file instanceof import_obsidian13.TFile)) {
+    if (!(file instanceof import_obsidian14.TFile)) {
       return;
     }
     const document2 = this.store.getCachedDocument(filePath) ?? await this.store.getDocument(file);
@@ -13087,7 +13346,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian13.Plugin {
     }
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       const view = leaf.view;
-      if (!(view instanceof import_obsidian13.MarkdownView) || view.file?.path !== filePath) {
+      if (!(view instanceof import_obsidian14.MarkdownView) || view.file?.path !== filePath) {
         continue;
       }
       const previewRoot = findPreviewRoot(view);
@@ -13144,7 +13403,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian13.Plugin {
     return null;
   }
   activeEditor() {
-    const view = this.app.workspace.getActiveViewOfType(import_obsidian13.MarkdownView);
+    const view = this.app.workspace.getActiveViewOfType(import_obsidian14.MarkdownView);
     return view ? { editor: view.editor, file: view.file } : null;
   }
   async activateSidebar() {
@@ -13190,11 +13449,11 @@ var OverlayAnnotationsPlugin = class extends import_obsidian13.Plugin {
    */
   async testFoliateEngine() {
     const file = this.app.workspace.getActiveFile();
-    if (!(file instanceof import_obsidian13.TFile) || file.extension !== "epub") {
-      new import_obsidian13.Notice("\u8BF7\u5148\u9009\u4E2D\u4E00\u4E2A .epub \u6587\u4EF6\u518D\u8FD0\u884C\u6B64\u547D\u4EE4\u3002");
+    if (!(file instanceof import_obsidian14.TFile) || file.extension !== "epub") {
+      new import_obsidian14.Notice("\u8BF7\u5148\u9009\u4E2D\u4E00\u4E2A .epub \u6587\u4EF6\u518D\u8FD0\u884C\u6B64\u547D\u4EE4\u3002");
       return;
     }
-    const modal = new import_obsidian13.Modal(this.app);
+    const modal = new import_obsidian14.Modal(this.app);
     modal.titleEl.setText("foliate \u5F15\u64CE\u6D4B\u8BD5\uFF08\u5F00\u53D1\uFF09");
     modal.modalEl.style.width = "80vw";
     modal.modalEl.style.height = "85vh";
@@ -13238,17 +13497,17 @@ var OverlayAnnotationsPlugin = class extends import_obsidian13.Plugin {
       ].join("\n"));
       view.renderer?.render?.();
       await showFoliateStart(view);
-      new import_obsidian13.Notice("foliate \u5DF2\u52A0\u8F7D\uFF0C\u6253\u5F00\u63A7\u5236\u53F0\u67E5\u770B\u4E8B\u4EF6\u65E5\u5FD7\uFF08Ctrl+Shift+I\uFF09\u3002");
+      new import_obsidian14.Notice("foliate \u5DF2\u52A0\u8F7D\uFF0C\u6253\u5F00\u63A7\u5236\u53F0\u67E5\u770B\u4E8B\u4EF6\u65E5\u5FD7\uFF08Ctrl+Shift+I\uFF09\u3002");
     } catch (error) {
       console.error("[yh-foliate] test failed", error);
-      new import_obsidian13.Notice(`foliate \u6D4B\u8BD5\u5931\u8D25: ${error instanceof Error ? error.message : String(error)}`);
+      new import_obsidian14.Notice(`foliate \u6D4B\u8BD5\u5931\u8D25: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   copySelection() {
     const text = window.getSelection()?.toString() || this.activeEditor()?.editor.getSelection() || "";
     if (text) {
       navigator.clipboard.writeText(text);
-      new import_obsidian13.Notice("Copied selection");
+      new import_obsidian14.Notice("Copied selection");
     }
   }
   async handleAnnotationClick(event) {
@@ -13266,7 +13525,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian13.Plugin {
     }
     const annotationId = mark.dataset.yhId;
     const file = this.app.workspace.getActiveFile();
-    if (!annotationId || !(file instanceof import_obsidian13.TFile)) {
+    if (!annotationId || !(file instanceof import_obsidian14.TFile)) {
       return;
     }
     const document2 = this.store.getCachedDocument(file.path) ?? await this.store.getDocument(file);
@@ -13293,7 +13552,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian13.Plugin {
     }
     await sleep(100);
     const file = this.app.vault.getAbstractFileByPath(context.sourcePath);
-    if (!(file instanceof import_obsidian13.TFile)) {
+    if (!(file instanceof import_obsidian14.TFile)) {
       return;
     }
     const document2 = await this.store.getDocument(file);
@@ -13446,7 +13705,7 @@ function nthIndexOf(source, target, occurrenceIndex) {
   }
   return -1;
 }
-var CommentModal = class extends import_obsidian13.Modal {
+var CommentModal = class extends import_obsidian14.Modal {
   constructor(app, initialTitle, initialContent) {
     super(app);
     this.initialTitle = initialTitle;

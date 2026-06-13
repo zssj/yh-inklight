@@ -12295,36 +12295,56 @@ var EpubReaderView = class extends import_obsidian9.FileView {
   async doToolbarSearch(query, resultsEl) {
     resultsEl.empty();
     if (!query.trim() || query.trim().length < 2 || !this.foliateView) return;
-    const needle = query.trim().toLowerCase();
-    const docs = this.collectFoliateDocs();
-    const hits = [];
-    for (const doc of docs) {
-      const bodyText = doc.body?.textContent || "";
-      if (!bodyText) continue;
-      const lower = bodyText.toLowerCase();
-      let idx = lower.indexOf(needle);
-      while (idx >= 0 && hits.length < 50) {
-        const start = Math.max(0, idx - 40);
-        const end = Math.min(bodyText.length, idx + needle.length + 60);
-        let excerpt = bodyText.slice(start, end).replace(/[\r\n]+/g, " ");
-        if (start > 0) excerpt = "\u2026" + excerpt;
-        if (end < bodyText.length) excerpt += "\u2026";
-        hits.push({ cfi: "", text: excerpt });
-        idx = lower.indexOf(needle, idx + needle.length);
-      }
-      if (hits.length > 0) break;
-    }
-    if (hits.length === 0) {
-      resultsEl.createDiv({ cls: "yh-epub-toolbar-search-empty", text: docs.length === 0 ? "\u672A\u52A0\u8F7D\u5185\u5BB9\uFF08\u8BF7\u5148\u7FFB\u5230\u6709\u5185\u5BB9\u7684\u7AE0\u8282\uFF09" : "\u5F53\u524D\u7AE0\u8282\u672A\u627E\u5230" });
+    const searchGen = this.foliateView.search?.({ query: query.trim() });
+    if (!searchGen || typeof searchGen[Symbol.asyncIterator] !== "function") {
+      resultsEl.createDiv({ cls: "yh-epub-toolbar-search-empty", text: "\u641C\u7D22\u529F\u80FD\u4E0D\u652F\u6301" });
       return;
     }
+    const hits = [];
+    let searching = true;
+    const progressEl = resultsEl.createDiv({ cls: "yh-epub-toolbar-search-progress", text: "\u641C\u7D22\u4E2D..." });
+    try {
+      for await (const result of searchGen) {
+        if (result === "done") break;
+        if (result.progress !== void 0) {
+          progressEl.textContent = `\u641C\u7D22\u4E2D ${Math.round(result.progress * 100)}%`;
+          continue;
+        }
+        if (result.subitems) {
+          for (const item of result.subitems) {
+            hits.push({ cfi: item.cfi, label: result.label || "", excerpt: item.excerpt });
+            if (hits.length >= 100) break;
+          }
+        } else if (result.cfi) {
+          hits.push({ cfi: result.cfi, label: result.label || "", excerpt: result.excerpt });
+        }
+        if (hits.length >= 100) break;
+      }
+    } catch (e3) {
+      console.error("yh-inklight: search error", e3);
+    }
+    progressEl.remove();
+    if (hits.length === 0) {
+      resultsEl.createDiv({ cls: "yh-epub-toolbar-search-empty", text: "\u672A\u627E\u5230\u5339\u914D\u5185\u5BB9" });
+      return;
+    }
+    let currentLabel = "";
     for (const h3 of hits) {
+      if (h3.label && h3.label !== currentLabel) {
+        currentLabel = h3.label;
+        resultsEl.createDiv({ cls: "yh-epub-toolbar-search-chapter", text: currentLabel });
+      }
       const btn = resultsEl.createEl("button", { cls: "yh-epub-toolbar-search-hit", attr: { type: "button" } });
-      btn.textContent = h3.text.slice(0, 80);
-      if (h3.cfi) btn.addEventListener("click", () => {
-        if (this.foliateView) void this.foliateView.goTo(h3.cfi);
+      btn.innerHTML = `${this.escapeHtml(h3.excerpt.pre)}<strong>${this.escapeHtml(h3.excerpt.match)}</strong>${this.escapeHtml(h3.excerpt.post)}`;
+      btn.addEventListener("click", () => {
+        if (this.foliateView) {
+          void this.foliateView.goTo(h3.cfi);
+        }
       });
     }
+  }
+  escapeHtml(text) {
+    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
 };
 

@@ -2114,3 +2114,33 @@ a.yh-epub-goto-link:hover {
   color: var(--text-muted);
   font-size: var(--yh-font-sm);
 }
+
+.yh-epub-toolbar-search-progress {
+  padding: 8px 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--yh-font-sm);
+  font-style: italic;
+}
+
+.yh-epub-toolbar-search-chapter {
+  padding: 8px 12px 4px;
+  font-size: var(--yh-font-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  border-top: 1px solid var(--yh-border);
+  margin-top: 4px;
+}
+
+.yh-epub-toolbar-search-chapter:first-child {
+  border-top: none;
+  margin-top: 0;
+}
+
+.yh-epub-toolbar-search-hit strong {
+  background-color: var(--text-highlight-bg, rgba(245, 197, 24, 0.3));
+  color: inherit;
+  padding: 0 1px;
+  border-radius: 2px;
+}

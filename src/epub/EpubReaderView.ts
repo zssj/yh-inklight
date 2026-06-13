@@ -2150,36 +2150,67 @@ export class EpubReaderView extends FileView {
 	private async doToolbarSearch(query: string, resultsEl: HTMLElement): Promise<void> {
 		resultsEl.empty();
 		if (!query.trim() || query.trim().length < 2 || !this.foliateView) return;
-		const needle = query.trim().toLowerCase();
 
-		// 实时穿透 shadow DOM 收集所有 foliate iframe 的 doc（currentLoadedDoc 可能被翻页清空）
-		const docs = this.collectFoliateDocs();
-
-		const hits: Array<{ cfi: string; text: string }> = [];
-		for (const doc of docs) {
-			const bodyText = doc.body?.textContent || "";
-			if (!bodyText) continue;
-			const lower = bodyText.toLowerCase();
-			let idx = lower.indexOf(needle);
-			while (idx >= 0 && hits.length < 50) {
-				const start = Math.max(0, idx - 40);
-				const end = Math.min(bodyText.length, idx + needle.length + 60);
-				let excerpt = bodyText.slice(start, end).replace(/[\r\n]+/g, " ");
-				if (start > 0) excerpt = "…" + excerpt;
-				if (end < bodyText.length) excerpt += "…";
-				hits.push({ cfi: "", text: excerpt });
-				idx = lower.indexOf(needle, idx + needle.length);
-			}
-			if (hits.length > 0) break;
-		}
-		if (hits.length === 0) {
-			resultsEl.createDiv({ cls: "yh-epub-toolbar-search-empty", text: docs.length === 0 ? "未加载内容（请先翻到有内容的章节）" : "当前章节未找到" });
+		// 使用 foliate 内置全书搜索（支持跨章节、返回 CFI 可直接导航）
+		const searchGen = (this.foliateView as any).search?.({ query: query.trim() });
+		if (!searchGen || typeof searchGen[Symbol.asyncIterator] !== 'function') {
+			// foliate 不支持 search，回退到当前 section
+			resultsEl.createDiv({ cls: "yh-epub-toolbar-search-empty", text: "搜索功能不支持" });
 			return;
 		}
-		for (const h of hits) {
-			const btn = resultsEl.createEl("button", { cls: "yh-epub-toolbar-search-hit", attr: { type: "button" } });
-			btn.textContent = h.text.slice(0, 80);
-			if (h.cfi) btn.addEventListener("click", () => { if (this.foliateView) void this.foliateView.goTo(h.cfi); });
+
+		const hits: Array<{ cfi: string; label: string; excerpt: { pre: string; match: string; post: string } }> = [];
+		let searching = true;
+
+		// 添加进度指示
+		const progressEl = resultsEl.createDiv({ cls: "yh-epub-toolbar-search-progress", text: "搜索中..." });
+
+		try {
+			for await (const result of searchGen) {
+				if (result === 'done') break;
+				if (result.progress !== undefined) {
+					progressEl.textContent = `搜索中 ${Math.round(result.progress * 100)}%`;
+					continue;
+				}
+				if (result.subitems) {
+					for (const item of result.subitems) {
+						hits.push({ cfi: item.cfi, label: result.label || '', excerpt: item.excerpt });
+						if (hits.length >= 100) break;
+					}
+				} else if (result.cfi) {
+					hits.push({ cfi: result.cfi, label: result.label || '', excerpt: result.excerpt });
+				}
+				if (hits.length >= 100) break;
+			}
+		} catch (e) {
+			console.error("yh-inklight: search error", e);
 		}
+
+		progressEl.remove();
+
+		if (hits.length === 0) {
+			resultsEl.createDiv({ cls: "yh-epub-toolbar-search-empty", text: "未找到匹配内容" });
+			return;
+		}
+
+		// 按章节分组显示
+		let currentLabel = '';
+		for (const h of hits) {
+			if (h.label && h.label !== currentLabel) {
+				currentLabel = h.label;
+				resultsEl.createDiv({ cls: "yh-epub-toolbar-search-chapter", text: currentLabel });
+			}
+			const btn = resultsEl.createEl("button", { cls: "yh-epub-toolbar-search-hit", attr: { type: "button" } });
+			btn.innerHTML = `${this.escapeHtml(h.excerpt.pre)}<strong>${this.escapeHtml(h.excerpt.match)}</strong>${this.escapeHtml(h.excerpt.post)}`;
+			btn.addEventListener("click", () => {
+				if (this.foliateView) {
+					void this.foliateView.goTo(h.cfi);
+				}
+			});
+		}
+	}
+
+	private escapeHtml(text: string): string {
+		return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 	}
 }

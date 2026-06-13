@@ -13137,11 +13137,6 @@ var OverlayAnnotationsPlugin = class extends import_obsidian14.Plugin {
       callback: () => this.activateBookshelf()
     });
     this.addCommand({
-      id: "test-foliate-engine",
-      name: "\u6D4B\u8BD5 foliate \u5F15\u64CE\uFF08\u5F00\u53D1\uFF09",
-      callback: () => this.testFoliateEngine()
-    });
-    this.addCommand({
       id: "test-annotation-storage",
       name: "\u6D4B\u8BD5\u58A8\u5149\u6279\u6CE8\u5B58\u50A8",
       callback: async () => {
@@ -13391,62 +13386,6 @@ var OverlayAnnotationsPlugin = class extends import_obsidian14.Plugin {
    * Phase 4-A 临时实测：用 foliate-js 在 Modal 内渲染当前 epub，验证引擎可用性。
    * 控制台输出 relocate/load 事件 payload，供 view 重写参考。验证通过后移除。
    */
-  async testFoliateEngine() {
-    const file = this.app.workspace.getActiveFile();
-    if (!(file instanceof import_obsidian14.TFile) || file.extension !== "epub") {
-      new import_obsidian14.Notice("\u8BF7\u5148\u9009\u4E2D\u4E00\u4E2A .epub \u6587\u4EF6\u518D\u8FD0\u884C\u6B64\u547D\u4EE4\u3002");
-      return;
-    }
-    const modal = new import_obsidian14.Modal(this.app);
-    modal.titleEl.setText("foliate \u5F15\u64CE\u6D4B\u8BD5\uFF08\u5F00\u53D1\uFF09");
-    modal.modalEl.style.width = "80vw";
-    modal.modalEl.style.height = "85vh";
-    const container = modal.contentEl.createDiv({ cls: "yh-foliate-test" });
-    container.style.height = "70vh";
-    container.style.overflow = "hidden";
-    modal.open();
-    try {
-      const buffer = await this.app.vault.readBinary(file);
-      const view = await createFoliateView(container);
-      view.addEventListener("relocate", (event) => {
-        const detail = event.detail;
-        console.log("[yh-foliate] relocate", detail);
-      });
-      view.addEventListener("load", (event) => {
-        const detail = event.detail;
-        const doc = detail?.doc;
-        console.log("[yh-foliate] load section#", detail?.index, "doc?", Boolean(doc));
-        if (doc) {
-          const links = Array.from(doc.querySelectorAll('link[rel="stylesheet"]'));
-          for (const link of links) {
-            const href = link.getAttribute("href") || "";
-            if (!href.startsWith("blob:")) continue;
-            fetch(href).then((r3) => r3.text()).then((css) => {
-              const style2 = doc.createElement("style");
-              style2.textContent = css;
-              link.replaceWith(style2);
-            }).catch((e3) => console.warn("[yh-foliate] inline css failed", href, e3));
-          }
-          console.log("[yh-foliate] blob stylesheet to inline:", links.length);
-        }
-      });
-      view.addEventListener("link", (event) => {
-        const detail = event.detail;
-        console.log("[yh-foliate] link", detail?.href);
-      });
-      await openBookFromBuffer(view, buffer, file.name);
-      view.renderer?.setStyles?.([
-        "body { font-size: 16px !important; line-height: 1.7 !important; color: CanvasText !important; background: Canvas !important; }",
-        "img { max-width: 100% !important; height: auto !important; }"
-      ].join("\n"));
-      view.renderer?.render?.();
-      await showFoliateStart(view);
-      new import_obsidian14.Notice("foliate \u5DF2\u52A0\u8F7D\uFF0C\u6253\u5F00\u63A7\u5236\u53F0\u67E5\u770B\u4E8B\u4EF6\u65E5\u5FD7\uFF08Ctrl+Shift+I\uFF09\u3002");
-    } catch (error) {
-      console.error("[yh-foliate] test failed", error);
-      new import_obsidian14.Notice(`foliate \u6D4B\u8BD5\u5931\u8D25: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
   copySelection() {
     const text = window.getSelection()?.toString() || this.activeEditor()?.editor.getSelection() || "";
     if (text) {

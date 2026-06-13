@@ -11258,15 +11258,17 @@ var EpubReaderView = class extends import_obsidian9.FileView {
     window.setTimeout(() => {
       if (editOutsideHandler) document.addEventListener("pointerdown", editOutsideHandler, true);
     }, 0);
-    let left;
-    let top;
-    const rangeRect = range?.getBoundingClientRect();
-    if (rangeRect && rangeRect.width > 0) {
-      left = rangeRect.left + rangeRect.width / 2;
-      top = rangeRect.top;
-    } else {
-      left = this.lastPointerClientX || window.innerWidth / 2;
-      top = this.lastPointerClientY || window.innerHeight / 2;
+    let left = this.lastPointerClientX || window.innerWidth / 2;
+    let top = this.lastPointerClientY || window.innerHeight / 2;
+    if (range) {
+      const doc = range.startContainer?.ownerDocument ?? null;
+      if (doc) {
+        const mapped = this.createSelectionViewportRect(doc, range);
+        if (mapped && mapped.width >= 0) {
+          left = mapped.left + mapped.width / 2;
+          top = mapped.top;
+        }
+      }
     }
     const clampedLeft = Math.max(8, Math.min(left, window.innerWidth - 120));
     const clampedTop = Math.max(8, Math.min(top + 8, window.innerHeight - 48));
@@ -12221,6 +12223,39 @@ var EpubReaderView = class extends import_obsidian9.FileView {
     };
     return visit(this.readerContainerEl);
   }
+  /**
+   * 穿透 shadow DOM 收集所有 foliate iframe 的 contentDocument，供全文搜索使用。
+   * currentLoadedDoc 可能因翻页被 foliate 清空，这里实时遍历最可靠。
+   */
+  collectFoliateDocs() {
+    const docs = [];
+    const seen = /* @__PURE__ */ new Set();
+    const visit = (root) => {
+      const iframes = Array.from(root.querySelectorAll("iframe"));
+      for (const iframe of iframes) {
+        try {
+          const d2 = iframe.contentDocument;
+          if (d2 && d2.body && !seen.has(d2)) {
+            seen.add(d2);
+            docs.push(d2);
+          }
+        } catch {
+        }
+      }
+      const elements = Array.from(root.querySelectorAll("*"));
+      for (const element of elements) {
+        const shadowRoot = element.shadowRoot;
+        if (shadowRoot) {
+          visit(shadowRoot);
+        }
+      }
+    };
+    visit(this.readerContainerEl);
+    if (this.currentLoadedDoc?.body && !seen.has(this.currentLoadedDoc)) {
+      docs.push(this.currentLoadedDoc);
+    }
+    return docs;
+  }
   // ================================================================
   // 工具栏搜索（从侧栏移到工具栏）
   // ================================================================
@@ -12261,14 +12296,7 @@ var EpubReaderView = class extends import_obsidian9.FileView {
     resultsEl.empty();
     if (!query.trim() || query.trim().length < 2 || !this.foliateView) return;
     const needle = query.trim().toLowerCase();
-    const docs = [];
-    const contents = this.foliateView.renderer?.getContents?.() ?? [];
-    for (const c2 of contents) {
-      if (c2.doc?.body) docs.push(c2.doc);
-    }
-    if (docs.length === 0 && this.currentLoadedDoc?.body) {
-      docs.push(this.currentLoadedDoc);
-    }
+    const docs = this.collectFoliateDocs();
     const hits = [];
     for (const doc of docs) {
       const bodyText = doc.body?.textContent || "";
@@ -12287,7 +12315,7 @@ var EpubReaderView = class extends import_obsidian9.FileView {
       if (hits.length > 0) break;
     }
     if (hits.length === 0) {
-      resultsEl.createDiv({ cls: "yh-epub-toolbar-search-empty", text: "\u5F53\u524D\u7AE0\u8282\u672A\u627E\u5230\uFF08\u7FFB\u5230\u76EE\u6807\u7AE0\u8282\u518D\u641C\uFF09" });
+      resultsEl.createDiv({ cls: "yh-epub-toolbar-search-empty", text: docs.length === 0 ? "\u672A\u52A0\u8F7D\u5185\u5BB9\uFF08\u8BF7\u5148\u7FFB\u5230\u6709\u5185\u5BB9\u7684\u7AE0\u8282\uFF09" : "\u5F53\u524D\u7AE0\u8282\u672A\u627E\u5230" });
       return;
     }
     for (const h3 of hits) {

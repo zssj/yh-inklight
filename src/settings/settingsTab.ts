@@ -183,16 +183,6 @@ export class AnnotationSettingsTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
-      .setName("段落模式")
-      .setDesc("启用后，点击段落即可进入段落聚焦阅读。")
-      .addToggle((toggle) => {
-        toggle.setValue(this.plugin.settings.epubParagraphMode).onChange(async (value) => {
-          this.plugin.settings.epubParagraphMode = value;
-          await this.plugin.saveSettings();
-        });
-      });
-
-    new Setting(containerEl)
       .setName("脚注预览")
       .setDesc("鼠标悬停脚注引用时显示浮动预览。")
       .addToggle((toggle) => {

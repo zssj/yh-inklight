@@ -1688,22 +1688,6 @@ export class EpubReaderView extends FileView {
 		doc.addEventListener("mouseout", (ev) => { const t = ev.target instanceof Element ? ev.target : null; if (t && isFootnoteRef(t)) hidePreview(); });
 	}
 
-	private attachParagraphModeHandlers(doc: Document): void {
-		doc.addEventListener("click", (event) => {
-			const target = event.target instanceof Element ? event.target : null;
-			const p = target?.closest("p");
-			if (!p || !p.textContent?.trim()) return;
-			const isFocused = p.hasClass("yh-paragraph-focused");
-			doc.querySelectorAll(".yh-paragraph-focused").forEach((el) => el.removeClass("yh-paragraph-focused"));
-			if (!isFocused) p.addClass("yh-paragraph-focused");
-		});
-	}
-
-	private renderParagraphModeHint(): void {
-		if (!this.pluginSettings.epubParagraphMode) return;
-		const hint = this.sidebarContentEl.createDiv({ cls: "yh-epub-paragraph-hint" });
-		hint.setText("段落模式已开启，点击段落实焦");
-	}
 	// ================================================================
 	// 资源清理
 	// ================================================================

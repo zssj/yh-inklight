@@ -8437,7 +8437,6 @@ var DEFAULT_SETTINGS = {
   epubNoteIconOffsetX: 2,
   epubNoteIconOffsetY: 0,
   epubHighlightStyle: "fill",
-  epubParagraphMode: false,
   epubFootnotePreview: true,
   epubBacklinkRendering: true,
   // PDF 增强
@@ -9008,12 +9007,6 @@ var AnnotationSettingsTab = class extends import_obsidian4.PluginSettingTab {
     new import_obsidian4.Setting(containerEl).setName("\u6458\u5F55\u5BFC\u51FA\u76EE\u5F55").setDesc("EPUB \u6458\u5F55\u5BFC\u51FA\u5230\u7684 Vault \u6587\u4EF6\u5939\u8DEF\u5F84\u3002").addText((text) => {
       text.setValue(this.plugin.settings.epubExcerptFolder).onChange(async (value) => {
         this.plugin.settings.epubExcerptFolder = value.trim() || "epub-excerpts";
-        await this.plugin.saveSettings();
-      });
-    });
-    new import_obsidian4.Setting(containerEl).setName("\u6BB5\u843D\u6A21\u5F0F").setDesc("\u542F\u7528\u540E\uFF0C\u70B9\u51FB\u6BB5\u843D\u5373\u53EF\u8FDB\u5165\u6BB5\u843D\u805A\u7126\u9605\u8BFB\u3002").addToggle((toggle) => {
-      toggle.setValue(this.plugin.settings.epubParagraphMode).onChange(async (value) => {
-        this.plugin.settings.epubParagraphMode = value;
         await this.plugin.saveSettings();
       });
     });
@@ -11902,21 +11895,6 @@ var EpubReaderView = class extends import_obsidian9.FileView {
       const t3 = ev.target instanceof Element ? ev.target : null;
       if (t3 && isFootnoteRef(t3)) hidePreview();
     });
-  }
-  attachParagraphModeHandlers(doc) {
-    doc.addEventListener("click", (event) => {
-      const target = event.target instanceof Element ? event.target : null;
-      const p3 = target?.closest("p");
-      if (!p3 || !p3.textContent?.trim()) return;
-      const isFocused = p3.hasClass("yh-paragraph-focused");
-      doc.querySelectorAll(".yh-paragraph-focused").forEach((el) => el.removeClass("yh-paragraph-focused"));
-      if (!isFocused) p3.addClass("yh-paragraph-focused");
-    });
-  }
-  renderParagraphModeHint() {
-    if (!this.pluginSettings.epubParagraphMode) return;
-    const hint = this.sidebarContentEl.createDiv({ cls: "yh-epub-paragraph-hint" });
-    hint.setText("\u6BB5\u843D\u6A21\u5F0F\u5DF2\u5F00\u542F\uFF0C\u70B9\u51FB\u6BB5\u843D\u5B9E\u7126");
   }
   // ================================================================
   // 资源清理

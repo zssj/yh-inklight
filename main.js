@@ -11072,9 +11072,153 @@ async function createFoliateView(container) {
   container.appendChild(element);
   return element;
 }
+function readBlobUrlAsText2(url) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", url);
+    xhr.responseType = "text";
+    xhr.onload = () => {
+      if (xhr.status === 0 || xhr.status >= 200 && xhr.status < 300) {
+        resolve(xhr.responseText || "");
+        return;
+      }
+      reject(new Error(`Failed to read blob URL (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error("Failed to read blob URL"));
+    xhr.send();
+  });
+}
+function readBlobUrlAsDataUrl(url) {
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", url);
+    xhr.responseType = "blob";
+    xhr.onload = () => {
+      if (!(xhr.status === 0 || xhr.status >= 200 && xhr.status < 300) || !(xhr.response instanceof Blob)) {
+        resolve(null);
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(xhr.response);
+    };
+    xhr.onerror = () => resolve(null);
+    xhr.send();
+  });
+}
+async function inlineBlobCssImports(cssText, visited = /* @__PURE__ */ new Set()) {
+  const importPattern = /@import\s+(?:url\()?['"]?([^'")]+)['"]?\)?\s*;/gi;
+  let output = cssText;
+  for (const match of Array.from(cssText.matchAll(importPattern))) {
+    const href = (match[1] || "").trim();
+    if (!href.startsWith("blob:") || visited.has(href)) {
+      continue;
+    }
+    visited.add(href);
+    try {
+      const imported = await readBlobUrlAsText2(href);
+      output = output.replace(match[0], await inlineBlobCssImports(imported, visited));
+    } catch {
+      output = output.replace(match[0], "");
+    }
+  }
+  return output;
+}
+async function inlineBlobCssUrls(cssText, visited = /* @__PURE__ */ new Set()) {
+  const urlPattern = /url\(\s*(['"]?)(blob:[^'")]+)\1\s*\)/gi;
+  let output = cssText;
+  for (const match of Array.from(cssText.matchAll(urlPattern))) {
+    const href = (match[2] || "").trim();
+    if (!href.startsWith("blob:") || visited.has(href)) {
+      continue;
+    }
+    visited.add(href);
+    const dataUrl = await readBlobUrlAsDataUrl(href);
+    output = output.replace(match[0], dataUrl ? `url("${dataUrl}")` : "");
+  }
+  return output;
+}
+async function normalizeFoliateCss(cssText) {
+  return inlineBlobCssUrls(await inlineBlobCssImports(cssText));
+}
+async function transformFoliateMarkup(markup, mediaType) {
+  const parserType = mediaType.includes("html") ? "text/html" : "application/xhtml+xml";
+  let doc;
+  try {
+    doc = new DOMParser().parseFromString(markup, parserType);
+  } catch {
+    return markup;
+  }
+  for (const element of Array.from(doc.querySelectorAll("script, iframe, object, embed"))) {
+    element.remove();
+  }
+  for (const element of Array.from(doc.querySelectorAll("*"))) {
+    for (const attr of Array.from(element.attributes)) {
+      const name = attr.name.toLowerCase();
+      const value = attr.value || "";
+      if (name.startsWith("on") || name === "srcdoc" || /^javascript:/i.test(value.trim())) {
+        element.removeAttribute(attr.name);
+      }
+    }
+  }
+  for (const style2 of Array.from(doc.querySelectorAll("style"))) {
+    if (style2.textContent) {
+      style2.textContent = await normalizeFoliateCss(style2.textContent);
+    }
+  }
+  for (const link of Array.from(doc.querySelectorAll('link[rel~="stylesheet"][href]'))) {
+    const href = link.getAttribute("href") || "";
+    if (!href.startsWith("blob:")) {
+      continue;
+    }
+    try {
+      const css = await normalizeFoliateCss(await readBlobUrlAsText2(href));
+      const style2 = doc.createElement("style");
+      style2.setAttribute("data-yh-foliate-inlined", "1");
+      style2.textContent = css;
+      link.replaceWith(style2);
+    } catch {
+      link.remove();
+    }
+  }
+  for (const element of Array.from(doc.querySelectorAll("[style]"))) {
+    const styleValue = element.getAttribute("style") || "";
+    if (/blob:/i.test(styleValue)) {
+      element.setAttribute("style", await normalizeFoliateCss(styleValue));
+    }
+  }
+  return parserType === "text/html" ? doc.documentElement.outerHTML : new XMLSerializer().serializeToString(doc);
+}
+function attachFoliateTransformPipeline(book) {
+  book.transformTarget?.addEventListener("data", (event) => {
+    const detail = event.detail;
+    if (!detail?.data) {
+      return;
+    }
+    const mediaType = String(detail.type || "").toLowerCase();
+    detail.data = Promise.resolve(detail.data).then(async (payload) => {
+      if (typeof payload !== "string") {
+        return payload;
+      }
+      if (mediaType.includes("css")) {
+        return normalizeFoliateCss(payload);
+      }
+      if (mediaType.includes("html") || mediaType.includes("xml") || mediaType.includes("svg")) {
+        return transformFoliateMarkup(payload, mediaType);
+      }
+      return payload;
+    });
+  });
+}
 async function openBookFromBuffer(view, buffer, filename) {
   const file = new File([buffer], filename, { type: "application/epub+zip" });
-  await view.open(file);
+  const mod = await ensureViewModule();
+  const book = mod.makeBook ? await mod.makeBook(file) : file;
+  if (book && typeof book === "object" && "transformTarget" in book) {
+    attachFoliateTransformPipeline(book);
+  }
+  await view.open(book);
 }
 
 // src/epub/EpubReaderView.ts
@@ -12551,6 +12695,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian13.Plugin {
   async onload() {
     (0, import_obsidian13.addIcon)("yh-inklight-icon", YH_INKLIGHT_ICON);
     await this.loadSettings();
+    console.info(`yh-inklight loaded v${this.manifest.version}`);
     this.store = new AnnotationStore(this.app);
     await this.store.initialize();
     this.registerView(ANNOTATION_SIDEBAR_VIEW, (leaf) => new AnnotationSidebarView(leaf, this));

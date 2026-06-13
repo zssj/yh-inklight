@@ -67,6 +67,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   async onload(): Promise<void> {
     addIcon("yh-inklight-icon", YH_INKLIGHT_ICON);
     await this.loadSettings();
+    console.info(`yh-inklight loaded v${this.manifest.version}`);
     this.store = new AnnotationStore(this.app);
     await this.store.initialize();
 

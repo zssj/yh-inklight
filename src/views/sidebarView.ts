@@ -150,6 +150,46 @@ export class AnnotationSidebarView extends ItemView {
     this.renderExportFooter(container, this.annotationScope === "current" ? file : null);
   }
 
+  /**
+   * 只刷新卡片列表（不重建搜索框等控件），用于搜索输入时保持焦点。
+   */
+  private async refreshList(): Promise<void> {
+    const root = this.containerEl.children[1] ?? this.containerEl;
+    const list = root.querySelector<HTMLElement>(".yh-ov-list");
+    if (!list) {
+      await this.render();
+      return;
+    }
+    const file = this.app.workspace.getActiveFile();
+    if (this.annotationScope === "current" && !file) {
+      await this.render();
+      return;
+    }
+    const documents =
+      this.annotationScope === "all"
+        ? await this.plugin.store.getIndexedDocuments()
+        : [await this.plugin.store.getDocument(file!)];
+    const rawCards = documents.flatMap((document) => this.buildCards(document));
+    const cards = this.filterCards(rawCards);
+
+    list.empty();
+    if (!cards.length) {
+      list.createDiv({ cls: "yh-empty", text: "No matching annotations." });
+    } else {
+      for (const card of cards) {
+        this.renderCard(list, card);
+      }
+    }
+
+    const countEl = root.querySelector<HTMLElement>(".yh-ov-count");
+    if (countEl) {
+      const highlightCount = rawCards.filter((card) => card.kind === "highlight" && !card.orphaned).length;
+      const noteCount = rawCards.filter((card) => card.note && !card.orphaned).length;
+      const scopeLabel = this.annotationScope === "all" ? `${documents.length} files` : "current file";
+      countEl.textContent = `${scopeLabel} · ${highlightCount} highlights · ${noteCount} notes`;
+    }
+  }
+
   private buildCards(document: FileAnnotationDocument): SidebarCard[] {
     const usedNotes = new Set<string>();
     const cards: SidebarCard[] = [];
@@ -370,17 +410,9 @@ export class AnnotationSidebarView extends ItemView {
       if (searchTimer !== null) {
         window.clearTimeout(searchTimer);
       }
-      searchTimer = window.setTimeout(async () => {
+      searchTimer = window.setTimeout(() => {
         searchTimer = null;
-        await this.render();
-        // render 重建了搜索框，恢复焦点和光标到末尾
-        const root = this.containerEl.children[1] ?? this.containerEl;
-        const restored = root.querySelector<HTMLInputElement>(".yh-ov-search");
-        if (restored) {
-          restored.focus();
-          const len = restored.value.length;
-          restored.setSelectionRange(len, len);
-        }
+        void this.refreshList();
       }, 200);
     });
 

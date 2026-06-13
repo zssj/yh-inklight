@@ -145,6 +145,8 @@ export class EpubReaderView extends FileView {
 	private foliateView: FoliateViewHandle | null = null;
 	private loadedSectionDocs = new WeakMap<Document, number>();
 	private documentSelectionCleanups = new WeakMap<Document, () => void>();
+	/** 最近一次 foliate load 事件的 section doc，供工具栏全文搜索使用（getContents 不可靠时的可靠来源） */
+	private currentLoadedDoc: Document | null = null;
 	// 跟踪 foliate 高亮层实际已渲染的标注（id → 渲染时传入 foliate 的 meta）。
 	// 全量刷新时据此 remove，不依赖 sidecar 缓存——否则外部删除（侧栏）后被删的标注无法从 foliate 层移除。
 	private renderedAnnotationMeta = new Map<string, { value: string; id: string; color: AnnotationColor; style: EpubHighlightStyle }>();
@@ -903,7 +905,7 @@ export class EpubReaderView extends FileView {
 	 * @param value - foliate 标注 value（CFI 范围）
 	 * @param data - 标注数据，包含 CFI 范围
 	 */
-	private handleMarkClicked(value: string): void {
+	private handleMarkClicked(value: string, range?: Range): void {
 		if (!this.file) {
 			return;
 		}
@@ -926,7 +928,7 @@ export class EpubReaderView extends FileView {
 			return;
 		}
 
-		this.showAnnotationEditMenu(annotation.id, cfiRange);
+		this.showAnnotationEditMenu(annotation.id, cfiRange, range);
 	}
 
 	/**
@@ -935,7 +937,7 @@ export class EpubReaderView extends FileView {
 	 * @param annotationId - 标注 ID
 	 * @param _cfiRange - CFI 范围（预留用于定位）
 	 */
-	private showAnnotationEditMenu(annotationId: string, _cfiRange: string): void {
+	private showAnnotationEditMenu(annotationId: string, _cfiRange: string, range?: Range): void {
 		if (!this.file) {
 			return;
 		}
@@ -975,10 +977,18 @@ export class EpubReaderView extends FileView {
 			if (editOutsideHandler) document.addEventListener("pointerdown", editOutsideHandler, true);
 		}, 0);
 
-		// 定位到点击位置附近（用最近一次 pointerdown 坐标，foliate show-annotation 在点击后触发）
-		const left = this.lastPointerClientX || window.innerWidth / 2;
-		const top = this.lastPointerClientY || window.innerHeight / 2;
-		const clampedLeft = Math.max(8, Math.min(left + 8, window.innerWidth - 120));
+		// 定位：优先用高亮 range 的视口位置（跟随被点击的高亮），回退到最近点击坐标
+		let left: number;
+		let top: number;
+		const rangeRect = range?.getBoundingClientRect();
+		if (rangeRect && rangeRect.width > 0) {
+			left = rangeRect.left + rangeRect.width / 2;
+			top = rangeRect.top;
+		} else {
+			left = this.lastPointerClientX || window.innerWidth / 2;
+			top = this.lastPointerClientY || window.innerHeight / 2;
+		}
+		const clampedLeft = Math.max(8, Math.min(left, window.innerWidth - 120));
 		const clampedTop = Math.max(8, Math.min(top + 8, window.innerHeight - 48));
 		menu.style.left = `${clampedLeft}px`;
 		menu.style.top = `${clampedTop}px`;
@@ -1765,6 +1775,7 @@ export class EpubReaderView extends FileView {
 		}
 		const index = typeof detail.index === "number" ? detail.index : this.currentSectionIndex;
 		this.loadedSectionDocs.set(doc, index);
+		this.currentLoadedDoc = doc;
 		stripScriptsFromDocument(doc);
 		void inlineBlockedStylesheets({ document: doc });
 		this.attachSelectionListeners(doc);
@@ -1790,7 +1801,7 @@ export class EpubReaderView extends FileView {
 		if (!detail?.value) {
 			return;
 		}
-		this.handleMarkClicked(detail.value);
+		this.handleMarkClicked(detail.value, detail.range);
 	};
 
 	private attachSelectionListeners(doc: Document): void {
@@ -2102,19 +2113,21 @@ export class EpubReaderView extends FileView {
 		resultsEl.empty();
 		if (!query.trim() || query.trim().length < 2 || !this.foliateView) return;
 		const needle = query.trim().toLowerCase();
+
+		// 收集所有可搜索的 section doc：优先 getContents，回退到缓存的 currentLoadedDoc
+		const docs: Document[] = [];
 		const contents = this.foliateView.renderer?.getContents?.() ?? [];
-		const hits: Array<{ cfi: string; text: string }> = [];
-		// fallback: getContents 为空时，从 foliate iframe 直接取 doc
-		const docs: Document[] = contents.map((c) => c.doc).filter((d): d is Document => Boolean(d?.body));
-		if (docs.length === 0) {
-			const iframes = this.readerContainerEl.querySelectorAll("iframe");
-			for (const iframe of Array.from(iframes)) {
-				const d = (iframe as HTMLIFrameElement).contentDocument;
-				if (d?.body) docs.push(d);
-			}
+		for (const c of contents) {
+			if (c.doc?.body) docs.push(c.doc);
 		}
+		if (docs.length === 0 && this.currentLoadedDoc?.body) {
+			docs.push(this.currentLoadedDoc);
+		}
+
+		const hits: Array<{ cfi: string; text: string }> = [];
 		for (const doc of docs) {
-			const bodyText = doc.body.textContent || "";
+			const bodyText = doc.body?.textContent || "";
+			if (!bodyText) continue;
 			const lower = bodyText.toLowerCase();
 			let idx = lower.indexOf(needle);
 			while (idx >= 0 && hits.length < 50) {
@@ -2128,8 +2141,10 @@ export class EpubReaderView extends FileView {
 			}
 			if (hits.length > 0) break;
 		}
-		// 修复：上面的 for...of 用了 docs，需要把原来的 contents loop 替换
-		if (hits.length === 0) { resultsEl.createDiv({ cls: "yh-epub-toolbar-search-empty", text: "未找到" }); return; }
+		if (hits.length === 0) {
+			resultsEl.createDiv({ cls: "yh-epub-toolbar-search-empty", text: "当前章节未找到（翻到目标章节再搜）" });
+			return;
+		}
 		for (const h of hits) {
 			const btn = resultsEl.createEl("button", { cls: "yh-epub-toolbar-search-hit", attr: { type: "button" } });
 			btn.textContent = h.text.slice(0, 80);

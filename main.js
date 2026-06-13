@@ -10524,6 +10524,8 @@ var EpubReaderView = class extends import_obsidian9.FileView {
     this.foliateView = null;
     this.loadedSectionDocs = /* @__PURE__ */ new WeakMap();
     this.documentSelectionCleanups = /* @__PURE__ */ new WeakMap();
+    /** 最近一次 foliate load 事件的 section doc，供工具栏全文搜索使用（getContents 不可靠时的可靠来源） */
+    this.currentLoadedDoc = null;
     // 跟踪 foliate 高亮层实际已渲染的标注（id → 渲染时传入 foliate 的 meta）。
     // 全量刷新时据此 remove，不依赖 sidecar 缓存——否则外部删除（侧栏）后被删的标注无法从 foliate 层移除。
     this.renderedAnnotationMeta = /* @__PURE__ */ new Map();
@@ -10576,6 +10578,7 @@ var EpubReaderView = class extends import_obsidian9.FileView {
       }
       const index = typeof detail.index === "number" ? detail.index : this.currentSectionIndex;
       this.loadedSectionDocs.set(doc, index);
+      this.currentLoadedDoc = doc;
       stripScriptsFromDocument(doc);
       void inlineBlockedStylesheets({ document: doc });
       this.attachSelectionListeners(doc);
@@ -10598,7 +10601,7 @@ var EpubReaderView = class extends import_obsidian9.FileView {
       if (!detail?.value) {
         return;
       }
-      this.handleMarkClicked(detail.value);
+      this.handleMarkClicked(detail.value, detail.range);
     };
     this.store = store;
     this.pluginSettings = settings;
@@ -11196,7 +11199,7 @@ var EpubReaderView = class extends import_obsidian9.FileView {
    * @param value - foliate 标注 value（CFI 范围）
    * @param data - 标注数据，包含 CFI 范围
    */
-  handleMarkClicked(value) {
+  handleMarkClicked(value, range) {
     if (!this.file) {
       return;
     }
@@ -11214,7 +11217,7 @@ var EpubReaderView = class extends import_obsidian9.FileView {
     if (!annotation) {
       return;
     }
-    this.showAnnotationEditMenu(annotation.id, cfiRange);
+    this.showAnnotationEditMenu(annotation.id, cfiRange, range);
   }
   /**
    * 在标注位置显示编辑/删除菜单。
@@ -11222,7 +11225,7 @@ var EpubReaderView = class extends import_obsidian9.FileView {
    * @param annotationId - 标注 ID
    * @param _cfiRange - CFI 范围（预留用于定位）
    */
-  showAnnotationEditMenu(annotationId, _cfiRange) {
+  showAnnotationEditMenu(annotationId, _cfiRange, range) {
     if (!this.file) {
       return;
     }
@@ -11255,9 +11258,17 @@ var EpubReaderView = class extends import_obsidian9.FileView {
     window.setTimeout(() => {
       if (editOutsideHandler) document.addEventListener("pointerdown", editOutsideHandler, true);
     }, 0);
-    const left = this.lastPointerClientX || window.innerWidth / 2;
-    const top = this.lastPointerClientY || window.innerHeight / 2;
-    const clampedLeft = Math.max(8, Math.min(left + 8, window.innerWidth - 120));
+    let left;
+    let top;
+    const rangeRect = range?.getBoundingClientRect();
+    if (rangeRect && rangeRect.width > 0) {
+      left = rangeRect.left + rangeRect.width / 2;
+      top = rangeRect.top;
+    } else {
+      left = this.lastPointerClientX || window.innerWidth / 2;
+      top = this.lastPointerClientY || window.innerHeight / 2;
+    }
+    const clampedLeft = Math.max(8, Math.min(left, window.innerWidth - 120));
     const clampedTop = Math.max(8, Math.min(top + 8, window.innerHeight - 48));
     menu.style.left = `${clampedLeft}px`;
     menu.style.top = `${clampedTop}px`;
@@ -12250,18 +12261,18 @@ var EpubReaderView = class extends import_obsidian9.FileView {
     resultsEl.empty();
     if (!query.trim() || query.trim().length < 2 || !this.foliateView) return;
     const needle = query.trim().toLowerCase();
+    const docs = [];
     const contents = this.foliateView.renderer?.getContents?.() ?? [];
-    const hits = [];
-    const docs = contents.map((c2) => c2.doc).filter((d2) => Boolean(d2?.body));
-    if (docs.length === 0) {
-      const iframes = this.readerContainerEl.querySelectorAll("iframe");
-      for (const iframe of Array.from(iframes)) {
-        const d2 = iframe.contentDocument;
-        if (d2?.body) docs.push(d2);
-      }
+    for (const c2 of contents) {
+      if (c2.doc?.body) docs.push(c2.doc);
     }
+    if (docs.length === 0 && this.currentLoadedDoc?.body) {
+      docs.push(this.currentLoadedDoc);
+    }
+    const hits = [];
     for (const doc of docs) {
-      const bodyText = doc.body.textContent || "";
+      const bodyText = doc.body?.textContent || "";
+      if (!bodyText) continue;
       const lower = bodyText.toLowerCase();
       let idx = lower.indexOf(needle);
       while (idx >= 0 && hits.length < 50) {
@@ -12276,7 +12287,7 @@ var EpubReaderView = class extends import_obsidian9.FileView {
       if (hits.length > 0) break;
     }
     if (hits.length === 0) {
-      resultsEl.createDiv({ cls: "yh-epub-toolbar-search-empty", text: "\u672A\u627E\u5230" });
+      resultsEl.createDiv({ cls: "yh-epub-toolbar-search-empty", text: "\u5F53\u524D\u7AE0\u8282\u672A\u627E\u5230\uFF08\u7FFB\u5230\u76EE\u6807\u7AE0\u8282\u518D\u641C\uFF09" });
       return;
     }
     for (const h3 of hits) {
@@ -12358,6 +12369,40 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
       }
     }
     this.renderExportFooter(container, this.annotationScope === "current" ? file : null);
+  }
+  /**
+   * 只刷新卡片列表（不重建搜索框等控件），用于搜索输入时保持焦点。
+   */
+  async refreshList() {
+    const root = this.containerEl.children[1] ?? this.containerEl;
+    const list = root.querySelector(".yh-ov-list");
+    if (!list) {
+      await this.render();
+      return;
+    }
+    const file = this.app.workspace.getActiveFile();
+    if (this.annotationScope === "current" && !file) {
+      await this.render();
+      return;
+    }
+    const documents = this.annotationScope === "all" ? await this.plugin.store.getIndexedDocuments() : [await this.plugin.store.getDocument(file)];
+    const rawCards = documents.flatMap((document2) => this.buildCards(document2));
+    const cards = this.filterCards(rawCards);
+    list.empty();
+    if (!cards.length) {
+      list.createDiv({ cls: "yh-empty", text: "No matching annotations." });
+    } else {
+      for (const card of cards) {
+        this.renderCard(list, card);
+      }
+    }
+    const countEl = root.querySelector(".yh-ov-count");
+    if (countEl) {
+      const highlightCount = rawCards.filter((card) => card.kind === "highlight" && !card.orphaned).length;
+      const noteCount = rawCards.filter((card) => card.note && !card.orphaned).length;
+      const scopeLabel = this.annotationScope === "all" ? `${documents.length} files` : "current file";
+      countEl.textContent = `${scopeLabel} \xB7 ${highlightCount} highlights \xB7 ${noteCount} notes`;
+    }
   }
   buildCards(document2) {
     const usedNotes = /* @__PURE__ */ new Set();
@@ -12533,16 +12578,9 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
       if (searchTimer !== null) {
         window.clearTimeout(searchTimer);
       }
-      searchTimer = window.setTimeout(async () => {
+      searchTimer = window.setTimeout(() => {
         searchTimer = null;
-        await this.render();
-        const root = this.containerEl.children[1] ?? this.containerEl;
-        const restored = root.querySelector(".yh-ov-search");
-        if (restored) {
-          restored.focus();
-          const len = restored.value.length;
-          restored.setSelectionRange(len, len);
-        }
+        void this.refreshList();
       }, 200);
     });
     const scope = searchRow.createEl("select", { cls: "yh-filter-select" });

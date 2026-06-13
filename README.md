@@ -1,274 +1,175 @@
-# 墨光批注
-
-墨光批注是一款非侵入式 Obsidian 阅读批注插件，支持 Markdown 和 PDF 文件。它提供覆盖层高亮、便签栏、批注概览、搜索跳转和 Markdown 导出功能，同时保持原始文档不变。
-
-**本插件绝不会修改你的 Markdown 或 PDF 文件。** 批注数据单独存储在 `.obsidian-annotations/` 目录下的 sidecar JSON 文件中。
-
-> 本插件基于 [Axl Light](https://github.com/rezonegame/axl-light) 开发，在原有功能基础上增加了编辑器旁便签栏和行内编辑功能。
-
-## 最新版本：v0.5.5
-
-### v0.5.5 长路径 sidecar 修复
-
-- ✅ **长路径可保存**：新文档 sidecar 文件名过长时自动使用“文件名前缀 + 路径 hash”的紧凑命名
-- ✅ **兼容旧数据**：已有短 sidecar 文件继续按原路径读写，不迁移、不改 schema
-- ✅ **修复新增失败**：解决长中文目录或长 PDF 文件名导致新批注无法创建 JSON 的问题
-
-### v0.5.4 持久化可靠性修复
-
-- ✅ **保存后验证**：批注写入 sidecar 后会立即读回验证，避免“重启前可见、重启后消失”
-- ✅ **内存状态保护**：只有磁盘保存成功后才更新内存缓存和索引，写入失败不再伪装成功
-- ✅ **存储诊断命令**：新增“测试墨光批注存储”命令，可检查 `.obsidian-annotations/` 是否真实可写
-
-### v0.5.3 侧栏刷新修复
-
-- ✅ **即时刷新更稳定**：侧栏刷新请求会合并执行，避免旧的异步渲染覆盖新结果
-- ✅ **手动刷新按钮**：批注侧栏标题栏新增刷新按钮，不重置搜索、筛选、排序和导出模板
-- ✅ **关闭按钮修正**：标题栏关闭按钮明确显示为 X 图标
-
-### v0.5.2 功能升级
-
-- ✅ **全库批注总览**：侧栏支持在“当前文件”和“全库”之间切换，跨 Markdown/PDF 搜索、筛选、排序和跳转
-- ✅ **导出模板**：支持默认摘要、按颜色分组、只导出笔记、阅读笔记四种 Markdown 导出格式
-- ✅ **全库导出**：全库模式下可导出 `inklight-all-notes*.md` 汇总文件
-- ✅ **创建便签快捷键**：首次添加便签弹窗支持 `Cmd/Ctrl + Enter` 保存、`Esc` 取消
-
-### v0.5.6 移除自动备份
-
-- 🗑️ **移除自动备份功能**：自动备份在跨设备场景下不可用，且缺少恢复机制；批注数据仍通过 sidecar 文件即时保存，不受影响
-- 🗑️ **移除"数据备份频率"设置项**：设置界面中不再显示备份频率滑块
-
-### v0.5.1 最小升级
-
-- ✅ **选区复用保护**：切换文件后不会继续使用旧文件选区，避免批注写入错误文档
-- ✅ **sidecar 读取保护**：批注 JSON 损坏时停止写入并提示，避免静默覆盖为空数据
-- ✅ **重复文本定位优化**：阅读视图中重复文本会优先使用上下文和原始位置匹配
-- ✅ **便签栏细节修复**：连接线设置生效，并兼容更多高亮 DOM 形态
-
-### v0.5.0 新增功能
-
-- ✅ **编辑器旁便签栏**：在 Markdown 编辑器右侧显示便签卡片，支持 Markdown 渲染
-- ✅ **便签行内编辑**：点击铅笔按钮直接编辑便签内容，按 `Cmd/Ctrl + Enter` 保存
-- ✅ **窄屏自动隐藏**：当编辑器宽度低于设定阈值时，便签栏自动隐藏，由弹层接管
-- ✅ **六种颜色主题**：便签支持黄色、橙色、粉色、绿色、蓝色、紫色六种颜色
-- ✅ **暗色模式支持**：便签样式适配 Obsidian 暗色主题
-
-### 技术改进
-
-- 新增 `StickyNoteLane` 类管理便签栏生命周期
-- 整合 `positioning.ts` 避让算法和 `stickyNoteView.ts` 卡片组件
-- 监听 `active-leaf-change` 和 `layout-change` 事件自动渲染
-
-## 功能特性
-
-- 覆盖层高亮：支持 Markdown 实时预览、源码模式、阅读视图和 PDF
-- 移动端友好的阅读视图高亮恢复，支持延迟渲染和 DOM 观察
-- 浮动工具栏：六种颜色、便签、复制和批注概览操作
-- 编辑器旁便签栏：支持 Markdown 渲染笔记，窄屏自动隐藏
-- 便签和侧栏笔记的行内编辑：按 `Cmd/Ctrl + Enter` 快捷保存
-- 侧栏批注概览：搜索、颜色筛选、排序、跳转、删除、添加笔记和导出
-- 全库批注总览：跨文件查看、搜索、筛选和导出所有 sidecar 批注
-- 导出模板：默认摘要、按颜色分组、只导出笔记、阅读笔记
-- Sidecar JSON 存储，支持模糊文本锚点重定位
-- Windows 安全路径规范化和重命名迁移处理
-
-## 安装方式
-
-### BRAT 安装
-
-1. 安装 Obsidian BRAT 插件
-2. 运行 `BRAT: Add a beta plugin for testing`
-3. 粘贴本仓库 URL：
-
-```text
-https://github.com/rezonegame/yh-inklight
-```
-
-4. 在 `设置 → 第三方插件` 中启用 `墨光批注`
-
-### 快速安装
-
-在终端中运行以下命令，将路径替换为你的 Obsidian 仓库路径：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/rezonegame/yh-inklight/main/scripts/install.sh | bash -s -- "$HOME/Documents/Obsidian Vault"
-```
-
-然后重启 Obsidian，打开 设置 → 第三方插件，启用 墨光批注。
-
-![从终端安装墨光批注](docs/images/install-axl-light-command.png)
-
-### 手动安装
-
-1. 从最新 Release 下载以下三个文件：
-   https://github.com/rezonegame/yh-inklight/releases/latest
-
-   - `main.js`
-   - `manifest.json`
-   - `styles.css`
-
-2. 将它们移动到：
-    `<你的仓库>/.obsidian/plugins/yh-inklight/`
-
-3. 重启 Obsidian
-
-4. 设置 → 第三方插件 → 启用 "墨光批注"
-
-**不要**从绿色 `Code` 按钮下载源代码 ZIP。Obsidian 需要的是构建后的 Release 文件。
-
-### 测试版下载
-
-如果你只想测试指定版本，可以打开：
-
-```text
-https://github.com/rezonegame/yh-inklight/releases/tag/v0.5.5
-```
-
-下载该版本的 `main.js`、`manifest.json` 和 `styles.css`，放入 `<你的仓库>/.obsidian/plugins/yh-inklight/` 后重启 Obsidian。
-
-## 使用方法
-
-### 高亮文本
-
-在 Markdown 或 PDF 中选择文本，使用浮动工具栏选择颜色、添加便签、复制选区或打开批注概览。
-
-**操作步骤：**
-1. 在文档中选择要高亮的文本
-2. 浮动工具栏会自动出现在选区上方
-3. 点击颜色按钮（黄色、橙色、粉色、绿色、蓝色、紫色）创建高亮
-4. 点击便签图标添加笔记，或点击复制图标复制选区
-5. 点击概览图标打开批注总览面板
-
-![使用墨光批注高亮](docs/images/highlight-with-axl-light.png)
-
-### 编辑器旁便签栏
-
-在 Markdown 编辑器中，便签会自动显示在编辑器右侧，与对应的高亮位置对齐。
-
-**功能说明：**
-- 便签卡片显示引用文本、笔记内容、作者和时间
-- 点击铅笔按钮进入编辑模式，按 `Cmd/Ctrl + Enter` 保存
-- 点击折叠按钮收起/展开便签内容
-- 点击删除按钮移除便签
-- 窄屏时便签栏自动隐藏，由弹层接管
-
-### 编辑便签
-
-在便签栏或批注概览中，点击铅笔按钮进入编辑模式。
-
-**编辑操作：**
-1. 点击铅笔按钮打开编辑器
-2. 在文本框中输入或修改笔记内容（支持 Markdown）
-3. 可选：修改便签标题（类型）
-4. 按 `Cmd/Ctrl + Enter` 保存，或按 `Esc` 取消
-
-![便签栏和批注概览](docs/images/sticky-notes-overview.png)
-
-### 批注概览
-
-通过侧栏面板查看、搜索、筛选和管理所有批注。
-
-**面板功能：**
-- **范围切换**：在当前文件和全库批注之间切换
-- **搜索**：输入关键词搜索高亮和笔记内容
-- **颜色筛选**：按颜色过滤批注
-- **类型筛选**：查看全部/高亮/笔记
-- **排序**：按文档顺序/最新/最早排序
-- **跳转**：点击跳转按钮定位到原文位置
-- **删除**：点击删除按钮移除批注
-- **添加笔记**：为已有高亮添加笔记
-- **导出**：将所有批注导出为 Markdown 文件
-
-### 搜索、跳转和导出
-
-**搜索功能：**
-- 在搜索框输入关键词，实时过滤匹配的批注
-- 搜索范围包括引用文本和笔记内容
-
-**跳转功能：**
-- 点击跳转按钮，编辑器自动滚动到高亮位置
-- PDF 文件会跳转到对应页面
-- 目标位置会有闪烁提示
-
-**导出功能：**
-- 点击底部的 "↑ 导出批注" 按钮
-- 选择导出模板：默认摘要、按颜色分组、只导出笔记、阅读笔记
-- 当前文件模式导出 `<原文件名>-notes.md` 或带模板后缀的 Markdown 文件
-- 全库模式导出 `inklight-all-notes.md` 或带模板后缀的全库汇总文件
-
-## 快捷键
-
-- `高亮选中文本`：`Cmd/Ctrl + Shift + H`
-- `为选区添加便签`：`Cmd/Ctrl + Alt + M`
-- `切换便签栏`：`Cmd/Ctrl + Shift + N`
-- `打开批注概览`：通过命令面板或侧栏按钮
-
-## 设置选项
-
-在 `设置 → 墨光批注` 中可以配置以下选项：
-
-- **默认高亮颜色**：选择创建高亮时的默认颜色
-- **便签宽度**：调整便签卡片的宽度（220-420px）
-- **便签显示位置**：选择便签栏显示在左侧或右侧
-- **窄屏折叠阈值**：设置便签栏自动隐藏的宽度阈值（640-1200px）
-- **显示连接线**：显示/隐藏便签与高亮之间的连接线
-- **默认作者**：设置便签的默认作者名称
-- **重命名时迁移批注**：重命名文件时自动迁移批注数据
-- **显示便签**：全局开关便签栏显示
-
-## 数据存储
-
-墨光批注将批注存储在你的仓库中：
+# 墨光批注（yh-inklight）
+
+一款非侵入式的 Obsidian 阅读 + 批注插件，支持 **EPUB / PDF / Markdown** 三种格式。在阅读时叠加高亮、便签、书签，所有批注数据单独存储在 sidecar JSON 中——**绝不会修改你的原始文档**。
+
+> 从单一的「Markdown/PDF 批注」工具，演进为覆盖 EPUB 全文阅读（foliate-js 引擎）+ 统一批注面板 + 摘录导出 + 双向溯源的综合阅读平台。
+
+---
+
+## ✨ 核心特性
+
+### 📖 EPUB 阅读（foliate-js 引擎）
+- **完整阅读体验**：渲染 / 翻页 / 滚动 / 字号 / 6 种主题（跟随 Obsidian、白、暖光、护眼绿、羊皮纸、夜间）
+- **6 色高亮 + 想法标注**：选中文本弹出浮动菜单，画线或写想法
+- **书签系统**：工具栏一键加书签，侧栏列表点击跳转
+- **全文搜索**：工具栏搜索图标，搜索当前章节正文
+- **脚注预览**：悬停脚注链接浮窗显示内容
+- **阅读进度**：自动保存位置 + 阅读时间统计 + 剩余时间估算
+- **多格式支持**：foliate 原生支持 EPUB / MOBI / AZW3 / FB2 / CBZ / TXT
+
+### 📝 统一批注面板（墨光批注侧栏）
+- **三格式统一**：Markdown / PDF / EPUB 批注汇入同一个总览面板
+- **筛选与搜索**：按颜色 / 类型筛选，关键词搜索批注内容
+- **行内编辑**：直接在面板编辑想法、添加笔记
+- **跳转**：点卡片跳回原文对应位置（Markdown 偏移 / PDF 页码 / EPUB CFI）
+- **导出**：Markdown 摘要 / 按颜色分组 / 阅读笔记等多种格式
+
+### 🔗 摘录导出 + 双向溯源（EPUB）
+- **导出摘录**：命令「导出 EPUB 摘录」→ 生成 `epub-excerpts/《书名》摘录.md`
+- **回链跳转**：摘录里的「回到原文」链接 → 点击跳回 EPUB 对应 CFI
+- **格式**：Obsidian callout + 隐藏 CFI 标记 + 回链
+
+### 📌 PDF 批注
+- 覆盖层高亮矩形 + 便签
+- 选区检测 + 颜色标注
+- 汇入统一批注面板
+
+### ✍️ Markdown 批注
+- CM6 编辑模式高亮扩展
+- 阅读模式高亮后处理
+- 便签泳道（Sticky Note Lane）
+- 点击高亮弹出便签
+
+---
+
+## 🚀 安装
+
+### 通过 BRAT（推荐）
+1. 安装 [BRAT](https://github.com/TfTHacker/obsidian42-brat) 插件
+2. BRAT → Add Plugin → 填入仓库地址：`rezonegame/yh-inklight`
+3. 安装后启用「墨光批注」
+4. **重要**：更新后请**完全退出 Obsidian 再重开**（不是 reload 插件）
+
+### 手动
+1. 从 [Releases](https://github.com/rezonegame/yh-inklight/releases) 下载 `main.js`、`manifest.json`、`styles.css`
+2. 放入 `<vault>/.obsidian/plugins/yh-inklight/`
+3. 设置 → 第三方插件 → 启用「墨光批注」
+
+### 打开 EPUB 的前置条件
+- 设置 → 文件与链接 → 开启**「检测所有文件扩展名」**
+- 这样 `.epub` 等格式才会在文件树显示
+
+---
+
+## ⚙️ 设置
+
+在 设置 → 墨光批注 中配置：
+
+| 设置 | 说明 |
+|------|------|
+| 默认高亮颜色 | 新建高亮的默认色 |
+| 默认作者 | 批注署名 |
+| EPUB 默认排版 | 分页 / 滚动 |
+| EPUB 字号 | 初始字号 |
+| EPUB 高亮样式 | 填充 / 下划线 / 波浪线 |
+| EPUB 阅读主题 | 6 种主题 |
+| EPUB 摘录目录 | 摘录导出路径（默认 `epub-excerpts`） |
+| EPUB 回链渲染 | 摘录是否生成「回到原文」链接 |
+| EPUB 脚注预览 | 是否悬停显示脚注 |
+
+---
+
+## 📂 数据存储
+
+所有批注数据存储在 `<vault>/.obsidian-annotations/` 目录下的 sidecar JSON 文件中：
+- 每个被批注的文件对应一个 `<filename>.json`
+- 包含：高亮、便签、想法、书签、阅读进度、Canvas 绑定
+- **原始文档零修改**，可随时删除 sidecar 还原
 
 ```text
 .obsidian-annotations/
   index.json
-  notes__reading__book.md.json
-  papers__example.pdf.json
+  notes__reading__book.md.json      # Markdown 批注
+  papers__example.pdf.json           # PDF 批注
+  books__novel.epub.json             # EPUB 批注（含 CFI 锚点、进度、书签）
 ```
 
-Sidecar 文件包含锚点、选中文本、颜色、便签内容、可选标题、时间戳和 PDF 页面矩形信息。
+---
 
-你的原始 `.md` 和 `.pdf` 文件保持不变。即使禁用或卸载插件，文档也不会被修改。
+## ⌨️ 命令与快捷键
 
-## 已知限制
+| 命令 | 快捷键 | 功能 |
+|------|--------|------|
+| 高亮选中文本 | `Ctrl+Shift+H` | Markdown/PDF 选区高亮 |
+| 为选中文本添加便签 | `Ctrl+Alt+M` | 添加想法 |
+| 切换批注弹层显示 | `Ctrl+Shift+N` | 显示/隐藏便签弹层 |
+| 打开批注总览 | — | 打开墨光批注侧栏 |
+| 打开 EPUB 书架 | — | 浏览 vault 内电子书 |
+| 导出 EPUB 摘录 | — | 导出当前 EPUB 批注为 Markdown |
 
-- 阅读视图的高亮基于渲染后的 DOM 文本匹配，因此不常见的主题或大量重写渲染 HTML 的插件可能会影响高亮位置。
-- PDF 支持依赖于 Obsidian 内置 PDF 查看器的 DOM 结构。
-- PDF 文本选择和矩形锚点在旋转页面或特殊 PDF 布局下可能需要改进重定位。
-- 大量批注集目前直接在侧栏中渲染，虚拟滚动计划中。
+---
 
-## 开发
+## 🛠 技术架构
+
+- **EPUB 引擎**：[foliate-js](https://github.com/johnfactotz/foliate-js) 1.0.1（单引擎，原生多格式）
+- **渲染**：foliate-view 自定义元素嵌入 Obsidian leaf，CSP/sandbox 补丁适配桌面端
+- **数据层**：sidecar JSON（`AnnotationStore`），统一 `FileAnnotationDocument`
+- **标注同步**：`renderedAnnotationMeta` 跟踪 foliate 高亮层，保证增删即时刷新
+- **非侵入**：所有批注 overlay 叠加，不触碰原文
+
+---
+
+## 📋 版本历史
+
+### v0.11.5
+- 修复工具栏搜索框 CSS `position: relative`（v0.11.4 脚本静默失败导致定位错误）
+
+### v0.11.4
+- 搜索框移到工具栏下方（贴工具栏，非容器底部）
+- 搜索功能：缓存当前 section doc，`getContents` 不可靠时回退到缓存
+- 菜单消失：标注框 / 删除框点击外部立即关闭（不再死等 8 秒或依赖 mouseleave）
+- 段落模式：移除工具栏按钮（作用不大）
+- 侧栏搜索：改为只刷新列表不重建搜索框，保持输入焦点
+
+### v0.11.0 ~ v0.11.3
+- **Phase 4-B 完成**：摘录导出 / 双向溯源 / 书签 / 脚注预览 / 全文搜索 / Canvas 集成
+- 搜索移到工具栏，回链跳转修复（HTML 注释 → hidden span）
+
+### v0.9.0 ~ v0.10.1
+- **Phase 4-A 完成**：epubjs → foliate-js 单引擎迁移，移除 epubjs 依赖
+- 统一批注系统：EPUB 批注接入墨光批注面板（与 Markdown/PDF 统一）
+- 书签系统、想法 Modal、删除链路
+
+### v0.6.0 ~ v0.8.2
+- EPUB 核心阅读（foliate 引擎接入、CSP/sandbox 修复、选区菜单、坐标映射）
+- 统一标注面板、即时刷新、颜色点修复
+
+### v0.5.x 及更早
+- Markdown / PDF 批注基础（高亮、便签栏、侧栏总览、全库搜索、导出模板）
+
+---
+
+## 🔧 开发
 
 ```bash
 npm install
-npm run dev
+npm run dev      # 开发构建
+npm run build    # 生产构建
 ```
 
-生产构建：
+类型检查：`npx tsc --noEmit`
 
-```bash
-npm run build
-```
+将 `main.js`、`manifest.json`、`styles.css` 复制到 `<vault>/.obsidian/plugins/yh-inklight/` 测试。
 
-将 `main.js`、`manifest.json` 和 `styles.css` 复制到：
+---
 
-```text
-<你的仓库>/.obsidian/plugins/yh-inklight/
-```
+## 📝 许可
 
-## 许可证
+MIT
 
-MIT。详见 [LICENSE](LICENSE)。
+## 🙏 致谢与参考
 
-## 原始项目
-
-本插件基于 [Axl Light](https://github.com/rezonegame/axl-light) 开发，感谢原作者的贡献。
-
-## 参考项目
-
-本插件的功能实现参考了以下开源项目的设计理念：
-
-- [Obsidian Highlighter](https://github.com/chrisgrieser/obsidian-highlighter) — 非侵入式高亮和侧边栏批注
-- [Obsidian Annotator](https://github.com/ivan-lednev/obsidian-annotator) — PDF 注释和便签管理
-- [Obsidian Sticky Notes](https://github.com/DeathAwe/obsidian-sticky-notes) — 便签卡片和排版算法
+- [foliate-js](https://github.com/johnfactotz/foliate-js) — EPUB 渲染引擎
+- [obsidian-weave-reader](https://github.com/) — foliate 集成、脚注/搜索/Canvas 参考
+- [ob-epub-reader](https://github.com/) — 摘录回跳、深链方案参考
+- [Axl Light](https://github.com/rezonegame/axl-light) — 原始项目基础

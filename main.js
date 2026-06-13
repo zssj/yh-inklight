@@ -34568,7 +34568,7 @@ __export(main_exports, {
   default: () => OverlayAnnotationsPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian12 = require("obsidian");
+var import_obsidian13 = require("obsidian");
 
 // src/anchor/fuzzyMatch.ts
 function findBestFuzzyMatch(source, target, expectedStart) {
@@ -39060,6 +39060,119 @@ function installFoliateCustomElementGuard(registry = customElements) {
   globalScope[GUARD_FLAG] = true;
 }
 
+// src/epub/EpubFoliatePatches.ts
+var import_obsidian12 = require("obsidian");
+function normalizeDesktopFoliateSandboxValue(attributeName, value, stack, iframeElement) {
+  if (import_obsidian12.Platform.isMobile || attributeName.toLowerCase() !== "sandbox") {
+    return null;
+  }
+  const normalizedValue = String(value || "").trim();
+  if (!normalizedValue || !/allow-scripts/i.test(normalizedValue)) {
+    return null;
+  }
+  const normalizedStack = String(stack || "").toLowerCase();
+  const iframePart = String(iframeElement?.getAttribute("part") || "").toLowerCase();
+  const shadowHostTagName = String(
+    iframeElement?.getRootNode() instanceof ShadowRoot ? iframeElement.getRootNode().host?.tagName : ""
+  ).toLowerCase();
+  const isFoliateDesktopFrame = normalizedStack.includes("foliate-js/paginator.js") || normalizedStack.includes("foliate-js/fixed-layout.js") || normalizedStack.includes("foliate") || iframePart.split(/\s+/).includes("filter") || shadowHostTagName === "foliate-view";
+  if (!isFoliateDesktopFrame) {
+    return null;
+  }
+  const seenTokens = /* @__PURE__ */ new Set();
+  const filteredTokens = normalizedValue.split(/\s+/).filter(Boolean).filter((token) => {
+    const normalizedToken = token.toLowerCase();
+    if (normalizedToken === "allow-scripts" || seenTokens.has(normalizedToken)) {
+      return false;
+    }
+    seenTokens.add(normalizedToken);
+    return true;
+  });
+  return filteredTokens.join(" ");
+}
+var desktopFoliateIframeSandboxPatchInstalled = false;
+var foliateBlobIframePatchInstalled = false;
+var foliateBlobIframeLoadTokens = /* @__PURE__ */ new WeakMap();
+function installDesktopFoliateIframeSandboxPatch() {
+  if (desktopFoliateIframeSandboxPatchInstalled || typeof HTMLIFrameElement === "undefined") {
+    return;
+  }
+  const setAttributeDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "setAttribute");
+  const originalSetAttribute = setAttributeDescriptor?.value;
+  if (!originalSetAttribute) {
+    desktopFoliateIframeSandboxPatchInstalled = true;
+    return;
+  }
+  HTMLIFrameElement.prototype.setAttribute = function patchedSetAttribute(name, value) {
+    const patchedValue = normalizeDesktopFoliateSandboxValue(
+      name,
+      String(value || ""),
+      new Error().stack,
+      this
+    );
+    Reflect.apply(originalSetAttribute, this, [name, patchedValue ?? value]);
+  };
+  desktopFoliateIframeSandboxPatchInstalled = true;
+}
+async function readBlobUrlAsText(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} ${response.statusText}`);
+  }
+  return response.text();
+}
+function installFoliateBlobIframePatch(onLoadError) {
+  if (foliateBlobIframePatchInstalled || typeof HTMLIFrameElement === "undefined") {
+    return;
+  }
+  const srcDescriptor = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "src");
+  if (!srcDescriptor?.set) {
+    foliateBlobIframePatchInstalled = true;
+    return;
+  }
+  const getIframeSrc = (iframe) => {
+    if (!srcDescriptor.get) {
+      return iframe.getAttribute("src") || "";
+    }
+    return srcDescriptor.get.call(iframe);
+  };
+  const setIframeSrc = (iframe, value) => {
+    if (!srcDescriptor.set) {
+      return;
+    }
+    srcDescriptor.set.call(iframe, value);
+  };
+  Object.defineProperty(HTMLIFrameElement.prototype, "src", {
+    configurable: true,
+    enumerable: srcDescriptor.enumerable ?? true,
+    get() {
+      return getIframeSrc(this);
+    },
+    set(value) {
+      const normalizedValue = String(value || "");
+      if (!normalizedValue.startsWith("blob:")) {
+        setIframeSrc(this, normalizedValue);
+        return;
+      }
+      const loadToken = (foliateBlobIframeLoadTokens.get(this) || 0) + 1;
+      foliateBlobIframeLoadTokens.set(this, loadToken);
+      void readBlobUrlAsText(normalizedValue).then((html) => {
+        if (foliateBlobIframeLoadTokens.get(this) !== loadToken) {
+          return;
+        }
+        this.srcdoc = html;
+      }).catch((error) => {
+        try {
+          setIframeSrc(this, normalizedValue);
+        } catch {
+        }
+        onLoadError(error);
+      });
+    }
+  });
+  foliateBlobIframePatchInstalled = true;
+}
+
 // src/epub/EpubFoliateLoader.ts
 var viewModulePromise = null;
 async function ensureViewModule() {
@@ -39070,6 +39183,10 @@ async function ensureViewModule() {
 }
 async function ensureFoliateViewRegistered() {
   installFoliateCustomElementGuard();
+  installDesktopFoliateIframeSandboxPatch();
+  installFoliateBlobIframePatch((error) => {
+    console.warn("yh-inklight: foliate blob iframe \u52A0\u8F7D\u5931\u8D25", error);
+  });
   if (customElements.get("foliate-view")) {
     return;
   }
@@ -39108,7 +39225,7 @@ var YH_INKLIGHT_ICON = `
     </g>
   </svg>
 `;
-var OverlayAnnotationsPlugin = class extends import_obsidian12.Plugin {
+var OverlayAnnotationsPlugin = class extends import_obsidian13.Plugin {
   constructor() {
     super(...arguments);
     this.settings = DEFAULT_SETTINGS;
@@ -39116,7 +39233,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian12.Plugin {
     this.renameMigrationTimer = null;
   }
   async onload() {
-    (0, import_obsidian12.addIcon)("yh-inklight-icon", YH_INKLIGHT_ICON);
+    (0, import_obsidian13.addIcon)("yh-inklight-icon", YH_INKLIGHT_ICON);
     await this.loadSettings();
     this.store = new AnnotationStore(this.app);
     await this.store.initialize();
@@ -39282,9 +39399,9 @@ var OverlayAnnotationsPlugin = class extends import_obsidian12.Plugin {
       callback: async () => {
         try {
           const path = await this.store.testWriteAccess();
-          new import_obsidian12.Notice(`\u58A8\u5149\u6279\u6CE8\u5B58\u50A8\u53EF\u5199\uFF1A${path}`);
+          new import_obsidian13.Notice(`\u58A8\u5149\u6279\u6CE8\u5B58\u50A8\u53EF\u5199\uFF1A${path}`);
         } catch {
-          new import_obsidian12.Notice("\u58A8\u5149\u6279\u6CE8\u5B58\u50A8\u4E0D\u53EF\u5199\uFF0C\u8BF7\u68C0\u67E5 .obsidian-annotations \u76EE\u5F55\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001\u3002");
+          new import_obsidian13.Notice("\u58A8\u5149\u6279\u6CE8\u5B58\u50A8\u4E0D\u53EF\u5199\uFF0C\u8BF7\u68C0\u67E5 .obsidian-annotations \u76EE\u5F55\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001\u3002");
         }
       }
     });
@@ -39301,7 +39418,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian12.Plugin {
     });
     this.registerEvent(
       this.app.vault.on("modify", async (file) => {
-        if (!(file instanceof import_obsidian12.TFile) || file.extension !== "md") {
+        if (!(file instanceof import_obsidian13.TFile) || file.extension !== "md") {
           return;
         }
         const document2 = await this.store.getDocument(file);
@@ -39317,7 +39434,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian12.Plugin {
     );
     this.registerEvent(
       this.app.vault.on("rename", async (file, oldPath) => {
-        if (!this.settings.migrateOnRename || !(file instanceof import_obsidian12.TFile) || file.extension !== "md") {
+        if (!this.settings.migrateOnRename || !(file instanceof import_obsidian13.TFile) || file.extension !== "md") {
           return;
         }
         if (this.renameMigrationTimer !== null) {
@@ -39332,7 +39449,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian12.Plugin {
     );
     this.registerEvent(
       this.app.workspace.on("file-open", async (file) => {
-        if (file instanceof import_obsidian12.TFile && ["md", "pdf"].includes(file.extension.toLowerCase())) {
+        if (file instanceof import_obsidian13.TFile && ["md", "pdf"].includes(file.extension.toLowerCase())) {
           this.popover.hide();
           await this.store.getDocument(file);
           await this.refreshAnnotations();
@@ -39348,11 +39465,11 @@ var OverlayAnnotationsPlugin = class extends import_obsidian12.Plugin {
     }
     const snapshot = await this.resolveSelection();
     if (!snapshot) {
-      new import_obsidian12.Notice("\u8BF7\u5148\u9009\u4E2D\u6587\u672C\u3002");
+      new import_obsidian13.Notice("\u8BF7\u5148\u9009\u4E2D\u6587\u672C\u3002");
       return;
     }
     const file = this.app.vault.getAbstractFileByPath(snapshot.filePath);
-    if (!(file instanceof import_obsidian12.TFile)) {
+    if (!(file instanceof import_obsidian13.TFile)) {
       return;
     }
     const highlight = {
@@ -39382,11 +39499,11 @@ var OverlayAnnotationsPlugin = class extends import_obsidian12.Plugin {
     }
     const snapshot = await this.resolveSelection();
     if (!snapshot) {
-      new import_obsidian12.Notice("\u8BF7\u5148\u9009\u4E2D\u6587\u672C\u3002");
+      new import_obsidian13.Notice("\u8BF7\u5148\u9009\u4E2D\u6587\u672C\u3002");
       return;
     }
     const file = this.app.vault.getAbstractFileByPath(snapshot.filePath);
-    if (!(file instanceof import_obsidian12.TFile)) {
+    if (!(file instanceof import_obsidian13.TFile)) {
       return;
     }
     const note = await new CommentModal(this.app, "", "").openAndRead();
@@ -39415,7 +39532,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian12.Plugin {
   }
   async refreshActiveReadingViewHighlights(filePath) {
     const file = this.app.vault.getAbstractFileByPath(filePath);
-    if (!(file instanceof import_obsidian12.TFile)) {
+    if (!(file instanceof import_obsidian13.TFile)) {
       return;
     }
     const document2 = this.store.getCachedDocument(filePath) ?? await this.store.getDocument(file);
@@ -39425,7 +39542,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian12.Plugin {
     }
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       const view = leaf.view;
-      if (!(view instanceof import_obsidian12.MarkdownView) || view.file?.path !== filePath) {
+      if (!(view instanceof import_obsidian13.MarkdownView) || view.file?.path !== filePath) {
         continue;
       }
       const previewRoot = findPreviewRoot(view);
@@ -39482,7 +39599,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian12.Plugin {
     return null;
   }
   activeEditor() {
-    const view = this.app.workspace.getActiveViewOfType(import_obsidian12.MarkdownView);
+    const view = this.app.workspace.getActiveViewOfType(import_obsidian13.MarkdownView);
     return view ? { editor: view.editor, file: view.file } : null;
   }
   async activateSidebar() {
@@ -39528,11 +39645,11 @@ var OverlayAnnotationsPlugin = class extends import_obsidian12.Plugin {
    */
   async testFoliateEngine() {
     const file = this.app.workspace.getActiveFile();
-    if (!(file instanceof import_obsidian12.TFile) || file.extension !== "epub") {
-      new import_obsidian12.Notice("\u8BF7\u5148\u9009\u4E2D\u4E00\u4E2A .epub \u6587\u4EF6\u518D\u8FD0\u884C\u6B64\u547D\u4EE4\u3002");
+    if (!(file instanceof import_obsidian13.TFile) || file.extension !== "epub") {
+      new import_obsidian13.Notice("\u8BF7\u5148\u9009\u4E2D\u4E00\u4E2A .epub \u6587\u4EF6\u518D\u8FD0\u884C\u6B64\u547D\u4EE4\u3002");
       return;
     }
-    const modal = new import_obsidian12.Modal(this.app);
+    const modal = new import_obsidian13.Modal(this.app);
     modal.titleEl.setText("foliate \u5F15\u64CE\u6D4B\u8BD5\uFF08\u5F00\u53D1\uFF09");
     modal.modalEl.style.width = "80vw";
     modal.modalEl.style.height = "85vh";
@@ -39556,17 +39673,17 @@ var OverlayAnnotationsPlugin = class extends import_obsidian12.Plugin {
         console.log("[yh-foliate] link", detail?.href);
       });
       await openBookFromBuffer(view, buffer, file.name);
-      new import_obsidian12.Notice("foliate \u5DF2\u52A0\u8F7D\uFF0C\u6253\u5F00\u63A7\u5236\u53F0\u67E5\u770B\u4E8B\u4EF6\u65E5\u5FD7\uFF08Ctrl+Shift+I\uFF09\u3002");
+      new import_obsidian13.Notice("foliate \u5DF2\u52A0\u8F7D\uFF0C\u6253\u5F00\u63A7\u5236\u53F0\u67E5\u770B\u4E8B\u4EF6\u65E5\u5FD7\uFF08Ctrl+Shift+I\uFF09\u3002");
     } catch (error) {
       console.error("[yh-foliate] test failed", error);
-      new import_obsidian12.Notice(`foliate \u6D4B\u8BD5\u5931\u8D25: ${error instanceof Error ? error.message : String(error)}`);
+      new import_obsidian13.Notice(`foliate \u6D4B\u8BD5\u5931\u8D25: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   copySelection() {
     const text = window.getSelection()?.toString() || this.activeEditor()?.editor.getSelection() || "";
     if (text) {
       navigator.clipboard.writeText(text);
-      new import_obsidian12.Notice("Copied selection");
+      new import_obsidian13.Notice("Copied selection");
     }
   }
   async handleAnnotationClick(event) {
@@ -39584,7 +39701,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian12.Plugin {
     }
     const annotationId = mark.dataset.yhId;
     const file = this.app.workspace.getActiveFile();
-    if (!annotationId || !(file instanceof import_obsidian12.TFile)) {
+    if (!annotationId || !(file instanceof import_obsidian13.TFile)) {
       return;
     }
     const document2 = this.store.getCachedDocument(file.path) ?? await this.store.getDocument(file);
@@ -39611,7 +39728,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian12.Plugin {
     }
     await sleep(100);
     const file = this.app.vault.getAbstractFileByPath(context.sourcePath);
-    if (!(file instanceof import_obsidian12.TFile)) {
+    if (!(file instanceof import_obsidian13.TFile)) {
       return;
     }
     const document2 = await this.store.getDocument(file);
@@ -39764,7 +39881,7 @@ function nthIndexOf(source, target, occurrenceIndex) {
   }
   return -1;
 }
-var CommentModal = class extends import_obsidian12.Modal {
+var CommentModal = class extends import_obsidian13.Modal {
   constructor(app, initialTitle, initialContent) {
     super(app);
     this.initialTitle = initialTitle;

@@ -2059,7 +2059,8 @@ a.yh-epub-goto-link:hover {
 }
 .yh-epub-toolbar-search {
   position: absolute;
-  top: calc(100% + 4px);
+  top: 100%;
+  margin-top: 4px;
   right: 12px;
   z-index: var(--layer-popover, 100000);
   width: 320px;

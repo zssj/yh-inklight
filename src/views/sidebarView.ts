@@ -364,9 +364,24 @@ export class AnnotationSidebarView extends ItemView {
       attr: { type: "search", placeholder: "搜索批注..." },
     });
     search.value = this.query;
-    search.addEventListener("input", async () => {
+    let searchTimer: number | null = null;
+    search.addEventListener("input", () => {
       this.query = search.value;
-      await this.render();
+      if (searchTimer !== null) {
+        window.clearTimeout(searchTimer);
+      }
+      searchTimer = window.setTimeout(async () => {
+        searchTimer = null;
+        await this.render();
+        // render 重建了搜索框，恢复焦点和光标到末尾
+        const root = this.containerEl.children[1] ?? this.containerEl;
+        const restored = root.querySelector<HTMLInputElement>(".yh-ov-search");
+        if (restored) {
+          restored.focus();
+          const len = restored.value.length;
+          restored.setSelectionRange(len, len);
+        }
+      }, 200);
     });
 
     const scope = searchRow.createEl("select", { cls: "yh-filter-select" });

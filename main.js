@@ -10564,6 +10564,10 @@ var EpubReaderView = class extends import_obsidian9.FileView {
     this.blurHandler = null;
     this.focusHandler = null;
     this.lastFlushTimestamp = 0;
+    /**
+     * 销毁当前浮动上下文菜单。
+     */
+    this.contextMenuOutsideHandler = null;
     this.handleFoliateLoad = (event) => {
       const detail = event.detail;
       const doc = detail?.doc;
@@ -10749,13 +10753,6 @@ var EpubReaderView = class extends import_obsidian9.FileView {
     });
     (0, import_obsidian9.setIcon)(searchBtn, "search");
     searchBtn.addEventListener("click", () => this.toggleToolbarSearch());
-    if (this.pluginSettings.epubParagraphMode) {
-      const paraBtn = this.toolbarEl.createEl("button", {
-        cls: "yh-epub-toolbar-btn",
-        attr: { type: "button", title: "\u6BB5\u843D\u6A21\u5F0F\uFF1A\u70B9\u51FB\u6BB5\u843D\u5B9E\u7126", "aria-label": "\u6BB5\u843D\u6A21\u5F0F" }
-      });
-      (0, import_obsidian9.setIcon)(paraBtn, "text");
-    }
     const flowBtn = this.toolbarEl.createEl("button", {
       cls: "yh-epub-toolbar-btn",
       attr: { type: "button", title: this.currentFlowMode === "paginated" ? "\u5207\u6362\u4E3A\u6EDA\u52A8" : "\u5207\u6362\u4E3A\u5206\u9875" }
@@ -11038,17 +11035,28 @@ var EpubReaderView = class extends import_obsidian9.FileView {
     menu.style.top = `${clampedTop}px`;
     document.body.appendChild(menu);
     this.contextMenuEl = menu;
+    this.contextMenuOutsideHandler = (ev) => {
+      if (this.contextMenuEl && ev.target instanceof Node && !this.contextMenuEl.contains(ev.target)) {
+        this.dismissContextMenu();
+      }
+    };
+    window.setTimeout(() => {
+      if (this.contextMenuOutsideHandler) {
+        document.addEventListener("pointerdown", this.contextMenuOutsideHandler, true);
+      }
+    }, 0);
     this.contextMenuDismissTimer = window.setTimeout(() => {
       this.dismissContextMenu();
     }, 8e3);
   }
-  /**
-   * 销毁当前浮动上下文菜单。
-   */
   dismissContextMenu() {
     if (this.contextMenuDismissTimer !== null) {
       window.clearTimeout(this.contextMenuDismissTimer);
       this.contextMenuDismissTimer = null;
+    }
+    if (this.contextMenuOutsideHandler) {
+      document.removeEventListener("pointerdown", this.contextMenuOutsideHandler, true);
+      this.contextMenuOutsideHandler = null;
     }
     if (this.contextMenuEl) {
       this.contextMenuEl.remove();
@@ -11224,8 +11232,18 @@ var EpubReaderView = class extends import_obsidian9.FileView {
       attr: { type: "button", title: "\u5220\u9664\u6807\u6CE8" },
       text: "\u5220\u9664"
     });
+    let editOutsideHandler = null;
     const close = () => {
+      if (editOutsideHandler) {
+        document.removeEventListener("pointerdown", editOutsideHandler, true);
+        editOutsideHandler = null;
+      }
       menu.remove();
+    };
+    editOutsideHandler = (ev) => {
+      if (ev.target instanceof Node && !menu.contains(ev.target)) {
+        close();
+      }
     };
     deleteBtn.addEventListener("click", async () => {
       await this.deleteAnnotation(annotationId);
@@ -11234,6 +11252,9 @@ var EpubReaderView = class extends import_obsidian9.FileView {
     menu.addEventListener("mouseleave", () => {
       close();
     });
+    window.setTimeout(() => {
+      if (editOutsideHandler) document.addEventListener("pointerdown", editOutsideHandler, true);
+    }, 0);
     const left = this.lastPointerClientX || window.innerWidth / 2;
     const top = this.lastPointerClientY || window.innerHeight / 2;
     const clampedLeft = Math.max(8, Math.min(left + 8, window.innerWidth - 120));
@@ -12193,12 +12214,12 @@ var EpubReaderView = class extends import_obsidian9.FileView {
   // 工具栏搜索（从侧栏移到工具栏）
   // ================================================================
   toggleToolbarSearch() {
-    const existing = this.containerEl.querySelector(".yh-epub-toolbar-search");
+    const existing = this.toolbarEl.querySelector(".yh-epub-toolbar-search");
     if (existing) {
       existing.remove();
       return;
     }
-    const container = this.containerEl.createDiv({ cls: "yh-epub-toolbar-search" });
+    const container = this.toolbarEl.createDiv({ cls: "yh-epub-toolbar-search" });
     const input = container.createEl("input", {
       cls: "yh-epub-toolbar-search-input",
       attr: { type: "text", placeholder: "\u641C\u7D22\u6B63\u6587\u2026" }
@@ -12231,9 +12252,16 @@ var EpubReaderView = class extends import_obsidian9.FileView {
     const needle = query.trim().toLowerCase();
     const contents = this.foliateView.renderer?.getContents?.() ?? [];
     const hits = [];
-    for (const c2 of contents) {
-      if (!c2.doc?.body) continue;
-      const bodyText = c2.doc.body.textContent || "";
+    const docs = contents.map((c2) => c2.doc).filter((d2) => Boolean(d2?.body));
+    if (docs.length === 0) {
+      const iframes = this.readerContainerEl.querySelectorAll("iframe");
+      for (const iframe of Array.from(iframes)) {
+        const d2 = iframe.contentDocument;
+        if (d2?.body) docs.push(d2);
+      }
+    }
+    for (const doc of docs) {
+      const bodyText = doc.body.textContent || "";
       const lower = bodyText.toLowerCase();
       let idx = lower.indexOf(needle);
       while (idx >= 0 && hits.length < 50) {
@@ -12499,9 +12527,23 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
       attr: { type: "search", placeholder: "\u641C\u7D22\u6279\u6CE8..." }
     });
     search2.value = this.query;
-    search2.addEventListener("input", async () => {
+    let searchTimer = null;
+    search2.addEventListener("input", () => {
       this.query = search2.value;
-      await this.render();
+      if (searchTimer !== null) {
+        window.clearTimeout(searchTimer);
+      }
+      searchTimer = window.setTimeout(async () => {
+        searchTimer = null;
+        await this.render();
+        const root = this.containerEl.children[1] ?? this.containerEl;
+        const restored = root.querySelector(".yh-ov-search");
+        if (restored) {
+          restored.focus();
+          const len = restored.value.length;
+          restored.setSelectionRange(len, len);
+        }
+      }, 200);
     });
     const scope = searchRow.createEl("select", { cls: "yh-filter-select" });
     scope.createEl("option", { text: "\u5F53\u524D\u6587\u4EF6", value: "current" });

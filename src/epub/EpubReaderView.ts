@@ -399,14 +399,7 @@ export class EpubReaderView extends FileView {
 			setIcon(searchBtn, "search");
 			searchBtn.addEventListener("click", () => this.toggleToolbarSearch());
 
-			// 段落模式按钮（Phase 4-B P3）
-			if (this.pluginSettings.epubParagraphMode) {
-				const paraBtn = this.toolbarEl.createEl("button", {
-					cls: "yh-epub-toolbar-btn",
-					attr: { type: "button", title: "段落模式：点击段落实焦", "aria-label": "段落模式" },
-				});
-				setIcon(paraBtn, "text");
-			}
+			
 		const flowBtn = this.toolbarEl.createEl("button", {
 			cls: "yh-epub-toolbar-btn",
 			attr: { type: "button", title: this.currentFlowMode === "paginated" ? "切换为滚动" : "切换为分页" },
@@ -723,6 +716,18 @@ export class EpubReaderView extends FileView {
 		document.body.appendChild(menu);
 		this.contextMenuEl = menu;
 
+		// 点击菜单外部关闭（立即响应，不等 8 秒）
+		this.contextMenuOutsideHandler = (ev: PointerEvent) => {
+			if (this.contextMenuEl && ev.target instanceof Node && !this.contextMenuEl.contains(ev.target)) {
+				this.dismissContextMenu();
+			}
+		};
+		window.setTimeout(() => {
+			if (this.contextMenuOutsideHandler) {
+				document.addEventListener("pointerdown", this.contextMenuOutsideHandler, true);
+			}
+		}, 0);
+
 		this.contextMenuDismissTimer = window.setTimeout(() => {
 			this.dismissContextMenu();
 		}, 8_000);
@@ -731,10 +736,16 @@ export class EpubReaderView extends FileView {
 	/**
 	 * 销毁当前浮动上下文菜单。
 	 */
+	private contextMenuOutsideHandler: ((ev: PointerEvent) => void) | null = null;
+
 	private dismissContextMenu(): void {
 		if (this.contextMenuDismissTimer !== null) {
 			window.clearTimeout(this.contextMenuDismissTimer);
 			this.contextMenuDismissTimer = null;
+		}
+		if (this.contextMenuOutsideHandler) {
+			document.removeEventListener("pointerdown", this.contextMenuOutsideHandler, true);
+			this.contextMenuOutsideHandler = null;
 		}
 
 		if (this.contextMenuEl) {
@@ -937,8 +948,18 @@ export class EpubReaderView extends FileView {
 			text: "删除",
 		});
 
+		let editOutsideHandler: ((ev: PointerEvent) => void) | null = null;
 		const close = () => {
+			if (editOutsideHandler) {
+				document.removeEventListener("pointerdown", editOutsideHandler, true);
+				editOutsideHandler = null;
+			}
 			menu.remove();
+		};
+		editOutsideHandler = (ev: PointerEvent) => {
+			if (ev.target instanceof Node && !menu.contains(ev.target)) {
+				close();
+			}
 		};
 
 		deleteBtn.addEventListener("click", async () => {
@@ -949,6 +970,10 @@ export class EpubReaderView extends FileView {
 		menu.addEventListener("mouseleave", () => {
 			close();
 		});
+		// 点击菜单外部关闭（用 editOutsideHandler）
+		window.setTimeout(() => {
+			if (editOutsideHandler) document.addEventListener("pointerdown", editOutsideHandler, true);
+		}, 0);
 
 		// 定位到点击位置附近（用最近一次 pointerdown 坐标，foliate show-annotation 在点击后触发）
 		const left = this.lastPointerClientX || window.innerWidth / 2;
@@ -2052,9 +2077,9 @@ export class EpubReaderView extends FileView {
 	// ================================================================
 
 	private toggleToolbarSearch(): void {
-		const existing = this.containerEl.querySelector(".yh-epub-toolbar-search");
+		const existing = this.toolbarEl.querySelector(".yh-epub-toolbar-search");
 		if (existing) { existing.remove(); return; }
-		const container = this.containerEl.createDiv({ cls: "yh-epub-toolbar-search" });
+		const container = this.toolbarEl.createDiv({ cls: "yh-epub-toolbar-search" });
 		const input = container.createEl("input", {
 			cls: "yh-epub-toolbar-search-input",
 			attr: { type: "text", placeholder: "搜索正文…" },
@@ -2079,9 +2104,17 @@ export class EpubReaderView extends FileView {
 		const needle = query.trim().toLowerCase();
 		const contents = this.foliateView.renderer?.getContents?.() ?? [];
 		const hits: Array<{ cfi: string; text: string }> = [];
-		for (const c of contents) {
-			if (!c.doc?.body) continue;
-			const bodyText = c.doc.body.textContent || "";
+		// fallback: getContents 为空时，从 foliate iframe 直接取 doc
+		const docs: Document[] = contents.map((c) => c.doc).filter((d): d is Document => Boolean(d?.body));
+		if (docs.length === 0) {
+			const iframes = this.readerContainerEl.querySelectorAll("iframe");
+			for (const iframe of Array.from(iframes)) {
+				const d = (iframe as HTMLIFrameElement).contentDocument;
+				if (d?.body) docs.push(d);
+			}
+		}
+		for (const doc of docs) {
+			const bodyText = doc.body.textContent || "";
 			const lower = bodyText.toLowerCase();
 			let idx = lower.indexOf(needle);
 			while (idx >= 0 && hits.length < 50) {
@@ -2095,6 +2128,7 @@ export class EpubReaderView extends FileView {
 			}
 			if (hits.length > 0) break;
 		}
+		// 修复：上面的 for...of 用了 docs，需要把原来的 contents loop 替换
 		if (hits.length === 0) { resultsEl.createDiv({ cls: "yh-epub-toolbar-search-empty", text: "未找到" }); return; }
 		for (const h of hits) {
 			const btn = resultsEl.createEl("button", { cls: "yh-epub-toolbar-search-hit", attr: { type: "button" } });

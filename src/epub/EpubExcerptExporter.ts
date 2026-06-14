@@ -31,6 +31,8 @@ import {
 	EpubCommentAnnotation,
 	EpubHighlightAnnotation,
 	FileAnnotationDocument,
+	PdfCommentAnnotation,
+	PdfHighlightAnnotation,
 } from "../storage/types";
 import { AnnotationStore } from "../storage/annotationStore";
 
@@ -67,8 +69,9 @@ export class EpubExcerptExporter {
 	 */
 	async exportToFile(file: TFile): Promise<TFile | null> {
 		const document = await this.options.store.getDocument(file);
-		const highlights = document.epubHighlights;
-		const comments = document.epubComments;
+		const isPdf = file.extension.toLowerCase() === "pdf";
+		const highlights = isPdf ? document.pdfHighlights : document.epubHighlights;
+		const comments = isPdf ? document.pdfComments : document.epubComments;
 
 		if (highlights.length === 0 && comments.length === 0) {
 			new Notice("该书暂无标注，无需导出。");
@@ -144,8 +147,8 @@ export class EpubExcerptExporter {
 		parts.push(`title: 《${title}》${isPdf ? "PDF" : ""}摘录`);
 		parts.push(`source: ${file.path}`);
 		parts.push(`exportedAt: ${now.toISOString()}`);
-		parts.push(`highlights: ${document.epubHighlights.length}`);
-		parts.push(`notes: ${document.epubComments.length}`);
+		parts.push(`highlights: ${isPdf ? document.pdfHighlights.length : document.epubHighlights.length}`);
+		parts.push(`notes: ${isPdf ? document.pdfComments.length : document.epubComments.length}`);
 		parts.push("---");
 		parts.push("");
 		parts.push(`# 《${title}》摘录`);
@@ -154,7 +157,7 @@ export class EpubExcerptExporter {
 		// 合并并按创建时间倒序（最新的在前）
 		const entries = this.collectEntries(document, isPdf);
 		for (const entry of entries) {
-			parts.push(this.buildEntryBlock(entry, isPdf));
+			parts.push(this.buildEntryBlock(entry, isPdf, file));
 			parts.push("");
 		}
 
@@ -167,36 +170,73 @@ export class EpubExcerptExporter {
 	}
 
 	private collectEntries(document: FileAnnotationDocument, isPdf = false): ExcerptEntry[] {
-		const highlights: ExcerptEntry[] = (isPdf ? document.pdfHighlights : document.epubHighlights).map((h: any) => ({
+		if (isPdf) {
+			return [
+				...document.pdfHighlights.map((highlight) => this.pdfHighlightToEntry(highlight)),
+				...document.pdfComments.map((comment) => this.pdfCommentToEntry(comment)),
+			].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+		}
+
+		const highlights: ExcerptEntry[] = document.epubHighlights.map((h) => ({
 			id: h.id,
 			kind: "highlight",
 			color: h.color,
 			selectedText: h.anchor.selectedText,
 			chapter: h.anchor.chapter,
 			cfiRange: h.anchor.cfiRange,
+			pageNumber: null,
 			note: "",
 			createdAt: h.createdAt,
 		}));
-		const comments: ExcerptEntry[] = (isPdf ? document.pdfComments : document.epubComments).map((c: any) => ({
+		const comments: ExcerptEntry[] = document.epubComments.map((c) => ({
 			id: c.id,
 			kind: "comment",
 			color: c.color,
 			selectedText: c.anchor.selectedText,
 			chapter: c.anchor.chapter,
 			cfiRange: c.anchor.cfiRange,
+			pageNumber: null,
 			note: c.note,
 			createdAt: c.createdAt,
 		}));
 		return [...highlights, ...comments].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 	}
 
-	/** 构建单条标注的 callout 块（含 CFI 注释 + 回链）。 */
-	private buildEntryBlock(entry: ExcerptEntry, isPdf = false): string {
+	private pdfHighlightToEntry(highlight: PdfHighlightAnnotation): ExcerptEntry {
+		return {
+			id: highlight.id,
+			kind: "highlight",
+			color: highlight.color,
+			selectedText: highlight.anchor.selectedText,
+			chapter: `Page ${highlight.anchor.pageNumber}`,
+			cfiRange: "",
+			pageNumber: highlight.anchor.pageNumber,
+			note: "",
+			createdAt: highlight.createdAt,
+		};
+	}
+
+	private pdfCommentToEntry(comment: PdfCommentAnnotation): ExcerptEntry {
+		return {
+			id: comment.id,
+			kind: "comment",
+			color: comment.color,
+			selectedText: comment.anchor.selectedText,
+			chapter: `Page ${comment.anchor.pageNumber}`,
+			cfiRange: "",
+			pageNumber: comment.anchor.pageNumber,
+			note: comment.content,
+			createdAt: comment.createdAt,
+		};
+	}
+
+	private buildEntryBlock(entry: ExcerptEntry, isPdf = false, file?: TFile): string {
 		const blockId = `${isPdf ? "pdf" : "epub"}-${entry.id}`;
 		const colorMeta = COLOR_TO_CALLOUT_META[entry.color] ?? "yellow";
 		const dateLabel = this.formatDate(new Date(entry.createdAt));
-		const chapterLabel = entry.chapter?.trim() || "未分类章节";
-		const header = `> [!inklight-epub|${colorMeta}] ${chapterLabel} · ${dateLabel} ^${blockId}`;
+		const chapterLabel = isPdf ? `Page ${entry.pageNumber ?? "?"}` : entry.chapter?.trim() || "Untitled section";
+		const calloutType = isPdf ? "inklight-pdf" : "inklight-epub";
+		const header = `> [!${calloutType}|${colorMeta}] ${chapterLabel} - ${dateLabel} ^${blockId}`;
 
 		const lines: string[] = [header];
 		for (const line of entry.selectedText.split(/\r?\n/)) {
@@ -206,21 +246,30 @@ export class EpubExcerptExporter {
 		if (entry.kind === "comment" && entry.note.trim()) {
 			lines.push(">");
 			for (const line of entry.note.split(/\r?\n/)) {
-				lines.push(`> 💡 ${line}`);
+				lines.push(`> Note: ${line}`);
 			}
 		}
 
 		if (this.options.backlinkRendering) {
 			lines.push(">");
-			lines.push(`> [回到原文](#^${blockId})`);
+			if (isPdf && file) {
+				const link = this.options.app.fileManager.generateMarkdownLink(
+					file,
+					"",
+					`#page=${entry.pageNumber ?? 1}`,
+					"Back to source",
+				);
+				lines.push(`> ${link}`);
+			} else {
+				lines.push(`> [Back to source](#^${blockId})`);
+			}
 		}
 
-		// CFI 嵌入 callout 内隐藏 span, EpubGotoHandler 据此定位
-		const cfiLine = isPdf
-				? `> <span style="display:none">pdf-page:${entry.pageNumber}</span>`
-				: `> <span style="display:none" data-yh-cfi="${entry.cfiRange}"></span>`;
+		const anchorLine = isPdf
+			? `> <span style="display:none" data-yh-pdf-page="${entry.pageNumber ?? ""}" data-yh-pdf-id="${entry.id}"></span>`
+			: `> <span style="display:none" data-yh-cfi="${entry.cfiRange}"></span>`;
 
-		return `${lines.join("\n")}\n${cfiLine}\n\n---`;
+		return `${lines.join("\n")}\n${anchorLine}\n\n---`;
 	}
 
 	/** 解析导出目标路径：`${excerptFolder}/《书名》摘录.md`。 */
@@ -253,7 +302,7 @@ export class EpubExcerptExporter {
 }
 
 interface ExcerptEntry {
-	pageNumber?: number;
+	pageNumber?: number | null;
 	id: string;
 	kind: "highlight" | "comment";
 	color: AnnotationColor;

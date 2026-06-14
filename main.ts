@@ -163,24 +163,11 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     this.registerCommands();
     this.registerEvents();
     this.pdfLayer.register();
-    // Phase 5：侧栏标题栏的 PDF 按钮（书签/导出）
-    document.addEventListener("yh-pdf-bookmark-toolbar", (() => {
-      const file = this.app.workspace.getActiveFile();
-      if (!file || file.extension.toLowerCase() !== "pdf") return;
-      const page = this.pdfLayer.getCurrentPageNumber();
-      if (page < 1) { new Notice("无法获取当前页码"); return; }
-      void this.addPdfBookmark(file, page);
-    }) as EventListener);
-    document.addEventListener("yh-pdf-export-toolbar", (() => {
-      const file = this.app.workspace.getActiveFile();
-      if (!file || file.extension.toLowerCase() !== "pdf") return;
-      void this.epubExcerptExporter.exportToFile(file);
-    }) as EventListener);
-    // Phase 5：书签列表点击跳转到对应页
+    // Phase 5：保留批注卡片跳页桥接；侧栏 PDF 工具按钮直接调用插件公开方法。
     document.addEventListener("yh-pdf-goto-page", ((event: Event) => {
       const detail = (event as CustomEvent).detail as { page: number } | undefined;
       if (!detail?.page || detail.page < 1) return;
-      void this.gotoPdfPage(detail.page);
+      void this.gotoPdfPageFromSidebar(detail.page);
     }) as EventListener);
     this.stickyLane.register();
     this.epubExcerptExporter = new EpubExcerptExporter({
@@ -248,7 +235,40 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     await this.stickyLane.render();
   }
 
-  private async addPdfBookmark(file: TFile, page: number): Promise<void> {
+  getCurrentPdfPageNumber(): number {
+    return this.pdfViewerAdapter.getCurrentPageNumber();
+  }
+
+  async addPdfBookmarkFromActivePage(): Promise<void> {
+    const file = this.pdfViewerAdapter.getActiveFile();
+    const page = this.pdfViewerAdapter.getCurrentPageNumber();
+    if (!file || file.extension.toLowerCase() !== "pdf" || page < 1) {
+      new Notice("无法获取当前 PDF 页码");
+      return;
+    }
+    await this.addPdfBookmark(file, page);
+  }
+
+  async removePdfBookmark(file: TFile, bookmarkId: string): Promise<void> {
+    await this.store.removeBookmark(file, bookmarkId);
+    await this.refreshAnnotations();
+    new Notice("已删除 PDF 书签");
+  }
+
+  async exportCurrentPdfExcerpts(): Promise<TFile | null> {
+    const file = this.pdfViewerAdapter.getActiveFile() ?? this.app.workspace.getActiveFile();
+    if (!file || file.extension.toLowerCase() !== "pdf") {
+      new Notice("请先打开一个 PDF 文件");
+      return null;
+    }
+    return this.epubExcerptExporter.exportToFile(file);
+  }
+
+  async gotoPdfPageFromSidebar(pageNumber: number): Promise<void> {
+    await this.gotoPdfPage(pageNumber);
+  }
+
+  async addPdfBookmark(file: TFile, page: number): Promise<void> {
     if (file.extension.toLowerCase() !== "pdf" || page < 1) {
       new Notice("无法获取当前 PDF 页码");
       return;
@@ -397,12 +417,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       id: "export-pdf-excerpts",
       name: "导出 PDF 摘录",
       callback: async () => {
-        const file = this.app.workspace.getActiveFile();
-        if (!file || file.extension.toLowerCase() !== "pdf") {
-          new Notice("请先打开一个 PDF 文件");
-          return;
-        }
-        await this.epubExcerptExporter.exportToFile(file);
+        await this.exportCurrentPdfExcerpts();
       },
     });
 

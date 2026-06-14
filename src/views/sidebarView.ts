@@ -22,6 +22,7 @@ import {
   HighlightAnnotation,
   PdfCommentAnnotation,
   PdfHighlightAnnotation,
+  ReadingBookmark,
 } from "../storage/types";
 
 export const ANNOTATION_SIDEBAR_VIEW = "yh-inklight-sidebar";
@@ -76,6 +77,7 @@ export class AnnotationSidebarView extends ItemView {
   private type: TypeFilter = "all";
   private sort: AnnotationSortMode = "document";
   private exportFormat: AnnotationExportFormat = "summary";
+  private pdfBookmarksOpen = false;
   private renderToken = 0;
   private renderTimer: number | null = null;
 
@@ -130,6 +132,14 @@ export class AnnotationSidebarView extends ItemView {
       this.annotationScope === "all" ? await this.plugin.store.getIndexedDocuments() : [await this.plugin.store.getDocument(file!)];
     if (token !== this.renderToken) {
       return;
+    }
+    if (
+      this.annotationScope === "current" &&
+      file instanceof TFile &&
+      file.extension.toLowerCase() === "pdf" &&
+      documents[0]
+    ) {
+      this.renderPdfToolPanel(container, file, documents[0]);
     }
     const rawCards = documents.flatMap((document) => this.buildCards(document));
     const cards = this.filterCards(rawCards);
@@ -378,85 +388,118 @@ export class AnnotationSidebarView extends ItemView {
 
   private renderHeader(container: Element): void {
     const header = container.createDiv({ cls: "yh-ov-head" });
-    header.createSpan({ cls: "yh-ov-title", text: "墨光批注" });
+    header.createSpan({ cls: "yh-ov-title", text: "Inklight" });
     const actions = header.createDiv({ cls: "yh-ov-head-actions" });
 
-    // PDF 工具按钮（仅当前文件是 PDF 时显示）
     const file = this.app.workspace.getActiveFile();
     if (file instanceof TFile && file.extension.toLowerCase() === "pdf") {
       const bookmarkBtn = actions.createEl("button", {
         cls: "yh-icon-btn yh-pdf-side-btn",
-        text: "★",
-        attr: { type: "button", title: "为当前 PDF 页面添加书签", "aria-label": "为当前 PDF 页面添加书签" },
+        attr: { type: "button", title: "Add page bookmark", "aria-label": "Add page bookmark" },
       });
-      bookmarkBtn.addEventListener("click", () => {
-        document.dispatchEvent(new CustomEvent("yh-pdf-bookmark-toolbar"));
+      setIcon(bookmarkBtn, "bookmark-plus");
+      bookmarkBtn.addEventListener("click", async () => {
+        await this.plugin.addPdfBookmarkFromActivePage();
+        this.pdfBookmarksOpen = true;
+        this.requestRender();
       });
 
       const listBtn = actions.createEl("button", {
-        cls: "yh-icon-btn yh-pdf-side-btn",
-        text: "☰",
-        attr: { type: "button", title: "显示书签列表", "aria-label": "显示书签列表" },
+        cls: `yh-icon-btn yh-pdf-side-btn${this.pdfBookmarksOpen ? " is-active" : ""}`,
+        attr: { type: "button", title: "Toggle bookmarks", "aria-label": "Toggle bookmarks" },
       });
-      listBtn.addEventListener("click", async () => {
-        if (!(file instanceof TFile)) return;
-        const doc = await this.plugin.store.getDocument(file);
-        const bookmarks = doc.bookmarks.filter((b) => b.type === "pdf-bookmark");
-        if (bookmarks.length === 0) {
-          new Notice("暂无书签（点书签图标添加当前页）");
-          return;
-        }
-        const sorted = bookmarks.sort((a, b) =>
-          (a.position || "").localeCompare(b.position || "", undefined, { numeric: true })
-        );
-        // 用 Menu 显示可点击书签列表
-        const { Menu } = await import("obsidian");
-        const menu = new Menu();
-        for (const b of sorted) {
-          const pageStr = b.position?.replace("page=", "") ?? "?";
-          const page = parseInt(pageStr, 10);
-          menu.addItem((item) => {
-            item.setTitle(`跳转到第 ${pageStr} 页`).setIcon("arrow-right").onClick(() => {
-              document.dispatchEvent(new CustomEvent("yh-pdf-goto-page", { detail: { page } }));
-            });
-          });
-          menu.addItem((item) => {
-            item.setTitle(`删除第 ${pageStr} 页书签`).setIcon("trash-2").onClick(async () => {
-              await this.plugin.store.removeBookmark(file, b.id);
-              await this.plugin.refreshAnnotations();
-              new Notice(`已删除第 ${pageStr} 页书签`);
-            });
-          });
-        }
-        const rect = listBtn.getBoundingClientRect();
-        menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
+      setIcon(listBtn, "list-checks");
+      listBtn.addEventListener("click", () => {
+        this.pdfBookmarksOpen = !this.pdfBookmarksOpen;
+        this.requestRender();
       });
 
       const exportBtn = actions.createEl("button", {
         cls: "yh-icon-btn yh-pdf-side-btn",
-        text: "↑",
-        attr: { type: "button", title: "导出 PDF 摘录", "aria-label": "导出 PDF 摘录" },
+        attr: { type: "button", title: "Export PDF excerpts", "aria-label": "Export PDF excerpts" },
       });
-      exportBtn.addEventListener("click", () => {
-        document.dispatchEvent(new CustomEvent("yh-pdf-export-toolbar"));
+      setIcon(exportBtn, "download");
+      exportBtn.addEventListener("click", async () => {
+        await this.plugin.exportCurrentPdfExcerpts();
       });
     }
 
     const refresh = actions.createEl("button", {
       cls: "yh-icon-btn yh-ov-refresh",
-      text: "↻",
-      attr: { type: "button", title: "刷新批注", "aria-label": "刷新批注" },
+      attr: { type: "button", title: "Refresh", "aria-label": "Refresh annotations" },
     });
+    setIcon(refresh, "refresh-cw");
     refresh.addEventListener("click", () => this.requestRender());
 
     const close = actions.createEl("button", {
       cls: "yh-icon-btn yh-ov-close",
-      text: "×",
-      attr: { type: "button", title: "Close panel", "aria-label": "关闭墨光批注面板" },
+      attr: { type: "button", title: "Close panel", "aria-label": "Close panel" },
     });
+    setIcon(close, "x");
     close.addEventListener("click", () => {
       void this.leaf.detach();
     });
+  }
+
+  private renderPdfToolPanel(container: Element, file: TFile, document: FileAnnotationDocument): void {
+    if (!this.pdfBookmarksOpen) {
+      return;
+    }
+
+    const panel = container.createDiv({ cls: "yh-pdf-tool-panel" });
+    const head = panel.createDiv({ cls: "yh-pdf-tool-head" });
+    head.createDiv({ cls: "yh-pdf-tool-title", text: "PDF bookmarks" });
+    const currentPage = this.plugin.getCurrentPdfPageNumber();
+    head.createDiv({
+      cls: "yh-pdf-tool-meta",
+      text: currentPage > 0 ? `Page ${currentPage}` : "Page unknown",
+    });
+
+    const bookmarks = document.bookmarks
+      .filter((bookmark) => bookmark.type === "pdf-bookmark")
+      .map((bookmark) => ({ bookmark, page: this.parsePdfBookmarkPage(bookmark) }))
+      .filter((item) => item.page > 0)
+      .sort((left, right) => left.page - right.page || left.bookmark.createdAt.localeCompare(right.bookmark.createdAt));
+
+    const list = panel.createDiv({ cls: "yh-pdf-bookmark-list" });
+    if (bookmarks.length === 0) {
+      list.createDiv({ cls: "yh-empty", text: "No bookmarks yet. Use the bookmark button to add the current page." });
+      return;
+    }
+
+    for (const { bookmark, page } of bookmarks) {
+      const row = list.createDiv({ cls: `yh-pdf-bookmark-row${page === currentPage ? " is-current" : ""}` });
+      const jump = row.createEl("button", {
+        cls: "yh-pdf-bookmark-main",
+        attr: { type: "button", title: `Jump to page ${page}` },
+      });
+      jump.createSpan({ cls: "yh-pdf-bookmark-page", text: `Page ${page}` });
+      jump.createSpan({ cls: "yh-pdf-bookmark-label", text: bookmark.label || `Page ${page}` });
+      jump.addEventListener("click", async () => {
+        await this.plugin.gotoPdfPageFromSidebar(page);
+        this.requestRender();
+      });
+
+      const remove = row.createEl("button", {
+        cls: "yh-icon-btn yh-pdf-bookmark-delete",
+        attr: { type: "button", title: `Delete page ${page} bookmark`, "aria-label": `Delete page ${page} bookmark` },
+      });
+      setIcon(remove, "trash-2");
+      remove.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        await this.plugin.removePdfBookmark(file, bookmark.id);
+        this.pdfBookmarksOpen = true;
+        this.requestRender();
+      });
+    }
+  }
+
+  private parsePdfBookmarkPage(bookmark: ReadingBookmark): number {
+    const match = /^page=(\d+)$/.exec(bookmark.position ?? "");
+    if (!match) {
+      return 0;
+    }
+    return Number.parseInt(match[1], 10);
   }
 
   private renderControls(container: Element): void {

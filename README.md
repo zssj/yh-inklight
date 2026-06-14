@@ -121,6 +121,11 @@
 
 ## 📋 版本历史
 
+### v0.16.1
+- 重构：PDF 书签/列表/删除/导出入口收拢到「墨光批注」侧栏，不再依赖临时 Menu 或 document 事件
+- 新增：侧栏内固定 PDF bookmarks 面板，支持点击跳转、当前页提示、逐条删除
+- 修复：PDF 摘录导出改为 PDF/EPUB 分支，PDF comment 使用 content 字段并生成 page anchor
+
 ### v0.16.0
 - 新增：PDF Viewer Adapter，统一当前 PDF、当前页、页数、页面元素、跳转与 pdf.js 生命周期入口
 - 优化：PDF 进度恢复、侧栏批注跳转、书签跳转统一走 adapter

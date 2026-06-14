@@ -1,9 +1,7 @@
 "use strict";
-var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
-var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __typeError = (msg) => {
   throw TypeError(msg);
@@ -24,14 +22,6 @@ var __copyProps = (to, from, except, desc) => {
   }
   return to;
 };
-var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
-  // If the importer is in node compatibility mode or this is not an ESM
-  // file that has been converted to a CommonJS file using a Babel-
-  // compatible transform (i.e. "__esModule" has not been set), then set
-  // "default" to the CommonJS "module.exports" for node compatibility.
-  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
-  mod
-));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 var __accessCheck = (obj, member, msg) => member.has(obj) || __typeError("Cannot " + msg);
@@ -12734,6 +12724,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.type = "all";
     this.sort = "document";
     this.exportFormat = "summary";
+    this.pdfBookmarksOpen = false;
     this.renderToken = 0;
     this.renderTimer = null;
   }
@@ -12775,6 +12766,9 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     const documents = this.annotationScope === "all" ? await this.plugin.store.getIndexedDocuments() : [await this.plugin.store.getDocument(file)];
     if (token !== this.renderToken) {
       return;
+    }
+    if (this.annotationScope === "current" && file instanceof import_obsidian11.TFile && file.extension.toLowerCase() === "pdf" && documents[0]) {
+      this.renderPdfToolPanel(container, file, documents[0]);
     }
     const rawCards = documents.flatMap((document2) => this.buildCards(document2));
     const cards = this.filterCards(rawCards);
@@ -12970,78 +12964,102 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
   }
   renderHeader(container) {
     const header = container.createDiv({ cls: "yh-ov-head" });
-    header.createSpan({ cls: "yh-ov-title", text: "\u58A8\u5149\u6279\u6CE8" });
+    header.createSpan({ cls: "yh-ov-title", text: "Inklight" });
     const actions = header.createDiv({ cls: "yh-ov-head-actions" });
     const file = this.app.workspace.getActiveFile();
     if (file instanceof import_obsidian11.TFile && file.extension.toLowerCase() === "pdf") {
       const bookmarkBtn = actions.createEl("button", {
         cls: "yh-icon-btn yh-pdf-side-btn",
-        text: "\u2605",
-        attr: { type: "button", title: "\u4E3A\u5F53\u524D PDF \u9875\u9762\u6DFB\u52A0\u4E66\u7B7E", "aria-label": "\u4E3A\u5F53\u524D PDF \u9875\u9762\u6DFB\u52A0\u4E66\u7B7E" }
+        attr: { type: "button", title: "Add page bookmark", "aria-label": "Add page bookmark" }
       });
-      bookmarkBtn.addEventListener("click", () => {
-        document.dispatchEvent(new CustomEvent("yh-pdf-bookmark-toolbar"));
+      (0, import_obsidian11.setIcon)(bookmarkBtn, "bookmark-plus");
+      bookmarkBtn.addEventListener("click", async () => {
+        await this.plugin.addPdfBookmarkFromActivePage();
+        this.pdfBookmarksOpen = true;
+        this.requestRender();
       });
       const listBtn = actions.createEl("button", {
-        cls: "yh-icon-btn yh-pdf-side-btn",
-        text: "\u2630",
-        attr: { type: "button", title: "\u663E\u793A\u4E66\u7B7E\u5217\u8868", "aria-label": "\u663E\u793A\u4E66\u7B7E\u5217\u8868" }
+        cls: `yh-icon-btn yh-pdf-side-btn${this.pdfBookmarksOpen ? " is-active" : ""}`,
+        attr: { type: "button", title: "Toggle bookmarks", "aria-label": "Toggle bookmarks" }
       });
-      listBtn.addEventListener("click", async () => {
-        if (!(file instanceof import_obsidian11.TFile)) return;
-        const doc = await this.plugin.store.getDocument(file);
-        const bookmarks = doc.bookmarks.filter((b3) => b3.type === "pdf-bookmark");
-        if (bookmarks.length === 0) {
-          new import_obsidian11.Notice("\u6682\u65E0\u4E66\u7B7E\uFF08\u70B9\u4E66\u7B7E\u56FE\u6807\u6DFB\u52A0\u5F53\u524D\u9875\uFF09");
-          return;
-        }
-        const sorted = bookmarks.sort(
-          (a3, b3) => (a3.position || "").localeCompare(b3.position || "", void 0, { numeric: true })
-        );
-        const { Menu } = await import("obsidian");
-        const menu = new Menu();
-        for (const b3 of sorted) {
-          const pageStr = b3.position?.replace("page=", "") ?? "?";
-          const page = parseInt(pageStr, 10);
-          menu.addItem((item) => {
-            item.setTitle(`\u8DF3\u8F6C\u5230\u7B2C ${pageStr} \u9875`).setIcon("arrow-right").onClick(() => {
-              document.dispatchEvent(new CustomEvent("yh-pdf-goto-page", { detail: { page } }));
-            });
-          });
-          menu.addItem((item) => {
-            item.setTitle(`\u5220\u9664\u7B2C ${pageStr} \u9875\u4E66\u7B7E`).setIcon("trash-2").onClick(async () => {
-              await this.plugin.store.removeBookmark(file, b3.id);
-              await this.plugin.refreshAnnotations();
-              new import_obsidian11.Notice(`\u5DF2\u5220\u9664\u7B2C ${pageStr} \u9875\u4E66\u7B7E`);
-            });
-          });
-        }
-        const rect = listBtn.getBoundingClientRect();
-        menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
+      (0, import_obsidian11.setIcon)(listBtn, "list-checks");
+      listBtn.addEventListener("click", () => {
+        this.pdfBookmarksOpen = !this.pdfBookmarksOpen;
+        this.requestRender();
       });
       const exportBtn = actions.createEl("button", {
         cls: "yh-icon-btn yh-pdf-side-btn",
-        text: "\u2191",
-        attr: { type: "button", title: "\u5BFC\u51FA PDF \u6458\u5F55", "aria-label": "\u5BFC\u51FA PDF \u6458\u5F55" }
+        attr: { type: "button", title: "Export PDF excerpts", "aria-label": "Export PDF excerpts" }
       });
-      exportBtn.addEventListener("click", () => {
-        document.dispatchEvent(new CustomEvent("yh-pdf-export-toolbar"));
+      (0, import_obsidian11.setIcon)(exportBtn, "download");
+      exportBtn.addEventListener("click", async () => {
+        await this.plugin.exportCurrentPdfExcerpts();
       });
     }
     const refresh = actions.createEl("button", {
       cls: "yh-icon-btn yh-ov-refresh",
-      text: "\u21BB",
-      attr: { type: "button", title: "\u5237\u65B0\u6279\u6CE8", "aria-label": "\u5237\u65B0\u6279\u6CE8" }
+      attr: { type: "button", title: "Refresh", "aria-label": "Refresh annotations" }
     });
+    (0, import_obsidian11.setIcon)(refresh, "refresh-cw");
     refresh.addEventListener("click", () => this.requestRender());
     const close = actions.createEl("button", {
       cls: "yh-icon-btn yh-ov-close",
-      text: "\xD7",
-      attr: { type: "button", title: "Close panel", "aria-label": "\u5173\u95ED\u58A8\u5149\u6279\u6CE8\u9762\u677F" }
+      attr: { type: "button", title: "Close panel", "aria-label": "Close panel" }
     });
+    (0, import_obsidian11.setIcon)(close, "x");
     close.addEventListener("click", () => {
       void this.leaf.detach();
     });
+  }
+  renderPdfToolPanel(container, file, document2) {
+    if (!this.pdfBookmarksOpen) {
+      return;
+    }
+    const panel = container.createDiv({ cls: "yh-pdf-tool-panel" });
+    const head = panel.createDiv({ cls: "yh-pdf-tool-head" });
+    head.createDiv({ cls: "yh-pdf-tool-title", text: "PDF bookmarks" });
+    const currentPage = this.plugin.getCurrentPdfPageNumber();
+    head.createDiv({
+      cls: "yh-pdf-tool-meta",
+      text: currentPage > 0 ? `Page ${currentPage}` : "Page unknown"
+    });
+    const bookmarks = document2.bookmarks.filter((bookmark) => bookmark.type === "pdf-bookmark").map((bookmark) => ({ bookmark, page: this.parsePdfBookmarkPage(bookmark) })).filter((item) => item.page > 0).sort((left, right) => left.page - right.page || left.bookmark.createdAt.localeCompare(right.bookmark.createdAt));
+    const list = panel.createDiv({ cls: "yh-pdf-bookmark-list" });
+    if (bookmarks.length === 0) {
+      list.createDiv({ cls: "yh-empty", text: "No bookmarks yet. Use the bookmark button to add the current page." });
+      return;
+    }
+    for (const { bookmark, page } of bookmarks) {
+      const row = list.createDiv({ cls: `yh-pdf-bookmark-row${page === currentPage ? " is-current" : ""}` });
+      const jump = row.createEl("button", {
+        cls: "yh-pdf-bookmark-main",
+        attr: { type: "button", title: `Jump to page ${page}` }
+      });
+      jump.createSpan({ cls: "yh-pdf-bookmark-page", text: `Page ${page}` });
+      jump.createSpan({ cls: "yh-pdf-bookmark-label", text: bookmark.label || `Page ${page}` });
+      jump.addEventListener("click", async () => {
+        await this.plugin.gotoPdfPageFromSidebar(page);
+        this.requestRender();
+      });
+      const remove = row.createEl("button", {
+        cls: "yh-icon-btn yh-pdf-bookmark-delete",
+        attr: { type: "button", title: `Delete page ${page} bookmark`, "aria-label": `Delete page ${page} bookmark` }
+      });
+      (0, import_obsidian11.setIcon)(remove, "trash-2");
+      remove.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        await this.plugin.removePdfBookmark(file, bookmark.id);
+        this.pdfBookmarksOpen = true;
+        this.requestRender();
+      });
+    }
+  }
+  parsePdfBookmarkPage(bookmark) {
+    const match = /^page=(\d+)$/.exec(bookmark.position ?? "");
+    if (!match) {
+      return 0;
+    }
+    return Number.parseInt(match[1], 10);
   }
   renderControls(container) {
     const searchRow = container.createDiv({ cls: "yh-ov-search-row" });
@@ -13994,8 +14012,9 @@ var EpubExcerptExporter = class {
    */
   async exportToFile(file) {
     const document2 = await this.options.store.getDocument(file);
-    const highlights = document2.epubHighlights;
-    const comments = document2.epubComments;
+    const isPdf = file.extension.toLowerCase() === "pdf";
+    const highlights = isPdf ? document2.pdfHighlights : document2.epubHighlights;
+    const comments = isPdf ? document2.pdfComments : document2.epubComments;
     if (highlights.length === 0 && comments.length === 0) {
       new import_obsidian16.Notice("\u8BE5\u4E66\u6682\u65E0\u6807\u6CE8\uFF0C\u65E0\u9700\u5BFC\u51FA\u3002");
       return null;
@@ -14059,15 +14078,15 @@ var EpubExcerptExporter = class {
     parts.push(`title: \u300A${title}\u300B${isPdf ? "PDF" : ""}\u6458\u5F55`);
     parts.push(`source: ${file.path}`);
     parts.push(`exportedAt: ${now.toISOString()}`);
-    parts.push(`highlights: ${document2.epubHighlights.length}`);
-    parts.push(`notes: ${document2.epubComments.length}`);
+    parts.push(`highlights: ${isPdf ? document2.pdfHighlights.length : document2.epubHighlights.length}`);
+    parts.push(`notes: ${isPdf ? document2.pdfComments.length : document2.epubComments.length}`);
     parts.push("---");
     parts.push("");
     parts.push(`# \u300A${title}\u300B\u6458\u5F55`);
     parts.push("");
     const entries = this.collectEntries(document2, isPdf);
     for (const entry of entries) {
-      parts.push(this.buildEntryBlock(entry, isPdf));
+      parts.push(this.buildEntryBlock(entry, isPdf, file));
       parts.push("");
     }
     if (entries.length === 0) {
@@ -14077,35 +14096,69 @@ var EpubExcerptExporter = class {
     return parts.join("\n");
   }
   collectEntries(document2, isPdf = false) {
-    const highlights = (isPdf ? document2.pdfHighlights : document2.epubHighlights).map((h3) => ({
+    if (isPdf) {
+      return [
+        ...document2.pdfHighlights.map((highlight) => this.pdfHighlightToEntry(highlight)),
+        ...document2.pdfComments.map((comment) => this.pdfCommentToEntry(comment))
+      ].sort((a3, b3) => b3.createdAt.localeCompare(a3.createdAt));
+    }
+    const highlights = document2.epubHighlights.map((h3) => ({
       id: h3.id,
       kind: "highlight",
       color: h3.color,
       selectedText: h3.anchor.selectedText,
       chapter: h3.anchor.chapter,
       cfiRange: h3.anchor.cfiRange,
+      pageNumber: null,
       note: "",
       createdAt: h3.createdAt
     }));
-    const comments = (isPdf ? document2.pdfComments : document2.epubComments).map((c2) => ({
+    const comments = document2.epubComments.map((c2) => ({
       id: c2.id,
       kind: "comment",
       color: c2.color,
       selectedText: c2.anchor.selectedText,
       chapter: c2.anchor.chapter,
       cfiRange: c2.anchor.cfiRange,
+      pageNumber: null,
       note: c2.note,
       createdAt: c2.createdAt
     }));
     return [...highlights, ...comments].sort((a3, b3) => b3.createdAt.localeCompare(a3.createdAt));
   }
-  /** 构建单条标注的 callout 块（含 CFI 注释 + 回链）。 */
-  buildEntryBlock(entry, isPdf = false) {
+  pdfHighlightToEntry(highlight) {
+    return {
+      id: highlight.id,
+      kind: "highlight",
+      color: highlight.color,
+      selectedText: highlight.anchor.selectedText,
+      chapter: `Page ${highlight.anchor.pageNumber}`,
+      cfiRange: "",
+      pageNumber: highlight.anchor.pageNumber,
+      note: "",
+      createdAt: highlight.createdAt
+    };
+  }
+  pdfCommentToEntry(comment) {
+    return {
+      id: comment.id,
+      kind: "comment",
+      color: comment.color,
+      selectedText: comment.anchor.selectedText,
+      chapter: `Page ${comment.anchor.pageNumber}`,
+      cfiRange: "",
+      pageNumber: comment.anchor.pageNumber,
+      note: comment.content,
+      createdAt: comment.createdAt
+    };
+  }
+  buildEntryBlock(entry, isPdf = false, file) {
     const blockId = `${isPdf ? "pdf" : "epub"}-${entry.id}`;
     const colorMeta = COLOR_TO_CALLOUT_META[entry.color] ?? "yellow";
     const dateLabel = this.formatDate(new Date(entry.createdAt));
-    const chapterLabel = entry.chapter?.trim() || "\u672A\u5206\u7C7B\u7AE0\u8282";
-    const header = `> [!inklight-epub|${colorMeta}] ${chapterLabel} \xB7 ${dateLabel} ^${blockId}`;
+    const chapterLabel = isPdf ? `Page ${entry.pageNumber ?? "?"}` : entry.chapter?.trim() || "Untitled section";
+    const calloutType = isPdf ? "inklight-pdf" : "inklight-epub";
+    const header = `> [!${calloutType}|${colorMeta}] ${chapterLabel} - ${dateLabel} ^${blockId}`;
     const lines = [header];
     for (const line of entry.selectedText.split(/\r?\n/)) {
       lines.push(`> ${line}`);
@@ -14113,16 +14166,26 @@ var EpubExcerptExporter = class {
     if (entry.kind === "comment" && entry.note.trim()) {
       lines.push(">");
       for (const line of entry.note.split(/\r?\n/)) {
-        lines.push(`> \u{1F4A1} ${line}`);
+        lines.push(`> Note: ${line}`);
       }
     }
     if (this.options.backlinkRendering) {
       lines.push(">");
-      lines.push(`> [\u56DE\u5230\u539F\u6587](#^${blockId})`);
+      if (isPdf && file) {
+        const link = this.options.app.fileManager.generateMarkdownLink(
+          file,
+          "",
+          `#page=${entry.pageNumber ?? 1}`,
+          "Back to source"
+        );
+        lines.push(`> ${link}`);
+      } else {
+        lines.push(`> [Back to source](#^${blockId})`);
+      }
     }
-    const cfiLine = isPdf ? `> <span style="display:none">pdf-page:${entry.pageNumber}</span>` : `> <span style="display:none" data-yh-cfi="${entry.cfiRange}"></span>`;
+    const anchorLine = isPdf ? `> <span style="display:none" data-yh-pdf-page="${entry.pageNumber ?? ""}" data-yh-pdf-id="${entry.id}"></span>` : `> <span style="display:none" data-yh-cfi="${entry.cfiRange}"></span>`;
     return `${lines.join("\n")}
-${cfiLine}
+${anchorLine}
 
 ---`;
   }
@@ -14263,25 +14326,10 @@ var OverlayAnnotationsPlugin = class extends import_obsidian17.Plugin {
     this.registerCommands();
     this.registerEvents();
     this.pdfLayer.register();
-    document.addEventListener("yh-pdf-bookmark-toolbar", (() => {
-      const file = this.app.workspace.getActiveFile();
-      if (!file || file.extension.toLowerCase() !== "pdf") return;
-      const page = this.pdfLayer.getCurrentPageNumber();
-      if (page < 1) {
-        new import_obsidian17.Notice("\u65E0\u6CD5\u83B7\u53D6\u5F53\u524D\u9875\u7801");
-        return;
-      }
-      void this.addPdfBookmark(file, page);
-    }));
-    document.addEventListener("yh-pdf-export-toolbar", (() => {
-      const file = this.app.workspace.getActiveFile();
-      if (!file || file.extension.toLowerCase() !== "pdf") return;
-      void this.epubExcerptExporter.exportToFile(file);
-    }));
     document.addEventListener("yh-pdf-goto-page", ((event) => {
       const detail = event.detail;
       if (!detail?.page || detail.page < 1) return;
-      void this.gotoPdfPage(detail.page);
+      void this.gotoPdfPageFromSidebar(detail.page);
     }));
     this.stickyLane.register();
     this.epubExcerptExporter = new EpubExcerptExporter({
@@ -14341,6 +14389,34 @@ var OverlayAnnotationsPlugin = class extends import_obsidian17.Plugin {
       }
     }
     await this.stickyLane.render();
+  }
+  getCurrentPdfPageNumber() {
+    return this.pdfViewerAdapter.getCurrentPageNumber();
+  }
+  async addPdfBookmarkFromActivePage() {
+    const file = this.pdfViewerAdapter.getActiveFile();
+    const page = this.pdfViewerAdapter.getCurrentPageNumber();
+    if (!file || file.extension.toLowerCase() !== "pdf" || page < 1) {
+      new import_obsidian17.Notice("\u65E0\u6CD5\u83B7\u53D6\u5F53\u524D PDF \u9875\u7801");
+      return;
+    }
+    await this.addPdfBookmark(file, page);
+  }
+  async removePdfBookmark(file, bookmarkId) {
+    await this.store.removeBookmark(file, bookmarkId);
+    await this.refreshAnnotations();
+    new import_obsidian17.Notice("\u5DF2\u5220\u9664 PDF \u4E66\u7B7E");
+  }
+  async exportCurrentPdfExcerpts() {
+    const file = this.pdfViewerAdapter.getActiveFile() ?? this.app.workspace.getActiveFile();
+    if (!file || file.extension.toLowerCase() !== "pdf") {
+      new import_obsidian17.Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A PDF \u6587\u4EF6");
+      return null;
+    }
+    return this.epubExcerptExporter.exportToFile(file);
+  }
+  async gotoPdfPageFromSidebar(pageNumber) {
+    await this.gotoPdfPage(pageNumber);
   }
   async addPdfBookmark(file, page) {
     if (file.extension.toLowerCase() !== "pdf" || page < 1) {
@@ -14473,12 +14549,7 @@ ${lines.slice(0, 8).join("\n")}`);
       id: "export-pdf-excerpts",
       name: "\u5BFC\u51FA PDF \u6458\u5F55",
       callback: async () => {
-        const file = this.app.workspace.getActiveFile();
-        if (!file || file.extension.toLowerCase() !== "pdf") {
-          new import_obsidian17.Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A PDF \u6587\u4EF6");
-          return;
-        }
-        await this.epubExcerptExporter.exportToFile(file);
+        await this.exportCurrentPdfExcerpts();
       }
     });
     this.addCommand({

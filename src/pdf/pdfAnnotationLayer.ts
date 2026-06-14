@@ -16,6 +16,7 @@ import {
   PdfHighlightAnnotation,
   PdfReadingProgress,
 } from "../storage/types";
+import { PdfViewerAdapter } from "./pdfViewerAdapter";
 
 interface PdfAnnotationLayerOptions {
   app: App;
@@ -29,6 +30,7 @@ interface PdfAnnotationLayerOptions {
   deleteAnnotation: (file: TFile, annotationId: string) => Promise<void>;
   saveProgress: (file: TFile, progress: PdfReadingProgress) => Promise<void>;
   getProgress: (file: TFile) => Promise<PdfReadingProgress | null>;
+  viewerAdapter: PdfViewerAdapter;
 }
 
 interface PdfSelectionSnapshot {
@@ -36,7 +38,6 @@ interface PdfSelectionSnapshot {
   anchor: PdfAnchor;
 }
 
-const PDF_PAGE_SELECTOR = ".pdf-page, .page[data-page-number], .page";
 const PDF_VIEWER_SELECTOR = ".pdf-container, .pdf-viewer, .pdf-embed, .workspace-leaf-content[data-type='pdf']";
 
 export class PdfAnnotationLayer {
@@ -49,8 +50,13 @@ export class PdfAnnotationLayer {
   private totalPages = 0;
   private progressSaveTimer: number | null = null;
   private sessionFilePath = "";
+  private lifecycleHost: HTMLElement | null = null;
 
   constructor(private readonly options: PdfAnnotationLayerOptions) {}
+
+  private get viewerAdapter(): PdfViewerAdapter {
+    return this.options.viewerAdapter;
+  }
 
   register(): void {
     this.options.component.registerDomEvent(document, "selectionchange", () => this.captureSelection());
@@ -123,40 +129,12 @@ export class PdfAnnotationLayer {
   }
 
   isPdfActive(): boolean {
-    return this.activePdfFile() !== null;
+    return this.viewerAdapter.isPdfActive();
   }
 
   /** 实时计算当前视口中心的页码（不依赖缓存的 currentPage）。 */
   private computeCurrentPage(): number {
-    const pdfViewerApp = (window as unknown as Record<string, unknown>).PDFViewerApp as
-      | { page?: number; pdfViewer?: { currentPageNumber?: number } }
-      | undefined;
-    const appPage = pdfViewerApp?.page ?? pdfViewerApp?.pdfViewer?.currentPageNumber;
-    if (typeof appPage === "number" && appPage >= 1) {
-      return appPage;
-    }
-
-    // 优先从 Obsidian PDF view 的页码输入框读取（最可靠）
-    const pageInput = document.querySelector<HTMLInputElement>(".workspace-leaf.mod-active input[data-page]");
-    if (pageInput?.value) {
-      const n = parseInt(pageInput.value, 10);
-      if (n >= 1) return n;
-    }
-    // fallback：视口中心最近页面
-    const pages = this.pages();
-    if (pages.length === 0) return 0;
-    const viewportCenter = window.innerHeight / 2;
-    let closestPage = 1;
-    let closestDist = Infinity;
-    for (const page of pages) {
-      const rect = page.getBoundingClientRect();
-      const dist = Math.abs(rect.top + rect.height / 2 - viewportCenter);
-      if (dist < closestDist) {
-        closestDist = dist;
-        closestPage = this.pageNumber(page);
-      }
-    }
-    return closestPage >= 1 ? closestPage : 1;
+    return this.viewerAdapter.getCurrentPageNumber();
   }
 
   /** 当前正在阅读的页码（供主命令调用）。 */
@@ -171,7 +149,7 @@ export class PdfAnnotationLayer {
 
   /** 当前打开的 PDF 文件（供主命令调用）。 */
   getActiveFile(): TFile | null {
-    return this.activePdfFile();
+    return this.viewerAdapter.getActiveFile();
   }
 
   // ===== PDF 目录（Phase 5 P3） =====
@@ -244,12 +222,7 @@ export class PdfAnnotationLayer {
     if (!file) return;
     const progress = await this.options.getProgress(file);
     if (!progress || progress.pageNumber < 1) return;
-    const page = this.pageElement(progress.pageNumber);
-    if (page) {
-      page.scrollIntoView({ block: "center" });
-      page.addClass("yh-flash-target");
-      window.setTimeout(() => page.removeClass("yh-flash-target"), 850);
-    }
+    await this.viewerAdapter.goToPage(progress.pageNumber, { flash: true, block: "center" });
     this.currentPage = progress.pageNumber;
   }
 
@@ -279,21 +252,10 @@ export class PdfAnnotationLayer {
   private updateCurrentPage(): void {
     const viewer = this.activeViewer();
     if (!viewer) return;
-    const pages = this.pages();
-    if (pages.length === 0) return;
-    this.totalPages = pages.length;
-    // 找视口中心最靠近的页面
-    const viewportCenter = window.innerHeight / 2;
-    let closestPage = 1;
-    let closestDist = Infinity;
-    for (const page of pages) {
-      const rect = page.getBoundingClientRect();
-      const dist = Math.abs(rect.top + rect.height / 2 - viewportCenter);
-      if (dist < closestDist) {
-        closestDist = dist;
-        closestPage = this.pageNumber(page);
-      }
-    }
+    const state = this.viewerAdapter.getViewState();
+    if (!state || state.page < 1) return;
+    this.totalPages = state.totalPages;
+    const closestPage = state.page;
     if (closestPage !== this.currentPage && closestPage >= 1) {
       this.currentPage = closestPage;
       this.debouncedSaveProgress();
@@ -323,13 +285,14 @@ export class PdfAnnotationLayer {
   };
 
   private async render(): Promise<void> {
-    const file = this.activePdfFile();
-    const viewer = this.activeViewer();
-    if (!file || !viewer) {
+    const context = this.viewerAdapter.getContext();
+    if (!context) {
       this.root?.remove();
       this.root = null;
       return;
     }
+    const { file, viewerEl: viewer } = context;
+    this.attachViewerLifecycle(context.viewerEl);
 
     const document = await this.options.getDocument(file);
     const settings = this.options.getSettings();
@@ -378,6 +341,18 @@ export class PdfAnnotationLayer {
         highlight.style.height = `${rect.height * pageRect.height}px`;
         highlight.style.setProperty("background-color", pdfHighlightBackground(annotation.color), "important");
       }
+    }
+  }
+
+  private attachViewerLifecycle(host: HTMLElement): void {
+    if (this.lifecycleHost === host) {
+      return;
+    }
+
+    const pageEventsAttached = this.viewerAdapter.onPageReady(() => this.scheduleRender());
+    const textEventsAttached = this.viewerAdapter.onTextLayerReady(() => this.scheduleRender());
+    if (pageEventsAttached || textEventsAttached) {
+      this.lifecycleHost = host;
     }
   }
 
@@ -514,28 +489,19 @@ export class PdfAnnotationLayer {
   }
 
   private pageElementFromRect(rect: DOMRect): HTMLElement | null {
-    const element = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-    return element?.closest<HTMLElement>(PDF_PAGE_SELECTOR) ?? null;
+    return this.viewerAdapter.pageElementFromRect(rect);
   }
 
   private pageElement(pageNumber: number): HTMLElement | null {
-    const pages = this.pages();
-    return pages.find((page) => this.pageNumber(page) === pageNumber) ?? null;
+    return this.viewerAdapter.pageElement(pageNumber);
   }
 
   private pages(): HTMLElement[] {
-    const viewer = this.activeViewer();
-    return viewer ? Array.from(viewer.querySelectorAll<HTMLElement>(PDF_PAGE_SELECTOR)) : [];
+    return this.viewerAdapter.pages();
   }
 
   private pageNumber(page: HTMLElement): number {
-    const attr = page.dataset.pageNumber ?? page.getAttr("data-page-number");
-    const parsed = attr ? Number.parseInt(attr, 10) : NaN;
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-
-    return Math.max(1, this.pages().indexOf(page) + 1);
+    return this.viewerAdapter.pageNumber(page);
   }
 
   private currentScale(): number {
@@ -544,18 +510,11 @@ export class PdfAnnotationLayer {
   }
 
   private activeViewer(): HTMLElement | null {
-    const active = (this.options.app.workspace.activeLeaf?.view as { containerEl?: HTMLElement } | undefined)
-      ?.containerEl;
-    const root = active ?? document.querySelector<HTMLElement>(".workspace-leaf.mod-active");
-    if (!root) {
-      return null;
-    }
-    return root.matches(PDF_VIEWER_SELECTOR) ? root : root.querySelector<HTMLElement>(PDF_VIEWER_SELECTOR);
+    return this.viewerAdapter.getContext()?.viewerEl ?? null;
   }
 
   private activePdfFile(): TFile | null {
-    const file = this.options.app.workspace.getActiveFile();
-    return file instanceof TFile && file.extension.toLowerCase() === "pdf" ? file : null;
+    return this.viewerAdapter.getActiveFile();
   }
 }
 

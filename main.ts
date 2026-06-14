@@ -12,6 +12,7 @@ import { createHighlightExtension } from "./src/editor/highlightExtension";
 import { installReadingViewHighlights, refreshReadingViewHighlights } from "./src/editor/readingViewHighlight";
 import { SelectionToolbar } from "./src/editor/selectionToolbar";
 import { PdfAnnotationLayer } from "./src/pdf/pdfAnnotationLayer";
+import { PdfViewerAdapter } from "./src/pdf/pdfViewerAdapter";
 import { AnnotationSettingsTab } from "./src/settings/settingsTab";
 import { AnnotationStore } from "./src/storage/annotationStore";
 import {
@@ -62,6 +63,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   private toolbar!: SelectionToolbar;
   private popover!: AnnotationPopover;
   private pdfLayer!: PdfAnnotationLayer;
+  private pdfViewerAdapter!: PdfViewerAdapter;
   private stickyLane!: StickyNoteLane;
   private epubExcerptExporter!: EpubExcerptExporter;
   private lastSelection: SelectionSnapshot | null = null;
@@ -106,6 +108,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       onOpenSidebar: () => this.activateSidebar(),
     });
     this.popover = new AnnotationPopover({ app: this.app, component: this });
+    this.pdfViewerAdapter = new PdfViewerAdapter(this.app, this);
     this.pdfLayer = new PdfAnnotationLayer({
       app: this.app,
       component: this,
@@ -132,6 +135,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
         await this.store.savePdfProgress(file, progress);
       },
       getProgress: (file) => this.store.getPdfProgress(file),
+      viewerAdapter: this.pdfViewerAdapter,
     });
 
     this.stickyLane = new StickyNoteLane({
@@ -176,7 +180,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     document.addEventListener("yh-pdf-goto-page", ((event: Event) => {
       const detail = (event as CustomEvent).detail as { page: number } | undefined;
       if (!detail?.page || detail.page < 1) return;
-      this.gotoPdfPage(detail.page);
+      void this.gotoPdfPage(detail.page);
     }) as EventListener);
     this.stickyLane.register();
     this.epubExcerptExporter = new EpubExcerptExporter({
@@ -258,8 +262,9 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       return;
     }
 
+    const bookmarkId = crypto.randomUUID();
     await this.store.addBookmark(file, {
-      id: crypto.randomUUID(),
+      id: bookmarkId,
       type: "pdf-bookmark",
       label: `第 ${page} 页`,
       position,
@@ -267,21 +272,21 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       createdAt: new Date().toISOString(),
       color: this.settings.defaultHighlightColor,
     });
+    const verified = await this.store.getDocument(file);
+    const persisted = verified.bookmarks.some((bookmark) => bookmark.id === bookmarkId);
+    if (!persisted) {
+      new Notice("书签写入后校验失败，请检查 .obsidian-annotations 存储状态");
+      return;
+    }
     await this.refreshAnnotations();
     new Notice(`已为第 ${page} 页添加书签`);
   }
 
-  private gotoPdfPage(pageNumber: number): void {
-    const page = document.querySelector<HTMLElement>(
-      `.workspace-leaf.mod-active .pdf-page[data-page-number="${pageNumber}"], .workspace-leaf.mod-active .page[data-page-number="${pageNumber}"]`,
-    );
-    if (!page) {
+  private async gotoPdfPage(pageNumber: number): Promise<void> {
+    const ok = await this.pdfViewerAdapter.goToPage(pageNumber, { flash: true, block: "center" });
+    if (!ok) {
       new Notice(`未找到第 ${pageNumber} 页`);
-      return;
     }
-    page.scrollIntoView({ block: "center" });
-    page.addClass("yh-flash-target");
-    window.setTimeout(() => page.removeClass("yh-flash-target"), 850);
   }
 
   private registerRibbonIcon(): void {

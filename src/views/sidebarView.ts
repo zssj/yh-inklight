@@ -912,12 +912,7 @@ export class AnnotationSidebarView extends ItemView {
 
     if (file.extension.toLowerCase() === "pdf") {
       window.setTimeout(() => {
-        const page = document.querySelector<HTMLElement>(
-          `.workspace-leaf.mod-active .pdf-page[data-page-number="${pageNumber}"], .workspace-leaf.mod-active .page[data-page-number="${pageNumber}"]`,
-        );
-        page?.scrollIntoView({ block: "center" });
-        page?.addClass("yh-flash-target");
-        window.setTimeout(() => page?.removeClass("yh-flash-target"), 850);
+        document.dispatchEvent(new CustomEvent("yh-pdf-goto-page", { detail: { page: pageNumber } }));
       }, 120);
       return;
     }

@@ -14009,7 +14009,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian16.Plugin {
     this.registerCommands();
     this.registerEvents();
     this.pdfLayer.register();
-    this.registerDomEvent(document, "yh-pdf-bookmark", (event) => {
+    document.addEventListener("yh-pdf-bookmark", ((event) => {
       const detail = event.detail;
       if (!detail || detail.page < 1) return;
       void this.store.addBookmark(detail.file, {
@@ -14022,7 +14022,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian16.Plugin {
         color: this.settings.defaultHighlightColor
       });
       new import_obsidian16.Notice(`\u5DF2\u4E3A\u7B2C ${detail.page} \u9875\u6DFB\u52A0\u4E66\u7B7E`);
-    });
+    }));
     this.stickyLane.register();
     this.epubExcerptExporter = new EpubExcerptExporter({
       app: this.app,

@@ -255,15 +255,6 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     new Notice("已删除 PDF 书签");
   }
 
-  async exportCurrentPdfExcerpts(): Promise<TFile | null> {
-    const file = this.pdfViewerAdapter.getActiveFile() ?? this.app.workspace.getActiveFile();
-    if (!file || file.extension.toLowerCase() !== "pdf") {
-      new Notice("请先打开一个 PDF 文件");
-      return null;
-    }
-    return this.epubExcerptExporter.exportToFile(file);
-  }
-
   async gotoPdfPageFromSidebar(pageNumber: number): Promise<void> {
     await this.gotoPdfPage(pageNumber);
   }
@@ -354,25 +345,6 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       callback: () => this.activateBookshelf(),
     });
 
-    // Phase 5 P2：PDF 书签
-    this.addCommand({
-      id: "add-pdf-bookmark",
-      name: "为当前 PDF 页面添加书签",
-      callback: () => {
-        if (!this.pdfLayer.isPdfActive()) {
-          new Notice("请先打开一个 PDF 文件");
-          return;
-        }
-        const file = this.pdfLayer.getActiveFile();
-        const page = this.pdfLayer.getCurrentPageNumber();
-        if (!file || page < 1) {
-          new Notice("无法获取当前页码");
-          return;
-        }
-        void this.addPdfBookmark(file, page);
-      },
-    });
-
     // Phase 5 P3：PDF 目录
     this.addCommand({
       id: "show-pdf-outline",
@@ -396,28 +368,6 @@ export default class OverlayAnnotationsPlugin extends Plugin {
           return `${item.title}${pageInfo}${children ? "\n" + children : ""}`;
         });
         new Notice(`PDF 目录（${outline.length} 项）：\n${lines.slice(0, 8).join("\n")}`);
-      },
-    });
-
-    this.addCommand({
-      id: "export-epub-excerpts",
-      name: "导出 EPUB 摘录",
-      callback: async () => {
-        const file = this.app.workspace.getActiveFile();
-        if (!file || file.extension.toLowerCase() !== "epub") {
-          new Notice("请先打开一个 EPUB 文件");
-          return;
-        }
-        await this.epubExcerptExporter.exportToFile(file);
-      },
-    });
-
-    // Phase 5 P4：PDF 摘录导出（复用 EPUB 导出器）
-    this.addCommand({
-      id: "export-pdf-excerpts",
-      name: "导出 PDF 摘录",
-      callback: async () => {
-        await this.exportCurrentPdfExcerpts();
       },
     });
 

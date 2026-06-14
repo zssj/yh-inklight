@@ -39,13 +39,15 @@ interface ExportDocumentSource {
 
 interface ExportEntry {
   kind: "highlight" | "note";
-  mode: "md" | "pdf";
+  mode: "md" | "pdf" | "epub";
   sourcePath: string;
   color: AnnotationColor;
   text: string;
   content: string;
   createdAt: string;
   pageNumber: number | null;
+  chapter?: string;
+  cfiRange?: string;
   startOffset: number;
 }
 
@@ -751,6 +753,32 @@ function collectExportEntries(source: ExportDocumentSource): ExportEntry[] {
       pageNumber: comment.anchor.pageNumber,
       startOffset: Number.MAX_SAFE_INTEGER,
     })),
+    ...source.document.epubHighlights.map((highlight): ExportEntry => ({
+      kind: "highlight",
+      mode: "epub",
+      sourcePath: source.filePath,
+      color: highlight.color,
+      text: highlight.anchor.selectedText,
+      content: "",
+      createdAt: highlight.createdAt,
+      pageNumber: null,
+      chapter: highlight.anchor.chapter,
+      cfiRange: highlight.anchor.cfiRange,
+      startOffset: Number.MAX_SAFE_INTEGER,
+    })),
+    ...source.document.epubComments.map((comment): ExportEntry => ({
+      kind: "note",
+      mode: "epub",
+      sourcePath: source.filePath,
+      color: comment.color,
+      text: comment.anchor.selectedText,
+      content: comment.note,
+      createdAt: comment.createdAt,
+      pageNumber: null,
+      chapter: comment.anchor.chapter,
+      cfiRange: comment.anchor.cfiRange,
+      startOffset: Number.MAX_SAFE_INTEGER,
+    })),
   ].sort((left, right) => {
     return left.sourcePath.localeCompare(right.sourcePath) || left.startOffset - right.startOffset;
   });
@@ -826,5 +854,11 @@ function renderNoteBlock(entry: ExportEntry): string[] {
 }
 
 function entrySource(entry: ExportEntry): string {
-  return entry.pageNumber ? `${entry.sourcePath} p.${entry.pageNumber}` : entry.sourcePath;
+  if (entry.pageNumber) {
+    return `${entry.sourcePath} p.${entry.pageNumber}`;
+  }
+  if (entry.mode === "epub" && entry.chapter?.trim()) {
+    return `${entry.sourcePath} · ${entry.chapter.trim()}`;
+  }
+  return entry.sourcePath;
 }

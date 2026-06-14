@@ -126,8 +126,31 @@ export class PdfAnnotationLayer {
     return this.activePdfFile() !== null;
   }
 
+  /** 实时计算当前视口中心的页码（不依赖缓存的 currentPage）。 */
+  private computeCurrentPage(): number {
+    const pages = this.pages();
+    if (pages.length === 0) return 0;
+    const viewportCenter = window.innerHeight / 2;
+    let closestPage = 1;
+    let closestDist = Infinity;
+    for (const page of pages) {
+      const rect = page.getBoundingClientRect();
+      const dist = Math.abs(rect.top + rect.height / 2 - viewportCenter);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestPage = this.pageNumber(page);
+      }
+    }
+    return closestPage >= 1 ? closestPage : 1;
+  }
+
   /** 当前正在阅读的页码（供主命令调用）。 */
   getCurrentPageNumber(): number {
+    // 实时计算，不依赖可能过期的缓存
+    const live = this.computeCurrentPage();
+    if (live >= 1) {
+      this.currentPage = live;
+    }
     return this.currentPage;
   }
 
@@ -323,22 +346,28 @@ export class PdfAnnotationLayer {
     bookmarkBtn.textContent = "★";
     bookmarkBtn.addEventListener("click", () => {
       const file = this.activePdfFile();
-      if (!file || this.currentPage < 1) { new Notice("无法获取当前页码"); return; }
-      // 调 addBookmark 需要通过 options 传递回调。这里用临时方式：触发事件让 main.ts 处理
-      bookmarkBtn.dispatchEvent(new CustomEvent("yh-pdf-bookmark", { bubbles: true, detail: { file, page: this.currentPage } }));
+      const page = this.computeCurrentPage();
+      if (!file || page < 1) { new Notice("无法获取当前页码"); return; }
+      this.currentPage = page;
+      bookmarkBtn.dispatchEvent(new CustomEvent("yh-pdf-bookmark", { bubbles: true, detail: { file, page } }));
     });
 
-    // 目录
-    const outlineBtn = bar.createEl("button", { cls: "yh-pdf-toolbar-btn", attr: { type: "button", title: "显示目录" } });
-    outlineBtn.textContent = "☰";
-    outlineBtn.addEventListener("click", async () => {
-      const outline = await this.getOutline();
-      if (outline.length === 0) { new Notice("该 PDF 没有目录"); return; }
-      const lines = outline.slice(0, 10).map((item) => {
-        const ch = item.children.filter(c => c.pageNumber > 0).map(c => `  └ ${c.title}`).join("\n");
-        return `${item.title}${ch ? "\n" + ch : ""}`;
-      });
-      new Notice(`PDF 目录（${outline.length} 项）：\n${lines.join("\n")}`);
+    // 书签列表（比目录更实用）
+    const listBtn = bar.createEl("button", { cls: "yh-pdf-toolbar-btn", attr: { type: "button", title: "显示书签列表" } });
+    listBtn.textContent = "☰";
+    listBtn.addEventListener("click", async () => {
+      const file = this.activePdfFile();
+      if (!file) { new Notice("请先打开 PDF"); return; }
+      const doc = this.options.getCachedDocument(file.path) ?? (await this.options.getDocument(file));
+      const bookmarks = doc.bookmarks.filter((b) => b.type === "pdf-bookmark");
+      if (bookmarks.length === 0) {
+        new Notice("暂无书签（点 ★ 添加当前页书签）");
+        return;
+      }
+      const lines = bookmarks
+        .sort((a, b) => (a.position || "").localeCompare(b.position || "", undefined, { numeric: true }))
+        .map((b) => `第 ${b.position?.replace("page=", "") ?? "?"} 页`);
+      new Notice(`书签（${bookmarks.length}）：\n${lines.join("\n")}`);
     });
 
     // 导出

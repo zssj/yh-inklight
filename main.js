@@ -8687,8 +8687,29 @@ var PdfAnnotationLayer = class {
   isPdfActive() {
     return this.activePdfFile() !== null;
   }
+  /** 实时计算当前视口中心的页码（不依赖缓存的 currentPage）。 */
+  computeCurrentPage() {
+    const pages = this.pages();
+    if (pages.length === 0) return 0;
+    const viewportCenter = window.innerHeight / 2;
+    let closestPage = 1;
+    let closestDist = Infinity;
+    for (const page of pages) {
+      const rect = page.getBoundingClientRect();
+      const dist = Math.abs(rect.top + rect.height / 2 - viewportCenter);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestPage = this.pageNumber(page);
+      }
+    }
+    return closestPage >= 1 ? closestPage : 1;
+  }
   /** 当前正在阅读的页码（供主命令调用）。 */
   getCurrentPageNumber() {
+    const live = this.computeCurrentPage();
+    if (live >= 1) {
+      this.currentPage = live;
+    }
     return this.currentPage;
   }
   /** 当前打开的 PDF 文件（供主命令调用）。 */
@@ -8860,25 +8881,30 @@ var PdfAnnotationLayer = class {
     bookmarkBtn.textContent = "\u2605";
     bookmarkBtn.addEventListener("click", () => {
       const file = this.activePdfFile();
-      if (!file || this.currentPage < 1) {
+      const page = this.computeCurrentPage();
+      if (!file || page < 1) {
         new import_obsidian3.Notice("\u65E0\u6CD5\u83B7\u53D6\u5F53\u524D\u9875\u7801");
         return;
       }
-      bookmarkBtn.dispatchEvent(new CustomEvent("yh-pdf-bookmark", { bubbles: true, detail: { file, page: this.currentPage } }));
+      this.currentPage = page;
+      bookmarkBtn.dispatchEvent(new CustomEvent("yh-pdf-bookmark", { bubbles: true, detail: { file, page } }));
     });
-    const outlineBtn = bar.createEl("button", { cls: "yh-pdf-toolbar-btn", attr: { type: "button", title: "\u663E\u793A\u76EE\u5F55" } });
-    outlineBtn.textContent = "\u2630";
-    outlineBtn.addEventListener("click", async () => {
-      const outline = await this.getOutline();
-      if (outline.length === 0) {
-        new import_obsidian3.Notice("\u8BE5 PDF \u6CA1\u6709\u76EE\u5F55");
+    const listBtn = bar.createEl("button", { cls: "yh-pdf-toolbar-btn", attr: { type: "button", title: "\u663E\u793A\u4E66\u7B7E\u5217\u8868" } });
+    listBtn.textContent = "\u2630";
+    listBtn.addEventListener("click", async () => {
+      const file = this.activePdfFile();
+      if (!file) {
+        new import_obsidian3.Notice("\u8BF7\u5148\u6253\u5F00 PDF");
         return;
       }
-      const lines = outline.slice(0, 10).map((item) => {
-        const ch = item.children.filter((c2) => c2.pageNumber > 0).map((c2) => `  \u2514 ${c2.title}`).join("\n");
-        return `${item.title}${ch ? "\n" + ch : ""}`;
-      });
-      new import_obsidian3.Notice(`PDF \u76EE\u5F55\uFF08${outline.length} \u9879\uFF09\uFF1A
+      const doc = this.options.getCachedDocument(file.path) ?? await this.options.getDocument(file);
+      const bookmarks = doc.bookmarks.filter((b3) => b3.type === "pdf-bookmark");
+      if (bookmarks.length === 0) {
+        new import_obsidian3.Notice("\u6682\u65E0\u4E66\u7B7E\uFF08\u70B9 \u2605 \u6DFB\u52A0\u5F53\u524D\u9875\u4E66\u7B7E\uFF09");
+        return;
+      }
+      const lines = bookmarks.sort((a3, b3) => (a3.position || "").localeCompare(b3.position || "", void 0, { numeric: true })).map((b3) => `\u7B2C ${b3.position?.replace("page=", "") ?? "?"} \u9875`);
+      new import_obsidian3.Notice(`\u4E66\u7B7E\uFF08${bookmarks.length}\uFF09\uFF1A
 ${lines.join("\n")}`);
     });
     const exportBtn = bar.createEl("button", { cls: "yh-pdf-toolbar-btn", attr: { type: "button", title: "\u5BFC\u51FA\u6458\u5F55" } });

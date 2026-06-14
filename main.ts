@@ -159,43 +159,13 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     this.registerCommands();
     this.registerEvents();
     this.pdfLayer.register();
-    // Phase 5 P2：监听 PDF 浮动工具条的书签按钮（自定义事件，不能用 registerDomEvent）
-    document.addEventListener("yh-pdf-bookmark", ((event: Event) => {
-      const detail = (event as CustomEvent).detail as { file: TFile; page: number } | undefined;
-      if (!detail || detail.page < 1) return;
-      void this.store.addBookmark(detail.file, {
-        id: crypto.randomUUID(),
-        type: "pdf-bookmark",
-        label: `第 ${detail.page} 页`,
-        position: `page=${detail.page}`,
-        chapter: `第 ${detail.page} 页`,
-        createdAt: new Date().toISOString(),
-        color: this.settings.defaultHighlightColor,
-      });
-      new Notice(`已为第 ${detail.page} 页添加书签`);
-    }) as EventListener);
-    // Phase 5 P4：PDF 浮动工具栏的导出按钮
-    document.addEventListener("yh-pdf-export", ((event: Event) => {
-      const detail = (event as CustomEvent).detail as { file: TFile } | undefined;
-      if (!detail?.file) return;
-      void this.epubExcerptExporter.exportToFile(detail.file);
-    }) as EventListener);
     // Phase 5：侧栏标题栏的 PDF 按钮（书签/导出）
     document.addEventListener("yh-pdf-bookmark-toolbar", (() => {
       const file = this.app.workspace.getActiveFile();
       if (!file || file.extension.toLowerCase() !== "pdf") return;
       const page = this.pdfLayer.getCurrentPageNumber();
       if (page < 1) { new Notice("无法获取当前页码"); return; }
-      void this.store.addBookmark(file, {
-        id: crypto.randomUUID(),
-        type: "pdf-bookmark",
-        label: `第 ${page} 页`,
-        position: `page=${page}`,
-        chapter: `第 ${page} 页`,
-        createdAt: new Date().toISOString(),
-        color: this.settings.defaultHighlightColor,
-      });
-      new Notice(`已为第 ${page} 页添加书签`);
+      void this.addPdfBookmark(file, page);
     }) as EventListener);
     document.addEventListener("yh-pdf-export-toolbar", (() => {
       const file = this.app.workspace.getActiveFile();
@@ -206,14 +176,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     document.addEventListener("yh-pdf-goto-page", ((event: Event) => {
       const detail = (event as CustomEvent).detail as { page: number } | undefined;
       if (!detail?.page || detail.page < 1) return;
-      const page = document.querySelector<HTMLElement>(
-        `.workspace-leaf.mod-active .pdf-page[data-page-number="${detail.page}"], .workspace-leaf.mod-active .page[data-page-number="${detail.page}"]`,
-      );
-      if (page) {
-        page.scrollIntoView({ block: "center" });
-        page.addClass("yh-flash-target");
-        window.setTimeout(() => page.removeClass("yh-flash-target"), 850);
-      }
+      this.gotoPdfPage(detail.page);
     }) as EventListener);
     this.stickyLane.register();
     this.epubExcerptExporter = new EpubExcerptExporter({
@@ -281,6 +244,46 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     await this.stickyLane.render();
   }
 
+  private async addPdfBookmark(file: TFile, page: number): Promise<void> {
+    if (file.extension.toLowerCase() !== "pdf" || page < 1) {
+      new Notice("无法获取当前 PDF 页码");
+      return;
+    }
+
+    const document = await this.store.getDocument(file);
+    const position = `page=${page}`;
+    const existing = document.bookmarks.find((bookmark) => bookmark.type === "pdf-bookmark" && bookmark.position === position);
+    if (existing) {
+      new Notice(`第 ${page} 页已有书签`);
+      return;
+    }
+
+    await this.store.addBookmark(file, {
+      id: crypto.randomUUID(),
+      type: "pdf-bookmark",
+      label: `第 ${page} 页`,
+      position,
+      chapter: `第 ${page} 页`,
+      createdAt: new Date().toISOString(),
+      color: this.settings.defaultHighlightColor,
+    });
+    await this.refreshAnnotations();
+    new Notice(`已为第 ${page} 页添加书签`);
+  }
+
+  private gotoPdfPage(pageNumber: number): void {
+    const page = document.querySelector<HTMLElement>(
+      `.workspace-leaf.mod-active .pdf-page[data-page-number="${pageNumber}"], .workspace-leaf.mod-active .page[data-page-number="${pageNumber}"]`,
+    );
+    if (!page) {
+      new Notice(`未找到第 ${pageNumber} 页`);
+      return;
+    }
+    page.scrollIntoView({ block: "center" });
+    page.addClass("yh-flash-target");
+    window.setTimeout(() => page.removeClass("yh-flash-target"), 850);
+  }
+
   private registerRibbonIcon(): void {
     const icon = this.addRibbonIcon("highlighter", "打开墨光批注", () => {
       void this.activateSidebar();
@@ -341,16 +344,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
           new Notice("无法获取当前页码");
           return;
         }
-        void this.store.addBookmark(file, {
-          id: crypto.randomUUID(),
-          type: "pdf-bookmark",
-          label: `第 ${page} 页`,
-          position: `page=${page}`,
-          chapter: `第 ${page} 页`,
-          createdAt: new Date().toISOString(),
-          color: this.settings.defaultHighlightColor,
-        });
-        new Notice(`已为第 ${page} 页添加书签`);
+        void this.addPdfBookmark(file, page);
       },
     });
 

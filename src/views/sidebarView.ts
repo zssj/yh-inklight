@@ -386,18 +386,18 @@ export class AnnotationSidebarView extends ItemView {
     if (file instanceof TFile && file.extension.toLowerCase() === "pdf") {
       const bookmarkBtn = actions.createEl("button", {
         cls: "yh-icon-btn yh-pdf-side-btn",
-        attr: { type: "button", title: "为当前 PDF 页面添加书签" },
+        text: "★",
+        attr: { type: "button", title: "为当前 PDF 页面添加书签", "aria-label": "为当前 PDF 页面添加书签" },
       });
-      setIcon(bookmarkBtn, "bookmark");
       bookmarkBtn.addEventListener("click", () => {
         document.dispatchEvent(new CustomEvent("yh-pdf-bookmark-toolbar"));
       });
 
       const listBtn = actions.createEl("button", {
         cls: "yh-icon-btn yh-pdf-side-btn",
-        attr: { type: "button", title: "显示书签列表" },
+        text: "☰",
+        attr: { type: "button", title: "显示书签列表", "aria-label": "显示书签列表" },
       });
-      setIcon(listBtn, "list-checks");
       listBtn.addEventListener("click", async () => {
         if (!(file instanceof TFile)) return;
         const doc = await this.plugin.store.getDocument(file);
@@ -414,20 +414,29 @@ export class AnnotationSidebarView extends ItemView {
         const menu = new Menu();
         for (const b of sorted) {
           const pageStr = b.position?.replace("page=", "") ?? "?";
+          const page = parseInt(pageStr, 10);
           menu.addItem((item) => {
-            item.setTitle(`第 ${pageStr} 页`).setIcon("bookmark").onClick(() => {
-              document.dispatchEvent(new CustomEvent("yh-pdf-goto-page", { detail: { page: parseInt(pageStr, 10) } }));
+            item.setTitle(`跳转到第 ${pageStr} 页`).setIcon("arrow-right").onClick(() => {
+              document.dispatchEvent(new CustomEvent("yh-pdf-goto-page", { detail: { page } }));
+            });
+          });
+          menu.addItem((item) => {
+            item.setTitle(`删除第 ${pageStr} 页书签`).setIcon("trash-2").onClick(async () => {
+              await this.plugin.store.removeBookmark(file, b.id);
+              await this.plugin.refreshAnnotations();
+              new Notice(`已删除第 ${pageStr} 页书签`);
             });
           });
         }
-        menu.showAtPosition({ x: 100, y: 100 });
+        const rect = listBtn.getBoundingClientRect();
+        menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
       });
 
       const exportBtn = actions.createEl("button", {
         cls: "yh-icon-btn yh-pdf-side-btn",
-        attr: { type: "button", title: "导出 PDF 摘录" },
+        text: "↑",
+        attr: { type: "button", title: "导出 PDF 摘录", "aria-label": "导出 PDF 摘录" },
       });
-      setIcon(exportBtn, "download");
       exportBtn.addEventListener("click", () => {
         document.dispatchEvent(new CustomEvent("yh-pdf-export-toolbar"));
       });
@@ -435,16 +444,16 @@ export class AnnotationSidebarView extends ItemView {
 
     const refresh = actions.createEl("button", {
       cls: "yh-icon-btn yh-ov-refresh",
+      text: "↻",
       attr: { type: "button", title: "刷新批注", "aria-label": "刷新批注" },
     });
-    setIcon(refresh, "refresh-cw");
     refresh.addEventListener("click", () => this.requestRender());
 
     const close = actions.createEl("button", {
       cls: "yh-icon-btn yh-ov-close",
+      text: "×",
       attr: { type: "button", title: "Close panel", "aria-label": "关闭墨光批注面板" },
     });
-    setIcon(close, "x");
     close.addEventListener("click", () => {
       void this.leaf.detach();
     });

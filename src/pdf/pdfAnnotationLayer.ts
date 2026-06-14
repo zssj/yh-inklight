@@ -128,6 +128,14 @@ export class PdfAnnotationLayer {
 
   /** 实时计算当前视口中心的页码（不依赖缓存的 currentPage）。 */
   private computeCurrentPage(): number {
+    const pdfViewerApp = (window as unknown as Record<string, unknown>).PDFViewerApp as
+      | { page?: number; pdfViewer?: { currentPageNumber?: number } }
+      | undefined;
+    const appPage = pdfViewerApp?.page ?? pdfViewerApp?.pdfViewer?.currentPageNumber;
+    if (typeof appPage === "number" && appPage >= 1) {
+      return appPage;
+    }
+
     // 优先从 Obsidian PDF view 的页码输入框读取（最可靠）
     const pageInput = document.querySelector<HTMLInputElement>(".workspace-leaf.mod-active input[data-page]");
     if (pageInput?.value) {
@@ -247,6 +255,9 @@ export class PdfAnnotationLayer {
 
   /** 保存当前阅读进度到 sidecar（防抖 2 秒）。 */
   private debouncedSaveProgress(): void {
+    if (!this.options.getSettings().pdfProgressTracking) {
+      return;
+    }
     if (this.progressSaveTimer !== null) {
       window.clearTimeout(this.progressSaveTimer);
     }
@@ -335,75 +346,6 @@ export class PdfAnnotationLayer {
     // Phase 5 P1：渲染后恢复上次阅读位置；同时更新页数并注册滚动检测
     this.totalPages = this.pages().length;
     if (this.sessionFilePath !== (file?.path ?? "")) { this.sessionFilePath = file?.path ?? ""; void this.restoreProgress(); }
-  }
-
-  /** 在 PDF 页面上方渲染浮动工具栏（挂在 document.body 上，持久不随 leaf 重建）。 */
-  private renderToolbar(_host: HTMLElement): void {
-    // 挂在 body 上（持久），不随 PDF leaf 切换而销毁
-    document.body.querySelector(".yh-pdf-toolbar")?.remove();
-    // 只在有 PDF 时显示
-    if (!this.activePdfFile()) {
-      document.body.querySelector(".yh-pdf-toolbar")?.remove();
-      return;
-    }
-    // 已存在则不重建
-    if (document.body.querySelector(".yh-pdf-toolbar")) return;
-    const bar = document.body.createDiv({ cls: "yh-pdf-toolbar" });
-    // 阻止工具栏上的事件冒泡到 PDF viewer，避免被拦截
-    bar.addEventListener("click", (e) => { e.stopPropagation(); }, { capture: true });
-    bar.addEventListener("mousedown", (e) => { e.stopPropagation(); }, { capture: true });
-
-    // 书签
-    const bookmarkBtn = bar.createEl("button", { cls: "yh-pdf-toolbar-btn", attr: { type: "button", title: "添加书签" } });
-    bookmarkBtn.textContent = "★";
-    bookmarkBtn.addEventListener("click", () => {
-      const file = this.activePdfFile();
-      const page = this.computeCurrentPage();
-      if (!file || page < 1) { new Notice("无法获取当前页码"); return; }
-      this.currentPage = page;
-      bookmarkBtn.dispatchEvent(new CustomEvent("yh-pdf-bookmark", { bubbles: true, detail: { file, page } }));
-    });
-
-    // 书签列表（比目录更实用）
-    const listBtn = bar.createEl("button", { cls: "yh-pdf-toolbar-btn", attr: { type: "button", title: "显示书签列表" } });
-    listBtn.textContent = "☰";
-    listBtn.addEventListener("click", async () => {
-      const file = this.activePdfFile();
-      if (!file) { new Notice("请先打开 PDF"); return; }
-      const doc = this.options.getCachedDocument(file.path) ?? (await this.options.getDocument(file));
-      const bookmarks = doc.bookmarks.filter((b) => b.type === "pdf-bookmark");
-      if (bookmarks.length === 0) {
-        new Notice("暂无书签（点 ★ 添加当前页书签）");
-        return;
-      }
-      const lines = bookmarks
-        .sort((a, b) => (a.position || "").localeCompare(b.position || "", undefined, { numeric: true }))
-        .map((b) => `第 ${b.position?.replace("page=", "") ?? "?"} 页`);
-      new Notice(`书签（${bookmarks.length}）：\n${lines.join("\n")}`);
-    });
-
-    // 导出（直接触发导出，不提示命令）
-    const exportBtn = bar.createEl("button", { cls: "yh-pdf-toolbar-btn", attr: { type: "button", title: "导出 PDF 摘录" } });
-    exportBtn.textContent = "↑";
-    exportBtn.addEventListener("click", () => {
-      const file = this.activePdfFile();
-      if (!file) { new Notice("请先打开 PDF"); return; }
-      exportBtn.dispatchEvent(new CustomEvent("yh-pdf-export", { bubbles: true, detail: { file } }));
-    });
-
-    // 进度开关
-    const progressBtn = bar.createEl("button", { cls: "yh-pdf-toolbar-btn", attr: { type: "button", title: "暂停/恢复进度追踪" } });
-    progressBtn.textContent = "⏸";
-    progressBtn.addEventListener("click", () => {
-      if (this.progressSaveTimer !== null) {
-        window.clearTimeout(this.progressSaveTimer);
-        this.progressSaveTimer = null;
-      }
-      const paused = progressBtn.textContent === "⏸";
-      progressBtn.textContent = paused ? "▶" : "⏸";
-      progressBtn.title = paused ? "恢复进度追踪" : "暂停进度追踪";
-      new Notice(paused ? "进度追踪已暂停" : "进度追踪已恢复");
-    });
   }
 
   private renderHighlights(host: HTMLElement, document: FileAnnotationDocument): void {

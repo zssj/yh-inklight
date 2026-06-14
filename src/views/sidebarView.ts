@@ -397,7 +397,7 @@ export class AnnotationSidebarView extends ItemView {
         cls: "yh-icon-btn yh-pdf-side-btn",
         attr: { type: "button", title: "显示书签列表" },
       });
-      setIcon(listBtn, "list");
+      setIcon(listBtn, "list-checks");
       listBtn.addEventListener("click", async () => {
         if (!(file instanceof TFile)) return;
         const doc = await this.plugin.store.getDocument(file);
@@ -406,17 +406,28 @@ export class AnnotationSidebarView extends ItemView {
           new Notice("暂无书签（点书签图标添加当前页）");
           return;
         }
-        const lines = bookmarks
-          .sort((a, b) => (a.position || "").localeCompare(b.position || "", undefined, { numeric: true }))
-          .map((b) => `第 ${b.position?.replace("page=", "") ?? "?"} 页`);
-        new Notice(`书签（${bookmarks.length}）：\n${lines.join("\n")}`);
+        const sorted = bookmarks.sort((a, b) =>
+          (a.position || "").localeCompare(b.position || "", undefined, { numeric: true })
+        );
+        // 用 Menu 显示可点击书签列表
+        const { Menu } = await import("obsidian");
+        const menu = new Menu();
+        for (const b of sorted) {
+          const pageStr = b.position?.replace("page=", "") ?? "?";
+          menu.addItem((item) => {
+            item.setTitle(`第 ${pageStr} 页`).setIcon("bookmark").onClick(() => {
+              document.dispatchEvent(new CustomEvent("yh-pdf-goto-page", { detail: { page: parseInt(pageStr, 10) } }));
+            });
+          });
+        }
+        menu.showAtPosition({ x: 100, y: 100 });
       });
 
       const exportBtn = actions.createEl("button", {
         cls: "yh-icon-btn yh-pdf-side-btn",
         attr: { type: "button", title: "导出 PDF 摘录" },
       });
-      setIcon(exportBtn, "file-down");
+      setIcon(exportBtn, "download");
       exportBtn.addEventListener("click", () => {
         document.dispatchEvent(new CustomEvent("yh-pdf-export-toolbar"));
       });

@@ -128,6 +128,13 @@ export class PdfAnnotationLayer {
 
   /** 实时计算当前视口中心的页码（不依赖缓存的 currentPage）。 */
   private computeCurrentPage(): number {
+    // 优先从 Obsidian PDF view 的页码输入框读取（最可靠）
+    const pageInput = document.querySelector<HTMLInputElement>(".workspace-leaf.mod-active input[data-page]");
+    if (pageInput?.value) {
+      const n = parseInt(pageInput.value, 10);
+      if (n >= 1) return n;
+    }
+    // fallback：视口中心最近页面
     const pages = this.pages();
     if (pages.length === 0) return 0;
     const viewportCenter = window.innerHeight / 2;

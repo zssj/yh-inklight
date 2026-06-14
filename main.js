@@ -1,7 +1,9 @@
 "use strict";
+var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __typeError = (msg) => {
   throw TypeError(msg);
@@ -22,6 +24,14 @@ var __copyProps = (to, from, except, desc) => {
   }
   return to;
 };
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 var __accessCheck = (obj, member, msg) => member.has(obj) || __typeError("Cannot " + msg);
@@ -8689,6 +8699,11 @@ var PdfAnnotationLayer = class {
   }
   /** 实时计算当前视口中心的页码（不依赖缓存的 currentPage）。 */
   computeCurrentPage() {
+    const pageInput = document.querySelector(".workspace-leaf.mod-active input[data-page]");
+    if (pageInput?.value) {
+      const n3 = parseInt(pageInput.value, 10);
+      if (n3 >= 1) return n3;
+    }
     const pages = this.pages();
     if (pages.length === 0) return 0;
     const viewportCenter = window.innerHeight / 2;
@@ -12826,7 +12841,7 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
         cls: "yh-icon-btn yh-pdf-side-btn",
         attr: { type: "button", title: "\u663E\u793A\u4E66\u7B7E\u5217\u8868" }
       });
-      (0, import_obsidian10.setIcon)(listBtn, "list");
+      (0, import_obsidian10.setIcon)(listBtn, "list-checks");
       listBtn.addEventListener("click", async () => {
         if (!(file instanceof import_obsidian10.TFile)) return;
         const doc = await this.plugin.store.getDocument(file);
@@ -12835,15 +12850,26 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
           new import_obsidian10.Notice("\u6682\u65E0\u4E66\u7B7E\uFF08\u70B9\u4E66\u7B7E\u56FE\u6807\u6DFB\u52A0\u5F53\u524D\u9875\uFF09");
           return;
         }
-        const lines = bookmarks.sort((a3, b3) => (a3.position || "").localeCompare(b3.position || "", void 0, { numeric: true })).map((b3) => `\u7B2C ${b3.position?.replace("page=", "") ?? "?"} \u9875`);
-        new import_obsidian10.Notice(`\u4E66\u7B7E\uFF08${bookmarks.length}\uFF09\uFF1A
-${lines.join("\n")}`);
+        const sorted = bookmarks.sort(
+          (a3, b3) => (a3.position || "").localeCompare(b3.position || "", void 0, { numeric: true })
+        );
+        const { Menu } = await import("obsidian");
+        const menu = new Menu();
+        for (const b3 of sorted) {
+          const pageStr = b3.position?.replace("page=", "") ?? "?";
+          menu.addItem((item) => {
+            item.setTitle(`\u7B2C ${pageStr} \u9875`).setIcon("bookmark").onClick(() => {
+              document.dispatchEvent(new CustomEvent("yh-pdf-goto-page", { detail: { page: parseInt(pageStr, 10) } }));
+            });
+          });
+        }
+        menu.showAtPosition({ x: 100, y: 100 });
       });
       const exportBtn = actions.createEl("button", {
         cls: "yh-icon-btn yh-pdf-side-btn",
         attr: { type: "button", title: "\u5BFC\u51FA PDF \u6458\u5F55" }
       });
-      (0, import_obsidian10.setIcon)(exportBtn, "file-down");
+      (0, import_obsidian10.setIcon)(exportBtn, "download");
       exportBtn.addEventListener("click", () => {
         document.dispatchEvent(new CustomEvent("yh-pdf-export-toolbar"));
       });
@@ -14128,6 +14154,18 @@ var OverlayAnnotationsPlugin = class extends import_obsidian16.Plugin {
       const file = this.app.workspace.getActiveFile();
       if (!file || file.extension.toLowerCase() !== "pdf") return;
       void this.epubExcerptExporter.exportToFile(file);
+    }));
+    document.addEventListener("yh-pdf-goto-page", ((event) => {
+      const detail = event.detail;
+      if (!detail?.page || detail.page < 1) return;
+      const page = document.querySelector(
+        `.workspace-leaf.mod-active .pdf-page[data-page-number="${detail.page}"], .workspace-leaf.mod-active .page[data-page-number="${detail.page}"]`
+      );
+      if (page) {
+        page.scrollIntoView({ block: "center" });
+        page.addClass("yh-flash-target");
+        window.setTimeout(() => page.removeClass("yh-flash-target"), 850);
+      }
     }));
     this.stickyLane.register();
     this.epubExcerptExporter = new EpubExcerptExporter({

@@ -202,6 +202,19 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       if (!file || file.extension.toLowerCase() !== "pdf") return;
       void this.epubExcerptExporter.exportToFile(file);
     }) as EventListener);
+    // Phase 5：书签列表点击跳转到对应页
+    document.addEventListener("yh-pdf-goto-page", ((event: Event) => {
+      const detail = (event as CustomEvent).detail as { page: number } | undefined;
+      if (!detail?.page || detail.page < 1) return;
+      const page = document.querySelector<HTMLElement>(
+        `.workspace-leaf.mod-active .pdf-page[data-page-number="${detail.page}"], .workspace-leaf.mod-active .page[data-page-number="${detail.page}"]`,
+      );
+      if (page) {
+        page.scrollIntoView({ block: "center" });
+        page.addClass("yh-flash-target");
+        window.setTimeout(() => page.removeClass("yh-flash-target"), 850);
+      }
+    }) as EventListener);
     this.stickyLane.register();
     this.epubExcerptExporter = new EpubExcerptExporter({
       app: this.app,

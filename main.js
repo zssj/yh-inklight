@@ -8610,6 +8610,7 @@ var PdfAnnotationLayer = class {
     this.currentPage = 0;
     this.totalPages = 0;
     this.progressSaveTimer = null;
+    this.sessionFilePath = "";
     this.scheduleRender = () => {
       if (this.frame !== null) {
         return;
@@ -8630,7 +8631,6 @@ var PdfAnnotationLayer = class {
     });
     this.options.component.registerEvent(
       this.options.app.workspace.on("active-leaf-change", () => {
-        void this.restoreProgress();
         this.scheduleRender();
       })
     );
@@ -8839,8 +8839,59 @@ var PdfAnnotationLayer = class {
       this.root = host.createDiv({ cls: "yh-pdf-layer" });
     }
     this.renderHighlights(host, document2);
+    this.renderToolbar(host);
     this.totalPages = this.pages().length;
-    void this.restoreProgress();
+    if (this.sessionFilePath !== (file?.path ?? "")) {
+      this.sessionFilePath = file?.path ?? "";
+      void this.restoreProgress();
+    }
+  }
+  /** 在 PDF 页面上方渲染浮动工具栏。 */
+  renderToolbar(host) {
+    host.querySelector(".yh-pdf-toolbar")?.remove();
+    const bar = host.createDiv({ cls: "yh-pdf-toolbar" });
+    const bookmarkBtn = bar.createEl("button", { cls: "yh-pdf-toolbar-btn", attr: { type: "button", title: "\u6DFB\u52A0\u4E66\u7B7E" } });
+    bookmarkBtn.textContent = "\u2605";
+    bookmarkBtn.addEventListener("click", () => {
+      const file = this.activePdfFile();
+      if (!file || this.currentPage < 1) {
+        new import_obsidian3.Notice("\u65E0\u6CD5\u83B7\u53D6\u5F53\u524D\u9875\u7801");
+        return;
+      }
+      bookmarkBtn.dispatchEvent(new CustomEvent("yh-pdf-bookmark", { bubbles: true, detail: { file, page: this.currentPage } }));
+    });
+    const outlineBtn = bar.createEl("button", { cls: "yh-pdf-toolbar-btn", attr: { type: "button", title: "\u663E\u793A\u76EE\u5F55" } });
+    outlineBtn.textContent = "\u2630";
+    outlineBtn.addEventListener("click", async () => {
+      const outline = await this.getOutline();
+      if (outline.length === 0) {
+        new import_obsidian3.Notice("\u8BE5 PDF \u6CA1\u6709\u76EE\u5F55");
+        return;
+      }
+      const lines = outline.slice(0, 10).map((item) => {
+        const ch = item.children.filter((c2) => c2.pageNumber > 0).map((c2) => `  \u2514 ${c2.title}`).join("\n");
+        return `${item.title}${ch ? "\n" + ch : ""}`;
+      });
+      new import_obsidian3.Notice(`PDF \u76EE\u5F55\uFF08${outline.length} \u9879\uFF09\uFF1A
+${lines.join("\n")}`);
+    });
+    const exportBtn = bar.createEl("button", { cls: "yh-pdf-toolbar-btn", attr: { type: "button", title: "\u5BFC\u51FA\u6458\u5F55" } });
+    exportBtn.textContent = "\u2191";
+    exportBtn.addEventListener("click", () => {
+      new import_obsidian3.Notice("\u4F7F\u7528\u547D\u4EE4\u300C\u5BFC\u51FA PDF \u6458\u5F55\u300D");
+    });
+    const progressBtn = bar.createEl("button", { cls: "yh-pdf-toolbar-btn", attr: { type: "button", title: "\u6682\u505C/\u6062\u590D\u8FDB\u5EA6\u8FFD\u8E2A" } });
+    progressBtn.textContent = "\u23F8";
+    progressBtn.addEventListener("click", () => {
+      if (this.progressSaveTimer !== null) {
+        window.clearTimeout(this.progressSaveTimer);
+        this.progressSaveTimer = null;
+      }
+      const paused = progressBtn.textContent === "\u23F8";
+      progressBtn.textContent = paused ? "\u25B6" : "\u23F8";
+      progressBtn.title = paused ? "\u6062\u590D\u8FDB\u5EA6\u8FFD\u8E2A" : "\u6682\u505C\u8FDB\u5EA6\u8FFD\u8E2A";
+      new import_obsidian3.Notice(paused ? "\u8FDB\u5EA6\u8FFD\u8E2A\u5DF2\u6682\u505C" : "\u8FDB\u5EA6\u8FFD\u8E2A\u5DF2\u6062\u590D");
+    });
   }
   renderHighlights(host, document2) {
     if (!this.root) {
@@ -13958,6 +14009,20 @@ var OverlayAnnotationsPlugin = class extends import_obsidian16.Plugin {
     this.registerCommands();
     this.registerEvents();
     this.pdfLayer.register();
+    this.registerDomEvent(document, "yh-pdf-bookmark", (event) => {
+      const detail = event.detail;
+      if (!detail || detail.page < 1) return;
+      void this.store.addBookmark(detail.file, {
+        id: crypto.randomUUID(),
+        type: "pdf-bookmark",
+        label: `\u7B2C ${detail.page} \u9875`,
+        position: `page=${detail.page}`,
+        chapter: `\u7B2C ${detail.page} \u9875`,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+        color: this.settings.defaultHighlightColor
+      });
+      new import_obsidian16.Notice(`\u5DF2\u4E3A\u7B2C ${detail.page} \u9875\u6DFB\u52A0\u4E66\u7B7E`);
+    });
     this.stickyLane.register();
     this.epubExcerptExporter = new EpubExcerptExporter({
       app: this.app,

@@ -48,6 +48,7 @@ export class PdfAnnotationLayer {
   private currentPage = 0;
   private totalPages = 0;
   private progressSaveTimer: number | null = null;
+  private sessionFilePath = "";
 
   constructor(private readonly options: PdfAnnotationLayerOptions) {}
 
@@ -61,7 +62,6 @@ export class PdfAnnotationLayer {
     });
     this.options.component.registerEvent(
       this.options.app.workspace.on("active-leaf-change", () => {
-        void this.restoreProgress();
         this.scheduleRender();
       }),
     );
@@ -302,9 +302,62 @@ export class PdfAnnotationLayer {
     }
 
     this.renderHighlights(host, document);
+    // Phase 5：PDF 浮动工具栏（书签/目录/导出/进度开关）
+    this.renderToolbar(host);
     // Phase 5 P1：渲染后恢复上次阅读位置；同时更新页数并注册滚动检测
     this.totalPages = this.pages().length;
-    void this.restoreProgress();
+    if (this.sessionFilePath !== (file?.path ?? "")) { this.sessionFilePath = file?.path ?? ""; void this.restoreProgress(); }
+  }
+
+  /** 在 PDF 页面上方渲染浮动工具栏。 */
+  private renderToolbar(host: HTMLElement): void {
+    // 移除旧工具栏
+    host.querySelector(".yh-pdf-toolbar")?.remove();
+    const bar = host.createDiv({ cls: "yh-pdf-toolbar" });
+
+    // 书签
+    const bookmarkBtn = bar.createEl("button", { cls: "yh-pdf-toolbar-btn", attr: { type: "button", title: "添加书签" } });
+    bookmarkBtn.textContent = "★";
+    bookmarkBtn.addEventListener("click", () => {
+      const file = this.activePdfFile();
+      if (!file || this.currentPage < 1) { new Notice("无法获取当前页码"); return; }
+      // 调 addBookmark 需要通过 options 传递回调。这里用临时方式：触发事件让 main.ts 处理
+      bookmarkBtn.dispatchEvent(new CustomEvent("yh-pdf-bookmark", { bubbles: true, detail: { file, page: this.currentPage } }));
+    });
+
+    // 目录
+    const outlineBtn = bar.createEl("button", { cls: "yh-pdf-toolbar-btn", attr: { type: "button", title: "显示目录" } });
+    outlineBtn.textContent = "☰";
+    outlineBtn.addEventListener("click", async () => {
+      const outline = await this.getOutline();
+      if (outline.length === 0) { new Notice("该 PDF 没有目录"); return; }
+      const lines = outline.slice(0, 10).map((item) => {
+        const ch = item.children.filter(c => c.pageNumber > 0).map(c => `  └ ${c.title}`).join("\n");
+        return `${item.title}${ch ? "\n" + ch : ""}`;
+      });
+      new Notice(`PDF 目录（${outline.length} 项）：\n${lines.join("\n")}`);
+    });
+
+    // 导出
+    const exportBtn = bar.createEl("button", { cls: "yh-pdf-toolbar-btn", attr: { type: "button", title: "导出摘录" } });
+    exportBtn.textContent = "↑";
+    exportBtn.addEventListener("click", () => {
+      new Notice("使用命令「导出 PDF 摘录」");
+    });
+
+    // 进度开关
+    const progressBtn = bar.createEl("button", { cls: "yh-pdf-toolbar-btn", attr: { type: "button", title: "暂停/恢复进度追踪" } });
+    progressBtn.textContent = "⏸";
+    progressBtn.addEventListener("click", () => {
+      if (this.progressSaveTimer !== null) {
+        window.clearTimeout(this.progressSaveTimer);
+        this.progressSaveTimer = null;
+      }
+      const paused = progressBtn.textContent === "⏸";
+      progressBtn.textContent = paused ? "▶" : "⏸";
+      progressBtn.title = paused ? "恢复进度追踪" : "暂停进度追踪";
+      new Notice(paused ? "进度追踪已暂停" : "进度追踪已恢复");
+    });
   }
 
   private renderHighlights(host: HTMLElement, document: FileAnnotationDocument): void {

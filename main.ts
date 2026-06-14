@@ -159,6 +159,21 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     this.registerCommands();
     this.registerEvents();
     this.pdfLayer.register();
+    // Phase 5 P2：监听 PDF 浮动工具条的书签按钮
+    this.registerDomEvent(document, "yh-pdf-bookmark", (event: Event) => {
+      const detail = (event as CustomEvent).detail as { file: TFile; page: number } | undefined;
+      if (!detail || detail.page < 1) return;
+      void this.store.addBookmark(detail.file, {
+        id: crypto.randomUUID(),
+        type: "pdf-bookmark",
+        label: `第 ${detail.page} 页`,
+        position: `page=${detail.page}`,
+        chapter: `第 ${detail.page} 页`,
+        createdAt: new Date().toISOString(),
+        color: this.settings.defaultHighlightColor,
+      });
+      new Notice(`已为第 ${detail.page} 页添加书签`);
+    });
     this.stickyLane.register();
     this.epubExcerptExporter = new EpubExcerptExporter({
       app: this.app,

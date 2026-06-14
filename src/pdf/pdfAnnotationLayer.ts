@@ -142,7 +142,7 @@ export class PdfAnnotationLayer {
   async getOutline(): Promise<Array<{ title: string; pageNumber: number; children: Array<{ title: string; pageNumber: number }> }>> {
     const result: Array<{ title: string; pageNumber: number; children: Array<{ title: string; pageNumber: number }> }> = [];
     try {
-      const pdfViewerApp = (window as Record<string, unknown>).PDFViewerApp as Record<string, unknown> | undefined;
+      const pdfViewerApp = (window as unknown as Record<string, unknown>).PDFViewerApp as Record<string, unknown> | undefined;
       const pdfViewer = pdfViewerApp?.pdfViewer as Record<string, unknown> | undefined;
       const pdfDocument = pdfViewer?.pdfDocument as { getOutline?: () => Promise<Array<Record<string, unknown>>> } | undefined;
       if (!pdfDocument?.getOutline) return result;
@@ -173,7 +173,7 @@ export class PdfAnnotationLayer {
     try {
       const dest = item.dest;
       if (typeof dest === "string") {
-        const pdfViewerApp = (window as Record<string, unknown>).PDFViewerApp as Record<string, unknown> | undefined;
+        const pdfViewerApp = (window as unknown as Record<string, unknown>).PDFViewerApp as Record<string, unknown> | undefined;
         const pdfViewer = pdfViewerApp?.pdfViewer as Record<string, unknown> | undefined;
         const pdfDocument = pdfViewer?.pdfDocument as { getPageIndex?: (dest: string) => Promise<number> } | undefined;
         if (pdfDocument?.getPageIndex) {
@@ -184,9 +184,9 @@ export class PdfAnnotationLayer {
       if (Array.isArray(dest) && dest.length > 0) {
         const ref = dest[0] as { num?: number } | undefined;
         if (ref?.num !== undefined) {
-          const pdfViewerApp = (window as Record<string, unknown>).PDFViewerApp as Record<string, unknown> | undefined;
+          const pdfViewerApp = (window as unknown as Record<string, unknown>).PDFViewerApp as Record<string, unknown> | undefined;
           const pdfViewer = pdfViewerApp?.pdfViewer as Record<string, unknown> | undefined;
-          const pdfDocument = pdfViewer?.pdfDocument as { getPageIndex?: (ref: { num: number }) => Promise<number> } | undefined;
+          const pdfDocument = pdfViewer?.pdfDocument as { getPageIndex?: (ref: { num?: number }) => Promise<number> } | undefined;
           if (pdfDocument?.getPageIndex) {
             const idx = await pdfDocument.getPageIndex(ref);
             return idx >= 0 ? idx + 1 : 0;

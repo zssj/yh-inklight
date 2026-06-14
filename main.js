@@ -13748,11 +13748,12 @@ var EpubExcerptExporter = class {
   }
   /** 构建完整的 Markdown 摘录文本。 */
   buildMarkdown(file, document2) {
+    const isPdf = file.extension.toLowerCase() === "pdf";
     const title = file.basename;
     const now = /* @__PURE__ */ new Date();
     const parts = [];
     parts.push("---");
-    parts.push(`title: \u300A${title}\u300B\u6458\u5F55`);
+    parts.push(`title: \u300A${title}\u300B${isPdf ? "PDF" : ""}\u6458\u5F55`);
     parts.push(`source: ${file.path}`);
     parts.push(`exportedAt: ${now.toISOString()}`);
     parts.push(`highlights: ${document2.epubHighlights.length}`);
@@ -13761,9 +13762,9 @@ var EpubExcerptExporter = class {
     parts.push("");
     parts.push(`# \u300A${title}\u300B\u6458\u5F55`);
     parts.push("");
-    const entries = this.collectEntries(document2);
+    const entries = this.collectEntries(document2, isPdf);
     for (const entry of entries) {
-      parts.push(this.buildEntryBlock(entry));
+      parts.push(this.buildEntryBlock(entry, isPdf));
       parts.push("");
     }
     if (entries.length === 0) {
@@ -13772,8 +13773,8 @@ var EpubExcerptExporter = class {
     }
     return parts.join("\n");
   }
-  collectEntries(document2) {
-    const highlights = document2.epubHighlights.map((h3) => ({
+  collectEntries(document2, isPdf = false) {
+    const highlights = (isPdf ? document2.pdfHighlights : document2.epubHighlights).map((h3) => ({
       id: h3.id,
       kind: "highlight",
       color: h3.color,
@@ -13783,7 +13784,7 @@ var EpubExcerptExporter = class {
       note: "",
       createdAt: h3.createdAt
     }));
-    const comments = document2.epubComments.map((c2) => ({
+    const comments = (isPdf ? document2.pdfComments : document2.epubComments).map((c2) => ({
       id: c2.id,
       kind: "comment",
       color: c2.color,
@@ -13796,8 +13797,8 @@ var EpubExcerptExporter = class {
     return [...highlights, ...comments].sort((a3, b3) => b3.createdAt.localeCompare(a3.createdAt));
   }
   /** 构建单条标注的 callout 块（含 CFI 注释 + 回链）。 */
-  buildEntryBlock(entry) {
-    const blockId = `epub-${entry.id}`;
+  buildEntryBlock(entry, isPdf = false) {
+    const blockId = `${isPdf ? "pdf" : "epub"}-${entry.id}`;
     const colorMeta = COLOR_TO_CALLOUT_META[entry.color] ?? "yellow";
     const dateLabel = this.formatDate(new Date(entry.createdAt));
     const chapterLabel = entry.chapter?.trim() || "\u672A\u5206\u7C7B\u7AE0\u8282";
@@ -13816,7 +13817,7 @@ var EpubExcerptExporter = class {
       lines.push(">");
       lines.push(`> [\u56DE\u5230\u539F\u6587](#^${blockId})`);
     }
-    const cfiLine = `> <span style="display:none" data-yh-cfi="${entry.cfiRange}"></span>`;
+    const cfiLine = isPdf ? `> <span style="display:none">pdf-page:${entry.pageNumber}</span>` : `> <span style="display:none" data-yh-cfi="${entry.cfiRange}"></span>`;
     return `${lines.join("\n")}
 ${cfiLine}
 
@@ -13824,9 +13825,10 @@ ${cfiLine}
   }
   /** 解析导出目标路径：`${excerptFolder}/《书名》摘录.md`。 */
   async resolveExportPath(file) {
+    const isPdf = file.extension.toLowerCase() === "pdf";
     const folder = this.options.excerptFolder.trim() || "epub-excerpts";
     const safeTitle = file.basename.replace(/[\\/:*?"<>|]/g, "_");
-    return (0, import_obsidian15.normalizePath)(`${folder}/\u300A${safeTitle}\u300B\u6458\u5F55.md`);
+    return (0, import_obsidian15.normalizePath)(`${folder}/\u300A${safeTitle}\u300B${isPdf ? "PDF" : ""}\u6458\u5F55.md`);
   }
   /** 确保导出目录存在。 */
   async ensureFolder(filePath) {
@@ -14109,6 +14111,18 @@ ${lines.slice(0, 8).join("\n")}`);
         const file = this.app.workspace.getActiveFile();
         if (!file || file.extension.toLowerCase() !== "epub") {
           new import_obsidian16.Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A EPUB \u6587\u4EF6");
+          return;
+        }
+        await this.epubExcerptExporter.exportToFile(file);
+      }
+    });
+    this.addCommand({
+      id: "export-pdf-excerpts",
+      name: "\u5BFC\u51FA PDF \u6458\u5F55",
+      callback: async () => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.extension.toLowerCase() !== "pdf") {
+          new import_obsidian16.Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A PDF \u6587\u4EF6");
           return;
         }
         await this.epubExcerptExporter.exportToFile(file);

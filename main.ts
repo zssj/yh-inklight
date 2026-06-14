@@ -337,6 +337,20 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       },
     });
 
+    // Phase 5 P4：PDF 摘录导出（复用 EPUB 导出器）
+    this.addCommand({
+      id: "export-pdf-excerpts",
+      name: "导出 PDF 摘录",
+      callback: async () => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.extension.toLowerCase() !== "pdf") {
+          new Notice("请先打开一个 PDF 文件");
+          return;
+        }
+        await this.epubExcerptExporter.exportToFile(file);
+      },
+    });
+
     this.addCommand({
       id: "test-annotation-storage",
       name: "测试墨光批注存储",

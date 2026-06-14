@@ -135,12 +135,13 @@ export class EpubExcerptExporter {
 
 	/** 构建完整的 Markdown 摘录文本。 */
 	private buildMarkdown(file: TFile, document: FileAnnotationDocument): string {
+		const isPdf = file.extension.toLowerCase() === "pdf";
 		const title = file.basename;
 		const now = new Date();
 		const parts: string[] = [];
 
 		parts.push("---");
-		parts.push(`title: 《${title}》摘录`);
+		parts.push(`title: 《${title}》${isPdf ? "PDF" : ""}摘录`);
 		parts.push(`source: ${file.path}`);
 		parts.push(`exportedAt: ${now.toISOString()}`);
 		parts.push(`highlights: ${document.epubHighlights.length}`);
@@ -151,9 +152,9 @@ export class EpubExcerptExporter {
 		parts.push("");
 
 		// 合并并按创建时间倒序（最新的在前）
-		const entries = this.collectEntries(document);
+		const entries = this.collectEntries(document, isPdf);
 		for (const entry of entries) {
-			parts.push(this.buildEntryBlock(entry));
+			parts.push(this.buildEntryBlock(entry, isPdf));
 			parts.push("");
 		}
 
@@ -165,8 +166,8 @@ export class EpubExcerptExporter {
 		return parts.join("\n");
 	}
 
-	private collectEntries(document: FileAnnotationDocument): ExcerptEntry[] {
-		const highlights: ExcerptEntry[] = document.epubHighlights.map((h) => ({
+	private collectEntries(document: FileAnnotationDocument, isPdf = false): ExcerptEntry[] {
+		const highlights: ExcerptEntry[] = (isPdf ? document.pdfHighlights : document.epubHighlights).map((h: any) => ({
 			id: h.id,
 			kind: "highlight",
 			color: h.color,
@@ -176,7 +177,7 @@ export class EpubExcerptExporter {
 			note: "",
 			createdAt: h.createdAt,
 		}));
-		const comments: ExcerptEntry[] = document.epubComments.map((c) => ({
+		const comments: ExcerptEntry[] = (isPdf ? document.pdfComments : document.epubComments).map((c: any) => ({
 			id: c.id,
 			kind: "comment",
 			color: c.color,
@@ -190,8 +191,8 @@ export class EpubExcerptExporter {
 	}
 
 	/** 构建单条标注的 callout 块（含 CFI 注释 + 回链）。 */
-	private buildEntryBlock(entry: ExcerptEntry): string {
-		const blockId = `epub-${entry.id}`;
+	private buildEntryBlock(entry: ExcerptEntry, isPdf = false): string {
+		const blockId = `${isPdf ? "pdf" : "epub"}-${entry.id}`;
 		const colorMeta = COLOR_TO_CALLOUT_META[entry.color] ?? "yellow";
 		const dateLabel = this.formatDate(new Date(entry.createdAt));
 		const chapterLabel = entry.chapter?.trim() || "未分类章节";
@@ -215,16 +216,19 @@ export class EpubExcerptExporter {
 		}
 
 		// CFI 嵌入 callout 内隐藏 span, EpubGotoHandler 据此定位
-		const cfiLine = `> <span style="display:none" data-yh-cfi="${entry.cfiRange}"></span>`;
+		const cfiLine = isPdf
+				? `> <span style="display:none">pdf-page:${entry.pageNumber}</span>`
+				: `> <span style="display:none" data-yh-cfi="${entry.cfiRange}"></span>`;
 
 		return `${lines.join("\n")}\n${cfiLine}\n\n---`;
 	}
 
 	/** 解析导出目标路径：`${excerptFolder}/《书名》摘录.md`。 */
 	private async resolveExportPath(file: TFile): Promise<string> {
+		const isPdf = file.extension.toLowerCase() === "pdf";
 		const folder = this.options.excerptFolder.trim() || "epub-excerpts";
 		const safeTitle = file.basename.replace(/[\\/:*?"<>|]/g, "_");
-		return normalizePath(`${folder}/《${safeTitle}》摘录.md`);
+		return normalizePath(`${folder}/《${safeTitle}》${isPdf ? "PDF" : ""}摘录.md`);
 	}
 
 	/** 确保导出目录存在。 */
@@ -249,6 +253,7 @@ export class EpubExcerptExporter {
 }
 
 interface ExcerptEntry {
+	pageNumber?: number;
 	id: string;
 	kind: "highlight" | "comment";
 	color: AnnotationColor;

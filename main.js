@@ -10380,15 +10380,12 @@ async function openBookFromBuffer(view, buffer, filename) {
       rendition: {},
       splitTOCHref: (href) => {
         const [sid] = String(href || "").split("#");
-        return [sid === sectionId ? 0 : -1, null];
+        return [sid === sectionId ? 0 : 0, null];
       },
-      getTOCFragment: (_doc2, _fragment) => null,
+      getTOCFragment: (doc, _fragment) => doc.documentElement,
       isExternal: (href) => /^\w+:/i.test(String(href || "")),
-      resolveCFI: () => null,
-      resolveHref: (href) => {
-        const [sid] = String(href || "").split("#");
-        return sid === sectionId ? { index: 0, anchor: (doc) => doc.documentElement } : null;
-      },
+      resolveCFI: (_cfi) => ({ index: 0, anchor: (doc) => doc.documentElement }),
+      resolveHref: (_href) => ({ index: 0, anchor: (doc) => doc.documentElement }),
       destroy: () => {
         try {
           URL.revokeObjectURL(blobUrl);
@@ -10410,7 +10407,7 @@ async function openBookFromBuffer(view, buffer, filename) {
 function buildTxtHtml(filename, text) {
   const title = filename.replace(/\.txt$/i, "");
   const paragraphs = text.replace(/\r\n?/g, "\n").split(/\n{2,}/).map((block) => block.replace(/\s+$/g, "").trim()).filter(Boolean);
-  const body = paragraphs.map((p3) => `<p>${escapeHtml(p3.replace(/\n/g, "<br />"))}</p>`).join("\n");
+  const body = paragraphs.map((p3) => `<p>${escapeHtml(p3).replace(/\n/g, "<br />")}</p>`).join("\n");
   return `<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml"><head><meta charset="utf-8" /><title>${escapeHtml(title)}</title><style>body{margin:0;padding:1em 1.5em;font-family:inherit;font-size:1em;line-height:1.8;word-break:break-word;overflow-wrap:anywhere;}p{margin:0 0 0.95em;text-indent:2em;white-space:pre-wrap;}</style></head><body>${body}</body></html>`;
 }
 function escapeHtml(s3) {

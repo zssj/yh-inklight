@@ -272,6 +272,7 @@ export async function openBookFromBuffer(
     const html = buildTxtHtml(filename, text);
     const parser = new DOMParser();
     const sectionId = "txt-section-1.xhtml";
+    const blobUrl = URL.createObjectURL(new Blob([html], { type: "application/xhtml+xml" }));
     const createDoc = (): Document => parser.parseFromString(html, "application/xhtml+xml");
     const book = {
       sections: [{
@@ -279,8 +280,10 @@ export async function openBookFromBuffer(
         cfi: "epubcfi(/6/2)",
         linear: "yes",
         size: text.length,
-        load: () => html,
+        // ⚠️ load() 必须返回 URL（blob/data），foliate 直接 iframe.src = src；返回 HTML 字符串会导致空白
+        load: () => blobUrl,
         createDocument: () => createDoc(),
+        unload: () => { try { URL.revokeObjectURL(blobUrl); } catch { /* ignore */ } },
       }],
       toc: [{ label: filename.replace(/\.txt$/i, ""), href: sectionId }],
       metadata: { title: filename.replace(/\.txt$/i, ""), author: "", language: "zh-CN" },
@@ -296,7 +299,7 @@ export async function openBookFromBuffer(
         const [sid] = String(href || "").split("#");
         return sid === sectionId ? { index: 0, anchor: (doc: Document) => doc.documentElement } : null;
       },
-      destroy: () => {},
+      destroy: () => { try { URL.revokeObjectURL(blobUrl); } catch { /* ignore */ } },
     };
     await view.open(book as any);
     return;

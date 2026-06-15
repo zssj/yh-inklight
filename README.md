@@ -73,8 +73,6 @@
 | EPUB 字号 | 初始字号 |
 | EPUB 高亮样式 | 填充 / 下划线 / 波浪线 |
 | EPUB 阅读主题 | 6 种主题 |
-| EPUB 摘录目录 | 摘录导出路径（默认 `epub-excerpts`） |
-| EPUB 回链渲染 | 摘录是否生成「回到原文」链接 |
 | EPUB 脚注预览 | 是否悬停显示脚注 |
 
 ---
@@ -120,6 +118,11 @@
 ---
 
 ## 📋 版本历史
+
+### v0.16.3
+- 迁移：旧摘录导出的 callout、EPUB CFI hidden anchor、Back to source 回跳能力并入统一「导出批注」
+- 增强：统一导出为 Markdown/PDF/EPUB 批注生成可定位 callout；PDF 使用 page link，EPUB 使用 CFI 回跳
+- 清理：删除废弃 `EpubExcerptExporter`、独立摘录目录/回链设置，以及主类中的旧 exporter 引用
 
 ### v0.16.2
 - 调整：PDF/EPUB 不再显示额外导出摘录入口，统一走侧栏底部「导出批注」

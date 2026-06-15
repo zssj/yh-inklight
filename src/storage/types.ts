@@ -166,12 +166,10 @@ export interface AnnotationPluginSettings {
   epubDefaultFlow: EpubFlowMode;
   epubFontSize: number;
   epubReadingTheme: EpubReadingTheme;
-  epubExcerptFolder: string;
   epubNoteIconSize: number;
   epubNoteIconOffsetX: number;
   epubNoteIconOffsetY: number;
   epubHighlightStyle: EpubHighlightStyle;
-  epubBacklinkRendering: boolean;
   // --- PDF 增强 ---
   pdfEnhancedMode: boolean;
   pdfBookmarkVisible: boolean;
@@ -213,12 +211,10 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   epubDefaultFlow: "scrolled",
   epubFontSize: 16,
   epubReadingTheme: "obsidian",
-  epubExcerptFolder: "epub-excerpts",
   epubNoteIconSize: 20,
   epubNoteIconOffsetX: 2,
   epubNoteIconOffsetY: 0,
   epubHighlightStyle: "fill",
-  epubBacklinkRendering: true,
   // PDF 增强
   pdfEnhancedMode: true,
   pdfBookmarkVisible: true,

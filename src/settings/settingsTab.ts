@@ -171,26 +171,5 @@ export class AnnotationSettingsTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         });
       });
-
-    new Setting(containerEl)
-      .setName("摘录导出目录")
-      .setDesc("EPUB 摘录导出到的 Vault 文件夹路径。")
-      .addText((text) => {
-        text.setValue(this.plugin.settings.epubExcerptFolder).onChange(async (value) => {
-          this.plugin.settings.epubExcerptFolder = value.trim() || "epub-excerpts";
-          await this.plugin.saveSettings();
-        });
-      });
-
-
-    new Setting(containerEl)
-      .setName("正文回显标注")
-      .setDesc("在导出的 Markdown 摘录中渲染可回跳的标注链接。")
-      .addToggle((toggle) => {
-        toggle.setValue(this.plugin.settings.epubBacklinkRendering).onChange(async (value) => {
-          this.plugin.settings.epubBacklinkRendering = value;
-          await this.plugin.saveSettings();
-        });
-      });
   }
 }

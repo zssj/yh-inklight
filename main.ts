@@ -30,7 +30,6 @@ import { StickyNoteLane } from "./src/views/stickyNoteLane";
 import { EpubReaderView, EPUB_READER_VIEW_TYPE } from "./src/epub/EpubReaderView";
 import { EpubBookshelfView, EPUB_BOOKSHELF_VIEW_TYPE } from "./src/epub/EpubBookshelfView";
 import { registerEpubGotoHandler } from "./src/epub/EpubGotoHandler";
-import { EpubExcerptExporter } from "./src/epub/EpubExcerptExporter";
 
 interface CommentModalValue {
   title: string;
@@ -65,7 +64,6 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   private pdfLayer!: PdfAnnotationLayer;
   private pdfViewerAdapter!: PdfViewerAdapter;
   private stickyLane!: StickyNoteLane;
-  private epubExcerptExporter!: EpubExcerptExporter;
   private lastSelection: SelectionSnapshot | null = null;
   private renameMigrationTimer: number | null = null;
 
@@ -170,13 +168,6 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       void this.gotoPdfPageFromSidebar(detail.page);
     }) as EventListener);
     this.stickyLane.register();
-    this.epubExcerptExporter = new EpubExcerptExporter({
-      app: this.app,
-      store: this.store,
-      excerptFolder: this.settings.epubExcerptFolder,
-      backlinkRendering: this.settings.epubBacklinkRendering,
-      defaultAuthor: this.settings.defaultAuthor,
-    });
     // Phase 4-B P1: EPUB 双向溯源 + 摘录导出
     registerEpubGotoHandler(this, (file, cfi) => this.openEpubAtCfi(file, cfi));
     this.registerObsidianProtocolHandler("inklight-epub", (params) => {
@@ -457,10 +448,6 @@ export default class OverlayAnnotationsPlugin extends Plugin {
 
         this.renameMigrationTimer = window.setTimeout(async () => {
           await this.store.migrateFilePath(oldPath, file);
-          // 书籍改名：额外迁移摘录导出文件的 source 路径 + 重命名摘录文件
-          if (isBook) {
-            await this.epubExcerptExporter.migrateExcerptSource(oldPath, file.path);
-          }
           await this.refreshAnnotations();
           this.renameMigrationTimer = null;
         }, 100);

@@ -38,6 +38,7 @@ interface ExportDocumentSource {
 }
 
 interface ExportEntry {
+  id: string;
   kind: "highlight" | "note";
   mode: "md" | "pdf" | "epub";
   sourcePath: string;
@@ -710,6 +711,7 @@ function buildExportLines(
 function collectExportEntries(source: ExportDocumentSource): ExportEntry[] {
   return [
     ...source.document.highlights.map((highlight): ExportEntry => ({
+      id: highlight.id,
       kind: "highlight",
       mode: "md",
       sourcePath: source.filePath,
@@ -721,6 +723,7 @@ function collectExportEntries(source: ExportDocumentSource): ExportEntry[] {
       startOffset: highlight.anchor.startOffset,
     })),
     ...source.document.comments.map((comment): ExportEntry => ({
+      id: comment.id,
       kind: "note",
       mode: "md",
       sourcePath: source.filePath,
@@ -732,6 +735,7 @@ function collectExportEntries(source: ExportDocumentSource): ExportEntry[] {
       startOffset: comment.anchor.startOffset,
     })),
     ...source.document.pdfHighlights.map((highlight): ExportEntry => ({
+      id: highlight.id,
       kind: "highlight",
       mode: "pdf",
       sourcePath: source.filePath,
@@ -743,6 +747,7 @@ function collectExportEntries(source: ExportDocumentSource): ExportEntry[] {
       startOffset: Number.MAX_SAFE_INTEGER,
     })),
     ...source.document.pdfComments.map((comment): ExportEntry => ({
+      id: comment.id,
       kind: "note",
       mode: "pdf",
       sourcePath: source.filePath,
@@ -754,6 +759,7 @@ function collectExportEntries(source: ExportDocumentSource): ExportEntry[] {
       startOffset: Number.MAX_SAFE_INTEGER,
     })),
     ...source.document.epubHighlights.map((highlight): ExportEntry => ({
+      id: highlight.id,
       kind: "highlight",
       mode: "epub",
       sourcePath: source.filePath,
@@ -767,6 +773,7 @@ function collectExportEntries(source: ExportDocumentSource): ExportEntry[] {
       startOffset: Number.MAX_SAFE_INTEGER,
     })),
     ...source.document.epubComments.map((comment): ExportEntry => ({
+      id: comment.id,
       kind: "note",
       mode: "epub",
       sourcePath: source.filePath,
@@ -790,11 +797,11 @@ function renderSummary(entries: ExportEntry[]): string[] {
   return [
     "## Highlights",
     "",
-    ...highlights.map((entry) => `- ==${entry.text}== (${entry.color}, ${entrySource(entry)}, ${entry.createdAt})`),
+    ...highlights.flatMap((entry) => renderAnnotationBlock(entry)),
     "",
     "## Sticky Notes",
     "",
-    ...notes.flatMap((entry) => renderNoteBlock(entry)),
+    ...notes.flatMap((entry) => renderAnnotationBlock(entry)),
   ];
 }
 
@@ -809,9 +816,7 @@ function renderByColor(entries: ExportEntry[]): string[] {
       `## ${color}`,
       "",
       ...colorEntries.flatMap((entry) => {
-        return entry.kind === "note"
-          ? renderNoteBlock(entry)
-          : [`- ==${entry.text}== (${entrySource(entry)}, ${entry.createdAt})`, ""];
+        return renderAnnotationBlock(entry);
       }),
     ];
   });
@@ -822,7 +827,7 @@ function renderNotesOnly(entries: ExportEntry[]): string[] {
   if (!notes.length) {
     return ["No sticky notes found.", ""];
   }
-  return ["## Sticky Notes", "", ...notes.flatMap((entry) => renderNoteBlock(entry))];
+  return ["## Sticky Notes", "", ...notes.flatMap((entry) => renderAnnotationBlock(entry))];
 }
 
 function renderReadingNotes(entries: ExportEntry[]): string[] {
@@ -830,27 +835,76 @@ function renderReadingNotes(entries: ExportEntry[]): string[] {
     "## Reading Notes",
     "",
     ...entries.flatMap((entry) => {
-      const lines = [`### ${entrySource(entry)}`, "", `> ${entry.text}`, "", `Color: ${entry.color}`, `Type: ${entry.kind}`];
-      if (entry.content.trim()) {
-        lines.push("", entry.content);
-      }
-      lines.push("");
-      return lines;
+      return [`### ${entrySource(entry)}`, "", ...renderAnnotationBlock(entry)];
     }),
   ];
 }
 
 function renderNoteBlock(entry: ExportEntry): string[] {
-  return [
-    `### ${entry.text}`,
-    "",
-    `Source: ${entrySource(entry)}`,
-    `Color: ${entry.color}`,
-    `Updated: ${entry.createdAt}`,
-    "",
-    entry.content,
-    "",
-  ];
+  return renderAnnotationBlock(entry);
+}
+
+function renderAnnotationBlock(entry: ExportEntry): string[] {
+  const blockId = `${entry.mode}-${entry.id}`;
+  const calloutType = entry.mode === "epub" ? "inklight-epub" : entry.mode === "pdf" ? "inklight-pdf" : "inklight-md";
+  const header = `> [!${calloutType}|${entry.color}] ${entrySource(entry)} - ${entry.createdAt} ^${blockId}`;
+  const lines = [header];
+
+  for (const line of entry.text.split(/\r?\n/)) {
+    lines.push(`> ${line}`);
+  }
+
+  if (entry.content.trim()) {
+    lines.push(">");
+    for (const line of entry.content.split(/\r?\n/)) {
+      lines.push(`> Note: ${line}`);
+    }
+  }
+
+  const backLink = entryBackLink(entry, blockId);
+  if (backLink) {
+    lines.push(">");
+    lines.push(`> ${backLink}`);
+  }
+
+  const anchor = hiddenAnchor(entry);
+  if (anchor) {
+    lines.push(anchor);
+  }
+
+  lines.push("");
+  return lines;
+}
+
+function entryBackLink(entry: ExportEntry, blockId: string): string {
+  if (entry.mode === "pdf" && entry.pageNumber) {
+    return `[[${entry.sourcePath}#page=${entry.pageNumber}|Back to source]]`;
+  }
+  if (entry.mode === "epub" && entry.cfiRange) {
+    return `[Back to source](#^${blockId})`;
+  }
+  if (entry.mode === "md") {
+    return `[[${entry.sourcePath}|Back to source]]`;
+  }
+  return "";
+}
+
+function hiddenAnchor(entry: ExportEntry): string {
+  if (entry.mode === "epub" && entry.cfiRange) {
+    return `> <span style="display:none" data-yh-cfi="${escapeHtmlAttribute(entry.cfiRange)}" data-yh-source-path="${escapeHtmlAttribute(entry.sourcePath)}"></span>`;
+  }
+  if (entry.mode === "pdf" && entry.pageNumber) {
+    return `> <span style="display:none" data-yh-pdf-page="${entry.pageNumber}" data-yh-source-path="${escapeHtmlAttribute(entry.sourcePath)}" data-yh-pdf-id="${escapeHtmlAttribute(entry.id)}"></span>`;
+  }
+  return "";
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function entrySource(entry: ExportEntry): string {

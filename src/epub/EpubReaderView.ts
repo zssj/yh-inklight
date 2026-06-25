@@ -134,6 +134,7 @@ export class EpubReaderView extends FileView {
 	private readonly pluginSettings: AnnotationPluginSettings;
 	private readonly themeManager: EpubThemeManager;
 	private readonly refreshAnnotations: () => void;
+	private readonly saveSettings: () => Promise<void>;
 
 	// ---- foliate 实例 ----
 
@@ -203,11 +204,13 @@ private contextMenuEl: HTMLElement | null = null;
 		store: AnnotationStore,
 		settings: AnnotationPluginSettings,
 		refreshAnnotations: () => void,
+		saveSettings: () => Promise<void>,
 	) {
 		super(leaf);
 		this.store = store;
 		this.pluginSettings = settings;
 		this.refreshAnnotations = refreshAnnotations;
+		this.saveSettings = saveSettings;
 		this.themeManager = new EpubThemeManager();
 		this.currentFlowMode = settings.epubDefaultFlow;
 		this.currentFontSize = settings.epubFontSize;
@@ -1259,8 +1262,10 @@ private contextMenuEl: HTMLElement | null = null;
 		}
 
 		this.currentFontSize = nextSize;
+		this.pluginSettings.epubFontSize = nextSize;
 		this.applyFontSize(nextSize);
 		this.renderToolbar();
+		void this.saveSettings();
 	}
 
 	/**
@@ -1283,10 +1288,12 @@ private contextMenuEl: HTMLElement | null = null;
 		}
 
 		this.currentTheme = themeId;
+		this.pluginSettings.epubReadingTheme = themeId;
 
 		this.applyFoliateAppearance();
 
 		this.renderToolbar();
+		void this.saveSettings();
 	}
 
 	/**
@@ -1295,6 +1302,7 @@ private contextMenuEl: HTMLElement | null = null;
 	private toggleFlowMode(): void {
 		const nextMode: EpubFlowMode = this.currentFlowMode === "paginated" ? "scrolled" : "paginated";
 		this.currentFlowMode = nextMode;
+		this.pluginSettings.epubDefaultFlow = nextMode;
 
 		if (!this.foliateView) {
 			return;
@@ -1305,6 +1313,7 @@ private contextMenuEl: HTMLElement | null = null;
 		this.applyFoliateLayout();
 		this.applyFoliateAppearance();
 		this.renderToolbar();
+		void this.saveSettings();
 	}
 
 	// ================================================================

@@ -75,7 +75,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     await this.store.initialize();
 
     this.registerView(ANNOTATION_SIDEBAR_VIEW, (leaf) => new AnnotationSidebarView(leaf, this));
-    this.registerView(EPUB_READER_VIEW_TYPE, (leaf) => new EpubReaderView(leaf, this.store, this.settings, () => this.refreshAnnotations()));
+    this.registerView(EPUB_READER_VIEW_TYPE, (leaf) => new EpubReaderView(leaf, this.store, this.settings, () => this.refreshAnnotations(), () => this.saveSettings()));
     // 把 foliate 支持的所有电子书格式绑定到阅读器视图：registerView 只注册视图工厂，
     // 还需要 registerExtensions 告诉 Obsidian「.epub/.mobi/... 用本视图打开」。
     // 参考 ob-epub-reader 与 obsidian-weave-reader 的实现；用 try/catch 防止

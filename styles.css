@@ -2177,3 +2177,13 @@ a.yh-epub-goto-link:hover {
   padding: 0 1px;
   border-radius: 2px;
 }
+
+/* 移动端安全区域适配（刘海屏/状态栏/底部横条） */
+@supports (padding-top: env(safe-area-inset-top)) {
+  .yh-epub-toolbar {
+    padding-top: calc(6px + env(safe-area-inset-top));
+  }
+  .yh-epub-progress {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}

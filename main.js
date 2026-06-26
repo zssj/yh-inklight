@@ -11466,6 +11466,40 @@ var EpubThemeManager = class {
   }
 };
 
+// src/epub/polyfills.ts
+var ObjectWithGroupBy = Object;
+var MapWithGroupBy = Map;
+if (typeof ObjectWithGroupBy.groupBy === "undefined") {
+  ObjectWithGroupBy.groupBy = function groupBy(items, callbackFn) {
+    const result = {};
+    let index = 0;
+    for (const item of items) {
+      const key = callbackFn(item, index++);
+      if (key in result) {
+        result[key].push(item);
+      } else {
+        result[key] = [item];
+      }
+    }
+    return result;
+  };
+}
+if (typeof MapWithGroupBy.groupBy === "undefined") {
+  MapWithGroupBy.groupBy = function groupBy(items, callbackFn) {
+    const map = /* @__PURE__ */ new Map();
+    let index = 0;
+    for (const item of items) {
+      const key = callbackFn(item, index++);
+      if (map.has(key)) {
+        map.get(key).push(item);
+      } else {
+        map.set(key, [item]);
+      }
+    }
+    return map;
+  };
+}
+
 // src/epub/EpubFoliateGuard.ts
 var FOLIATE_CUSTOM_ELEMENT_NAMES = /* @__PURE__ */ new Set([
   "foliate-view",
@@ -11957,7 +11991,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
   // ================================================================
   // 构造 & 生命周期
   // ================================================================
-  constructor(leaf, store, settings, refreshAnnotations) {
+  constructor(leaf, store, settings, refreshAnnotations, saveSettings) {
     super(leaf);
     // ---- foliate 实例 ----
     this.foliateView = null;
@@ -12034,6 +12068,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     this.store = store;
     this.pluginSettings = settings;
     this.refreshAnnotations = refreshAnnotations;
+    this.saveSettings = saveSettings;
     this.themeManager = new EpubThemeManager();
     this.currentFlowMode = settings.epubDefaultFlow;
     this.currentFontSize = settings.epubFontSize;
@@ -12933,8 +12968,10 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       return;
     }
     this.currentFontSize = nextSize;
+    this.pluginSettings.epubFontSize = nextSize;
     this.applyFontSize(nextSize);
     this.renderToolbar();
+    void this.saveSettings();
   }
   /**
    * 将字号应用到 foliate 主题样式。
@@ -12954,8 +12991,10 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       return;
     }
     this.currentTheme = themeId;
+    this.pluginSettings.epubReadingTheme = themeId;
     this.applyFoliateAppearance();
     this.renderToolbar();
+    void this.saveSettings();
   }
   /**
    * 切换翻页模式（分页/滚动）。
@@ -12963,6 +13002,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
   toggleFlowMode() {
     const nextMode = this.currentFlowMode === "paginated" ? "scrolled" : "paginated";
     this.currentFlowMode = nextMode;
+    this.pluginSettings.epubDefaultFlow = nextMode;
     if (!this.foliateView) {
       return;
     }
@@ -12971,6 +13011,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     this.applyFoliateLayout();
     this.applyFoliateAppearance();
     this.renderToolbar();
+    void this.saveSettings();
   }
   // ================================================================
   // 阅读时间追踪
@@ -13828,7 +13869,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian16.Plugin {
     this.store = new AnnotationStore(this.app);
     await this.store.initialize();
     this.registerView(ANNOTATION_SIDEBAR_VIEW, (leaf) => new AnnotationSidebarView(leaf, this));
-    this.registerView(EPUB_READER_VIEW_TYPE, (leaf) => new EpubReaderView(leaf, this.store, this.settings, () => this.refreshAnnotations()));
+    this.registerView(EPUB_READER_VIEW_TYPE, (leaf) => new EpubReaderView(leaf, this.store, this.settings, () => this.refreshAnnotations(), () => this.saveSettings()));
     try {
       this.registerExtensions([...SUPPORTED_BOOK_EXTENSIONS], EPUB_READER_VIEW_TYPE);
     } catch (error) {

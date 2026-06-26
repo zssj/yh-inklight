@@ -16,6 +16,7 @@
  * 本基础实现直接 view.open(Blob)，先满足渲染/选区/标注/进度；metadata/搜索等留待后续按需引入。
  */
 
+import "./polyfills";
 import { installFoliateCustomElementGuard } from "./EpubFoliateGuard";
 import { installFoliateBlobIframePatch } from "./EpubFoliatePatches";
 

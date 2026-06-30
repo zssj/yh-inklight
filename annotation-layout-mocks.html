@@ -1,0 +1,454 @@
+<!--
+  [INPUT]: Depends on standalone HTML/CSS to visualize four Obsidian annotation layout strategies.
+  [OUTPUT]: Provides a static comparison mock for sticky lane, popover, always-on, and sidebar-only annotation UX.
+  [POS]: Project-root design artifact for deciding plugin reading-layout direction before deeper implementation.
+  [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Overlay Annotation Layout Mocks</title>
+    <style>
+      :root {
+        --paper: #fbfaf7;
+        --ink: #202124;
+        --muted: #6b6f76;
+        --line: #dad7cf;
+        --panel: #ffffff;
+        --note: #fff1a8;
+        --note-blue: #dceeff;
+        --note-pink: #ffe0ef;
+        --highlight: rgba(255, 216, 77, 0.62);
+        --accent: #2f6fed;
+        --shadow: 0 12px 30px rgba(38, 36, 31, 0.13);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: #ece9e1;
+        color: var(--ink);
+        font-family: ui-serif, Georgia, "Times New Roman", serif;
+      }
+
+      main {
+        margin: 0 auto;
+        max-width: 1440px;
+        padding: 32px;
+      }
+
+      header {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 24px;
+        margin-bottom: 24px;
+      }
+
+      h1,
+      h2,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 34px;
+        letter-spacing: 0;
+      }
+
+      .subtitle {
+        color: var(--muted);
+        font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        max-width: 680px;
+      }
+
+      .grid {
+        display: grid;
+        gap: 22px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .mock {
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: 0 20px 50px rgba(50, 45, 35, 0.1);
+        overflow: hidden;
+      }
+
+      .mock-header {
+        align-items: center;
+        background: #f4f1ea;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        gap: 10px;
+        justify-content: space-between;
+        padding: 12px 14px;
+      }
+
+      .mock-title {
+        font: 700 16px/1.2 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      .tag {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        font: 12px/1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        padding: 6px 9px;
+      }
+
+      .viewport {
+        display: grid;
+        min-height: 410px;
+        position: relative;
+      }
+
+      .doc {
+        padding: 30px 34px;
+      }
+
+      .doc h2 {
+        font-size: 28px;
+        margin-bottom: 20px;
+      }
+
+      .doc p {
+        font-size: 17px;
+        line-height: 1.72;
+        margin-bottom: 16px;
+      }
+
+      mark {
+        background: var(--highlight);
+        border-radius: 3px;
+        padding: 0 3px;
+      }
+
+      .lane {
+        background: rgba(255, 255, 255, 0.58);
+        border-left: 1px solid var(--line);
+        padding: 24px 16px;
+        position: relative;
+      }
+
+      .lane.left {
+        border-left: 0;
+        border-right: 1px solid var(--line);
+      }
+
+      .note {
+        background: var(--note);
+        border: 1px solid rgba(153, 128, 16, 0.18);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+        font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        margin-bottom: 14px;
+        padding: 12px;
+      }
+
+      .note.blue {
+        background: var(--note-blue);
+      }
+
+      .note.pink {
+        background: var(--note-pink);
+      }
+
+      .note strong {
+        display: block;
+        margin-bottom: 4px;
+      }
+
+      .line {
+        border-top: 2px solid rgba(47, 111, 237, 0.45);
+        height: 1px;
+        position: absolute;
+        transform-origin: left center;
+      }
+
+      .toolbar {
+        align-items: center;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+        display: flex;
+        gap: 6px;
+        left: 128px;
+        padding: 7px;
+        position: absolute;
+        top: 112px;
+      }
+
+      .swatch {
+        border-radius: 999px;
+        border: 1px solid rgba(0, 0, 0, 0.12);
+        height: 18px;
+        width: 18px;
+      }
+
+      .swatch:nth-child(1) {
+        background: #ffd84d;
+      }
+
+      .swatch:nth-child(2) {
+        background: #7bd88f;
+      }
+
+      .swatch:nth-child(3) {
+        background: #72b7ff;
+      }
+
+      .swatch:nth-child(4) {
+        background: #ff9ac7;
+      }
+
+      .tool {
+        border-left: 1px solid var(--line);
+        color: var(--muted);
+        font: 12px/1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        padding-left: 8px;
+      }
+
+      .popover {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+        font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        left: 210px;
+        padding: 12px;
+        position: absolute;
+        top: 155px;
+        width: 220px;
+      }
+
+      .leaf {
+        background: #f7f7f5;
+        border-left: 1px solid var(--line);
+        padding: 18px;
+      }
+
+      .leaf h3 {
+        font: 700 16px/1.2 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        margin: 0 0 12px;
+      }
+
+      .leaf-item {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        margin-bottom: 10px;
+        padding: 10px;
+      }
+
+      .mobile-frame {
+        background: #ffffff;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        bottom: 18px;
+        box-shadow: var(--shadow);
+        height: 168px;
+        overflow: hidden;
+        position: absolute;
+        right: 18px;
+        width: 138px;
+      }
+
+      .mobile-frame .doc {
+        padding: 14px;
+      }
+
+      .mobile-frame p {
+        font-size: 11px;
+        line-height: 1.5;
+      }
+
+      .mobile-popover {
+        background: var(--note);
+        border-radius: 8px;
+        bottom: 12px;
+        font: 10px/1.35 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        left: 12px;
+        padding: 8px;
+        position: absolute;
+        right: 12px;
+      }
+
+      .caption {
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        padding: 12px 14px 14px;
+      }
+
+      .desktop-lane .viewport {
+        grid-template-columns: minmax(0, 1fr) 280px;
+      }
+
+      .hidden-popover .viewport {
+        grid-template-columns: 1fr;
+      }
+
+      .always-on .viewport {
+        grid-template-columns: minmax(0, 1fr) 280px;
+      }
+
+      .leaf-only .viewport {
+        grid-template-columns: minmax(0, 1fr) 290px;
+      }
+
+      .always-on .lane {
+        padding-left: 16px;
+        padding-right: 16px;
+      }
+
+      .desktop-lane .line.one {
+        left: 424px;
+        top: 132px;
+        width: 145px;
+        transform: rotate(9deg);
+      }
+
+      .desktop-lane .line.two {
+        left: 414px;
+        top: 218px;
+        width: 160px;
+        transform: rotate(-5deg);
+      }
+
+      @media (max-width: 900px) {
+        main {
+          padding: 18px;
+        }
+
+        header {
+          align-items: start;
+          flex-direction: column;
+        }
+
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>Obsidian Annotation Layout Mocks</h1>
+          <p class="subtitle">Four UX directions for non-invasive highlights and sticky notes. Same source text, different annotation surface.</p>
+        </div>
+        <span class="tag">visual decision mock</span>
+      </header>
+
+      <section class="grid">
+        <article class="mock desktop-lane">
+          <div class="mock-header">
+            <h2 class="mock-title">1. Desktop lane, narrow-screen popover</h2>
+            <span class="tag">chosen direction</span>
+          </div>
+          <div class="viewport">
+            <div class="doc">
+              <h2>Harness</h2>
+              <p>The reader can mark <mark>important implementation details</mark> while keeping Markdown untouched.</p>
+              <p>Sticky notes live beside the document and <mark>track the highlighted passage</mark> as the page scrolls.</p>
+              <p>The original file stays clean, while sidecar JSON keeps anchors, comments, and positions.</p>
+            </div>
+            <div class="lane">
+              <div class="note"><strong>Anchor strategy</strong>Store offset, quote, prefix, and suffix. Rebind only with high confidence.</div>
+              <div class="note blue"><strong>UX note</strong>Feels like a real reader on desktop, but does not crush narrow screens.</div>
+            </div>
+            <div class="line one"></div>
+            <div class="line two"></div>
+            <div class="toolbar">
+              <span class="swatch"></span><span class="swatch"></span><span class="swatch"></span><span class="swatch"></span>
+              <span class="tool">note</span>
+            </div>
+            <div class="mobile-frame">
+              <div class="doc">
+                <p>On mobile, the sticky lane disappears and <mark>highlight notes</mark> open as a popover.</p>
+              </div>
+              <div class="mobile-popover">Compact note popover</div>
+            </div>
+          </div>
+          <p class="caption">Chosen direction: full reader feeling on desktop, popover safety valve on narrow screens.</p>
+        </article>
+
+        <article class="mock hidden-popover">
+          <div class="mock-header">
+            <h2 class="mock-title">2. Hidden by default, click highlight for popover</h2>
+            <span class="tag">cleanest</span>
+          </div>
+          <div class="viewport">
+            <div class="doc">
+              <h2>Harness</h2>
+              <p>The page remains visually quiet. Highlights appear inline, but notes stay hidden until the reader clicks <mark>the marked phrase</mark>.</p>
+              <p>This keeps Obsidian close to its normal reading rhythm and avoids permanent side UI.</p>
+              <p>It is clean, but users lose the margin-note scanning behavior.</p>
+            </div>
+            <div class="popover">
+              <strong>Popover note</strong><br />
+              This appears only after clicking the highlight. Great for focus, weaker for overview.
+            </div>
+            <div class="toolbar">
+              <span class="swatch"></span><span class="swatch"></span><span class="swatch"></span><span class="swatch"></span>
+              <span class="tool">note</span>
+            </div>
+          </div>
+          <p class="caption">Best for minimalists. Less like Margin Note, more like “rich highlight with hidden metadata.”</p>
+        </article>
+
+        <article class="mock always-on">
+          <div class="mock-header">
+            <h2 class="mock-title">3. Always-on right sticky lane</h2>
+            <span class="tag">desktop-only variant</span>
+          </div>
+          <div class="viewport">
+            <div class="doc">
+              <h2>Harness</h2>
+              <p>This layout feels like a serious research reader with <mark>persistent side commentary</mark> always visible.</p>
+              <p>The right lane becomes the single home for sticky notes, replies, colors, and resolved state.</p>
+              <p>On narrow windows, this can still collapse into a popover without changing the source Markdown.</p>
+            </div>
+            <div class="lane">
+              <div class="note blue"><strong>Primary note</strong>Line up with the highlighted paragraph and follow scroll.</div>
+              <div class="note"><strong>Reader rhythm</strong>Always visible, so the page feels like a PDF reader.</div>
+              <div class="note pink"><strong>Compact rule</strong>Only one sticky lane. No left/right split, no layout drama.</div>
+            </div>
+          </div>
+          <p class="caption">Useful as the desktop half of option 1, but too rigid if it refuses to collapse on narrow screens.</p>
+        </article>
+
+        <article class="mock leaf-only">
+          <div class="mock-header">
+            <h2 class="mock-title">4. Right Leaf only, no inline sticky lane</h2>
+            <span class="tag">most stable</span>
+          </div>
+          <div class="viewport">
+            <div class="doc">
+              <h2>Harness</h2>
+              <p>The document keeps native Obsidian layout. Highlights remain visible in text, and all note cards live in a separate <mark>overview panel</mark>.</p>
+              <p>This is easiest to implement and least likely to break themes, but it feels less like a PDF reader.</p>
+            </div>
+            <aside class="leaf">
+              <h3>Annotations</h3>
+              <div class="leaf-item"><strong>yellow · highlight</strong><br />overview panel</div>
+              <div class="leaf-item"><strong>blue · note</strong><br />Stable and searchable, but detached from the margin.</div>
+              <div class="leaf-item"><strong>pink · note</strong><br />Good for export and review workflows.</div>
+            </aside>
+          </div>
+          <p class="caption">Best engineering stability. Weakest “margin note” feeling because notes are not spatially attached.</p>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

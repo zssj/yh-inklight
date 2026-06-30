@@ -1,0 +1,1002 @@
+/**
+ * [INPUT]: 依赖 Obsidian Plugin API、CM6 扩展、sidecar AnnotationStore、锚点算法、视图与设置模块
+ * [OUTPUT]: 对外提供 OverlayAnnotationsPlugin 主类，注册 ribbon 图标、命令、浮动工具栏、高亮、窄屏弹层、侧栏、设置和 vault 事件
+ * [POS]: 插件装配根，协调模块但不修改用户 Markdown 原文
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+ */
+
+import { addIcon, Editor, MarkdownPostProcessorContext, MarkdownView, Modal, Notice, Plugin, TFile } from "obsidian";
+
+import { createTextAnchor, relocateDocumentAnchors } from "./src/anchor/textAnchor";
+import { createHighlightExtension } from "./src/editor/highlightExtension";
+import { installReadingViewHighlights, refreshReadingViewHighlights } from "./src/editor/readingViewHighlight";
+import { SelectionToolbar } from "./src/editor/selectionToolbar";
+import { PdfAnnotationLayer } from "./src/pdf/pdfAnnotationLayer";
+import { PdfViewerAdapter } from "./src/pdf/pdfViewerAdapter";
+import { AnnotationSettingsTab } from "./src/settings/settingsTab";
+import { AnnotationStore } from "./src/storage/annotationStore";
+import {
+  AnnotationColor,
+  AnnotationPluginSettings,
+  CommentAnnotation,
+  DEFAULT_SETTINGS,
+  HighlightAnnotation,
+  SelectionSnapshot,
+  SUPPORTED_BOOK_EXTENSIONS,
+} from "./src/storage/types";
+import { AnnotationPopover } from "./src/views/annotationPopover";
+import { ANNOTATION_SIDEBAR_VIEW, AnnotationSidebarView } from "./src/views/sidebarView";
+import { StickyNoteLane } from "./src/views/stickyNoteLane";
+import { EpubReaderView, EPUB_READER_VIEW_TYPE } from "./src/epub/EpubReaderView";
+import { EpubBookshelfView, EPUB_BOOKSHELF_VIEW_TYPE } from "./src/epub/EpubBookshelfView";
+import { registerEpubGotoHandler } from "./src/epub/EpubGotoHandler";
+
+interface CommentModalValue {
+  title: string;
+  content: string;
+}
+
+const NOTE_TITLE_OPTIONS = [
+  { value: "Insight", label: "💡 洞见" },
+  { value: "Question", label: "❓ 疑问" },
+  { value: "Reminder", label: "🔔 提醒" },
+] as const;
+
+const YH_INKLIGHT_ICON = `
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+    <rect x="5" y="5" width="90" height="90" rx="20" ry="20" fill="#F5C518"/>
+    <g transform="translate(50,50) rotate(-45) translate(-18,-18)"
+      fill="none" stroke="#000" stroke-width="6"
+      stroke-linecap="round" stroke-linejoin="round">
+      <rect x="8" y="2" width="20" height="28" rx="3" fill="#000" stroke="none"/>
+      <polygon points="8,30 28,30 18,42" fill="#000" stroke="none"/>
+      <line x1="8" y1="10" x2="28" y2="10" stroke="#F5C518" stroke-width="3"/>
+    </g>
+  </svg>
+`;
+
+export default class OverlayAnnotationsPlugin extends Plugin {
+  settings: AnnotationPluginSettings = DEFAULT_SETTINGS;
+  store!: AnnotationStore;
+
+  private toolbar!: SelectionToolbar;
+  private popover!: AnnotationPopover;
+  private pdfLayer!: PdfAnnotationLayer;
+  private pdfViewerAdapter!: PdfViewerAdapter;
+  private stickyLane!: StickyNoteLane;
+  private lastSelection: SelectionSnapshot | null = null;
+  private renameMigrationTimer: number | null = null;
+
+  async onload(): Promise<void> {
+    addIcon("yh-inklight-icon", YH_INKLIGHT_ICON);
+    await this.loadSettings();
+    console.info(`yh-inklight loaded v${this.manifest.version}`);
+    this.store = new AnnotationStore(this.app);
+    await this.store.initialize();
+
+    this.registerView(ANNOTATION_SIDEBAR_VIEW, (leaf) => new AnnotationSidebarView(leaf, this));
+    this.registerView(EPUB_READER_VIEW_TYPE, (leaf) => new EpubReaderView(leaf, this.store, this.settings, () => this.refreshAnnotations(), () => this.saveSettings()));
+    // 把 foliate 支持的所有电子书格式绑定到阅读器视图：registerView 只注册视图工厂，
+    // 还需要 registerExtensions 告诉 Obsidian「.epub/.mobi/... 用本视图打开」。
+    // 参考 ob-epub-reader 与 obsidian-weave-reader 的实现；用 try/catch 防止
+    // 与其他插件扩展冲突时抛错导致插件加载失败。
+    try {
+      this.registerExtensions([...SUPPORTED_BOOK_EXTENSIONS], EPUB_READER_VIEW_TYPE);
+    } catch (error) {
+      console.warn("yh-inklight: 注册电子书扩展名失败（可能与其他插件冲突）", error);
+    }
+    this.registerView(
+      EPUB_BOOKSHELF_VIEW_TYPE,
+      (leaf) => new EpubBookshelfView(leaf, this.store, (file) => this.openEpubBook(file)),
+    );
+    this.registerEditorExtension([
+      createHighlightExtension({
+        getDocument: (filePath) => this.store.getCachedDocument(filePath),
+        getVersion: () => this.store.version,
+        rememberSelection: (filePath, startOffset, endOffset, selectedText) => {
+          this.lastSelection = { filePath, startOffset, endOffset, selectedText };
+        },
+      }),
+    ]);
+
+    this.toolbar = new SelectionToolbar({
+      onHighlight: (color) => this.createHighlight(color),
+      onComment: () => this.createComment(),
+      onCopy: () => this.copySelection(),
+      onOpenSidebar: () => this.activateSidebar(),
+    });
+    this.popover = new AnnotationPopover({ app: this.app, component: this });
+    this.pdfViewerAdapter = new PdfViewerAdapter(this.app, this);
+    this.pdfLayer = new PdfAnnotationLayer({
+      app: this.app,
+      component: this,
+      getSettings: () => this.settings,
+      getDocument: (file) => this.store.getDocument(file),
+      getCachedDocument: (filePath) => this.store.getCachedDocument(filePath),
+      addHighlight: async (file, highlight) => {
+        await this.store.addPdfHighlight(file, highlight);
+        await this.refreshAnnotations();
+      },
+      addComment: async (file, comment) => {
+        await this.store.addPdfComment(file, comment);
+        await this.refreshAnnotations();
+      },
+      updateComment: async (file, comment) => {
+        await this.store.updatePdfComment(file, comment);
+        await this.refreshAnnotations();
+      },
+      deleteAnnotation: async (file, annotationId) => {
+        await this.store.removeAnnotation(file, annotationId);
+        await this.refreshAnnotations();
+      },
+      saveProgress: async (file, progress) => {
+        await this.store.savePdfProgress(file, progress);
+      },
+      getProgress: (file) => this.store.getPdfProgress(file),
+      viewerAdapter: this.pdfViewerAdapter,
+    });
+
+    this.stickyLane = new StickyNoteLane({
+      app: this.app,
+      component: this,
+      getSettings: () => this.settings,
+      getCachedDocument: (filePath) => this.store.getCachedDocument(filePath),
+      onUpdateComment: async (file, comment, content, title) => {
+        await this.store.updateCommentContent(file, comment.id, content, title);
+        await this.refreshAnnotations();
+      },
+      onDeleteAnnotation: async (file, annotationId) => {
+        await this.store.removeAnnotation(file, annotationId);
+        await this.refreshAnnotations();
+      },
+      onToggleCollapse: async (file, comment) => {
+        await this.store.updateComment(file, comment);
+        await this.refreshAnnotations();
+      },
+      refreshAnnotations: () => this.refreshAnnotations(),
+    });
+
+    this.addSettingTab(new AnnotationSettingsTab(this));
+    this.registerRibbonIcon();
+    this.registerCommands();
+    this.registerEvents();
+    this.pdfLayer.register();
+    // Phase 5：保留批注卡片跳页桥接；侧栏 PDF 工具按钮直接调用插件公开方法。
+    // 用 register 注册解绑，避免热重载/启用循环时监听器累积泄漏。
+    const gotoPageHandler = (event: Event): void => {
+      const detail = (event as CustomEvent).detail as { page: number } | undefined;
+      if (!detail?.page || detail.page < 1) return;
+      void this.gotoPdfPage(detail.page);
+    };
+    document.addEventListener("yh-pdf-goto-page", gotoPageHandler);
+    this.register(() => document.removeEventListener("yh-pdf-goto-page", gotoPageHandler));
+    this.stickyLane.register();
+    // Phase 4-B P1: EPUB 双向溯源 + 摘录导出
+    registerEpubGotoHandler(this, (file, cfi) => this.openEpubAtCfi(file, cfi));
+    this.registerObsidianProtocolHandler("inklight-epub", (params) => {
+      const filePath = typeof params.file === "string" ? decodeURIComponent(params.file) : "";
+      const cfi = typeof params.cfi === "string" ? decodeURIComponent(params.cfi) : "";
+      if (filePath && cfi) {
+        void this.openEpubAtCfi(filePath, cfi);
+      }
+    });
+    this.registerMarkdownPostProcessor((element, context) => this.renderReadingHighlights(element, context));
+  }
+
+  onunload(): void {
+    if (this.renameMigrationTimer !== null) {
+      window.clearTimeout(this.renameMigrationTimer);
+    }
+    this.toolbar?.destroy();
+    this.popover?.destroy();
+    this.stickyLane?.destroy();
+    this.app.workspace.detachLeavesOfType(ANNOTATION_SIDEBAR_VIEW);
+    this.app.workspace.detachLeavesOfType(EPUB_BOOKSHELF_VIEW_TYPE);
+  }
+
+  async loadSettings(): Promise<void> {
+    this.settings = {
+      ...DEFAULT_SETTINGS,
+      ...((await this.loadData()) ?? {}),
+    };
+  }
+
+  async saveSettings(): Promise<void> {
+    await this.saveData(this.settings);
+  }
+
+  async refreshAnnotations(): Promise<void> {
+    this.app.workspace.updateOptions();
+    for (const leaf of this.app.workspace.getLeavesOfType(ANNOTATION_SIDEBAR_VIEW)) {
+      const view = leaf.view;
+      if (view instanceof AnnotationSidebarView) {
+        view.requestRender();
+      }
+    }
+    for (const leaf of this.app.workspace.getLeavesOfType(EPUB_BOOKSHELF_VIEW_TYPE)) {
+      const view = leaf.view;
+      if (view instanceof EpubBookshelfView) {
+        view.refresh();
+      }
+    }
+    // 从墨光批注侧栏删除/编辑 EPUB 标注后，刷新打开的 EpubReaderView 高亮层
+    for (const leaf of this.app.workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE)) {
+      const view = leaf.view;
+      if (view instanceof EpubReaderView) {
+        view.refreshExternalAnnotations();
+      }
+    }
+    // 刷新 Markdown 阅读视图高亮：从侧栏删除/编辑 MD 批注后，阅读区高亮 DOM 也需同步移除。
+    // 只刷新当前活动 markdown 文件以控制开销（其余文件在切到时由 active-leaf-change 兜底）。
+    const activeFile = this.app.workspace.getActiveFile();
+    if (activeFile && activeFile.extension === "md") {
+      await this.refreshActiveReadingViewHighlights(activeFile.path);
+    }
+    await this.stickyLane.render();
+  }
+
+  /** 跳转到 PDF 指定页（侧栏批注卡片跳转、书签等共用）。 */
+  async gotoPdfPage(pageNumber: number): Promise<void> {
+    const ok = await this.pdfViewerAdapter.goToPage(pageNumber, { flash: true, block: "center" });
+    if (!ok) {
+      new Notice(`未找到第 ${pageNumber} 页`);
+    }
+  }
+
+  private registerRibbonIcon(): void {
+    const icon = this.addRibbonIcon("highlighter", "打开墨光批注", () => {
+      void this.activateSidebar();
+    });
+    icon.addClass("yh-ribbon-icon");
+  }
+
+  private registerCommands(): void {
+    this.addCommand({
+      id: "highlight-selection",
+      name: "高亮选中文本",
+      hotkeys: [{ modifiers: ["Mod", "Shift"], key: "h" }],
+      callback: () => this.createHighlight(this.settings.defaultHighlightColor),
+    });
+
+    this.addCommand({
+      id: "add-sticky-note",
+      name: "为选中文本添加便签",
+      hotkeys: [{ modifiers: ["Mod", "Alt"], key: "m" }],
+      callback: () => this.createComment(),
+    });
+
+    this.addCommand({
+      id: "toggle-sticky-notes",
+      name: "切换批注弹层显示",
+      hotkeys: [{ modifiers: ["Mod", "Shift"], key: "n" }],
+      callback: async () => {
+        this.settings.stickyNotesVisible = !this.settings.stickyNotesVisible;
+        await this.saveSettings();
+        await this.refreshAnnotations();
+      },
+    });
+
+    this.addCommand({
+      id: "open-annotation-sidebar",
+      name: "打开批注总览",
+      callback: () => this.activateSidebar(),
+    });
+
+    this.addCommand({
+      id: "open-epub-bookshelf",
+      name: "打开 EPUB 书架",
+      callback: () => this.activateBookshelf(),
+    });
+
+    // Phase 5 P3：PDF 目录
+    this.addCommand({
+      id: "show-pdf-outline",
+      name: "显示 PDF 目录",
+      callback: async () => {
+        if (!this.pdfLayer.isPdfActive()) {
+          new Notice("请先打开一个 PDF 文件");
+          return;
+        }
+        const outline = await this.pdfLayer.getOutline();
+        if (outline.length === 0) {
+          new Notice("该 PDF 没有目录");
+          return;
+        }
+        const lines = outline.map((item) => {
+          const pageInfo = item.pageNumber > 0 ? ` → p.${item.pageNumber}` : "";
+          const children = item.children
+            .filter((c) => c.pageNumber > 0)
+            .map((c) => `  └ ${c.title} → p.${c.pageNumber}`)
+            .join("\n");
+          return `${item.title}${pageInfo}${children ? "\n" + children : ""}`;
+        });
+        new Notice(`PDF 目录（${outline.length} 项）：\n${lines.slice(0, 8).join("\n")}`);
+      },
+    });
+
+    this.addCommand({
+      id: "test-annotation-storage",
+      name: "测试墨光批注存储",
+      callback: async () => {
+        try {
+          const path = await this.store.testWriteAccess();
+          new Notice(`墨光批注存储可写：${path}`);
+        } catch {
+          new Notice("墨光批注存储不可写，请检查 .obsidian-annotations 目录权限或同步状态。");
+        }
+      },
+    });
+  }
+
+  private registerEvents(): void {
+    this.registerDomEvent(document, "selectionchange", () => this.toolbar.showForSelection());
+    this.registerDomEvent(document, "mousedown", (event) => {
+      if (!(event.target instanceof HTMLElement) || !event.target.closest(".yh-selection-toolbar")) {
+        window.setTimeout(() => this.toolbar.showForSelection(), 0);
+      }
+    });
+    this.registerDomEvent(document, "click", (event) => {
+      void this.handleAnnotationClick(event);
+    });
+
+    this.registerEvent(
+      this.app.vault.on("modify", async (file) => {
+        if (!(file instanceof TFile) || file.extension !== "md") {
+          return;
+        }
+
+        const document = await this.store.getDocument(file);
+        const source = await this.app.vault.cachedRead(file);
+        const relocated = relocateDocumentAnchors(source, document);
+        await this.store.saveDocument({
+          ...relocated,
+          fileHash: await this.store.hashFile(file),
+          lastModified: new Date().toISOString(),
+        });
+        await this.refreshAnnotations();
+      }),
+    );
+
+    this.registerEvent(
+      this.app.vault.on("rename", async (file, oldPath) => {
+        if (!this.settings.migrateOnRename || !(file instanceof TFile)) {
+          return;
+        }
+
+        const ext = file.extension.toLowerCase();
+        const isMarkdown = ext === "md";
+        const isBook = (SUPPORTED_BOOK_EXTENSIONS as readonly string[]).includes(ext);
+        if (!isMarkdown && !isBook) {
+          return;
+        }
+
+        if (this.renameMigrationTimer !== null) {
+          window.clearTimeout(this.renameMigrationTimer);
+        }
+
+        this.renameMigrationTimer = window.setTimeout(async () => {
+          await this.store.migrateFilePath(oldPath, file);
+          await this.refreshAnnotations();
+          this.renameMigrationTimer = null;
+        }, 100);
+      }),
+    );
+
+    this.registerEvent(
+      this.app.workspace.on("file-open", async (file) => {
+        if (file instanceof TFile && ["md", "pdf"].includes(file.extension.toLowerCase())) {
+          this.popover.hide();
+          await this.store.getDocument(file);
+          await this.refreshAnnotations();
+        }
+      }),
+    );
+  }
+
+
+  private async createHighlight(color: AnnotationColor): Promise<void> {
+    if (this.pdfLayer.isPdfActive()) {
+      await this.pdfLayer.createHighlight(color);
+      this.toolbar.hide();
+      return;
+    }
+
+    const snapshot = await this.resolveSelection();
+
+    if (!snapshot) {
+      new Notice("请先选中文本。");
+      return;
+    }
+
+    const file = this.app.vault.getAbstractFileByPath(snapshot.filePath);
+    if (!(file instanceof TFile)) {
+      return;
+    }
+
+    const highlight: HighlightAnnotation = {
+      id: crypto.randomUUID(),
+      color,
+      anchor: createAnchorForSnapshot(await this.app.vault.cachedRead(file), snapshot),
+      createdAt: new Date().toISOString(),
+    };
+
+    await this.store.addHighlight(file, highlight);
+    await this.refreshActiveReadingViewHighlights(file.path);
+    await this.refreshAnnotations();
+    this.toolbar.hide();
+  }
+
+  private async createComment(): Promise<void> {
+    if (this.pdfLayer.isPdfActive()) {
+      const note = await new CommentModal(this.app, "", "").openAndRead();
+      if (note !== null) {
+        await this.pdfLayer.createComment(
+          this.settings.defaultHighlightColor,
+          note.content,
+          this.settings.defaultAuthor,
+          note.title,
+        );
+      }
+      this.toolbar.hide();
+      return;
+    }
+
+    const snapshot = await this.resolveSelection();
+    if (!snapshot) {
+      new Notice("请先选中文本。");
+      return;
+    }
+
+    const file = this.app.vault.getAbstractFileByPath(snapshot.filePath);
+    if (!(file instanceof TFile)) {
+      return;
+    }
+
+    const note = await new CommentModal(this.app, "", "").openAndRead();
+    if (note === null) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const comment: CommentAnnotation = {
+      id: crypto.randomUUID(),
+      anchor: createAnchorForSnapshot(await this.app.vault.cachedRead(file), snapshot),
+      title: note.title,
+      content: note.content,
+      color: this.settings.defaultHighlightColor,
+      position: { offsetX: 20, offsetY: 0 },
+      collapsed: false,
+      author: this.settings.defaultAuthor,
+      createdAt: now,
+      updatedAt: now,
+      replies: [],
+      resolved: false,
+    };
+
+    await this.store.addComment(file, comment);
+    await this.refreshActiveReadingViewHighlights(file.path);
+    await this.refreshAnnotations();
+    this.toolbar.hide();
+  }
+
+  private async refreshActiveReadingViewHighlights(filePath: string): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(filePath);
+    if (!(file instanceof TFile)) {
+      return;
+    }
+
+    const document = this.store.getCachedDocument(filePath) ?? (await this.store.getDocument(file));
+    const marks = [...document.highlights, ...document.comments].filter((item) => !item.orphaned);
+    if (!marks.length) {
+      return;
+    }
+
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      const view = leaf.view;
+      if (!(view instanceof MarkdownView) || view.file?.path !== filePath) {
+        continue;
+      }
+
+      const previewRoot = findPreviewRoot(view);
+      if (previewRoot) {
+        refreshReadingViewHighlights(previewRoot, marks);
+        continue;
+      }
+
+      const previewMode = (view as MarkdownView & { previewMode?: { rerender?: (force?: boolean) => Promise<void> } })
+        .previewMode;
+      if (previewMode?.rerender) {
+        await previewMode.rerender(true);
+        const rerenderedRoot = findPreviewRoot(view);
+        if (rerenderedRoot) {
+          refreshReadingViewHighlights(rerenderedRoot, marks);
+        }
+      }
+    }
+  }
+
+  private async resolveSelection(): Promise<SelectionSnapshot | null> {
+    const editor = this.activeEditor();
+    if (editor?.file) {
+      const selectedText = editor.editor.getSelection();
+      if (selectedText) {
+        const from = editor.editor.posToOffset(editor.editor.getCursor("from"));
+        const to = editor.editor.posToOffset(editor.editor.getCursor("to"));
+        this.lastSelection = { filePath: editor.file.path, startOffset: from, endOffset: to, selectedText };
+        return this.lastSelection;
+      }
+    }
+
+    const file = this.app.workspace.getActiveFile();
+    const selection = window.getSelection();
+    const selectedText = selection?.toString().replace(/\r\n/g, "\n").trim() ?? "";
+
+    if (file && selectedText) {
+      const source = await this.app.vault.cachedRead(file);
+      const located = locateRenderedSelectionInSource(
+        source,
+        selectedText,
+        selection ? renderedOccurrenceBeforeSelection(selection, selectedText) : 0,
+        selection ? isSelectionInsideCallout(selection) : false,
+      );
+
+      if (located) {
+        this.lastSelection = {
+          filePath: file.path,
+          startOffset: located.startOffset,
+          endOffset: located.endOffset,
+          selectedText,
+        };
+        return this.lastSelection;
+      }
+    }
+
+    if (file && this.lastSelection?.filePath === file.path) {
+      return this.lastSelection;
+    }
+
+    this.lastSelection = null;
+    return null;
+  }
+
+  private activeEditor(): { editor: Editor; file: TFile | null } | null {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    return view ? { editor: view.editor, file: view.file } : null;
+  }
+
+  async activateSidebar(): Promise<void> {
+    let leaf = this.app.workspace.getLeavesOfType(ANNOTATION_SIDEBAR_VIEW)[0];
+    if (!leaf) {
+      const nextLeaf = this.app.workspace.getRightLeaf(false);
+      if (!nextLeaf) {
+        return;
+      }
+      leaf = nextLeaf;
+      await leaf.setViewState({ type: ANNOTATION_SIDEBAR_VIEW, active: true });
+    }
+    this.app.workspace.revealLeaf(leaf);
+    const view = leaf.view;
+    if (view instanceof AnnotationSidebarView) {
+      view.requestRender();
+    }
+  }
+
+  async activateBookshelf(): Promise<void> {
+    let leaf = this.app.workspace.getLeavesOfType(EPUB_BOOKSHELF_VIEW_TYPE)[0];
+    if (!leaf) {
+      const nextLeaf = this.app.workspace.getRightLeaf(false);
+      if (!nextLeaf) {
+        return;
+      }
+      leaf = nextLeaf;
+      await leaf.setViewState({ type: EPUB_BOOKSHELF_VIEW_TYPE, active: true });
+    }
+    this.app.workspace.revealLeaf(leaf);
+    const view = leaf.view;
+    if (view instanceof EpubBookshelfView) {
+      view.refresh();
+    }
+  }
+
+  async openEpubBook(file: TFile): Promise<void> {
+    const leaf = this.app.workspace.getLeaf("tab");
+    await leaf.openFile(file);
+    this.app.workspace.revealLeaf(leaf);
+  }
+
+  /**
+   * 打开 EPUB 文件并导航到指定 CFI 位置。
+   * 供 EpubGotoHandler（摘录回跳）和 Obsidian 协议处理器调用。
+   */
+  async openEpubAtCfi(filePath: string, cfi: string): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(filePath);
+    if (!(file instanceof TFile) || file.extension.toLowerCase() !== "epub") {
+      new Notice("无法找到对应的电子书文件");
+      return;
+    }
+
+    const leaf = this.app.workspace.getLeaf("tab");
+    await leaf.openFile(file);
+    this.app.workspace.revealLeaf(leaf);
+    this.navigateEpubToCfi(file, cfi);
+  }
+
+  /**
+   * 在已打开的 EPUB 视图中导航到指定 CFI。
+   * 统一的跳转入口：openEpubAtCfi（摘录回跳/协议跳转）与侧栏 jumpTo 的 epub 分支都走这里，
+   * 避免重复的「查 leaf → 调 navigateToCfi → 重试」逻辑散落多处。
+   * 含轮询重试：视图刚 openFile 后 navigateToCfi 可能尚未就绪，每 200ms 重试直至成功。
+   */
+  navigateEpubToCfi(file: TFile, cfi: string): void {
+    const tryNavigate = (): void => {
+      const epubLeaf = this.app.workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE).find(
+        (l) => (l.view as { file?: TFile }).file?.path === file.path,
+      );
+      const epubView = epubLeaf?.view as { navigateToCfi?: (cfi: string) => void } | undefined;
+      if (typeof epubView?.navigateToCfi === "function") {
+        epubView.navigateToCfi(cfi);
+      } else {
+        window.setTimeout(tryNavigate, 200);
+      }
+    };
+    window.setTimeout(tryNavigate, 200);
+  }
+
+  private copySelection(): void {
+    const text = window.getSelection()?.toString() || this.activeEditor()?.editor.getSelection() || "";
+    if (text) {
+      navigator.clipboard.writeText(text);
+      new Notice("Copied selection");
+    }
+  }
+
+  private async handleAnnotationClick(event: MouseEvent): Promise<void> {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      this.popover.hide();
+      return;
+    }
+
+    const mark = target.closest<HTMLElement>(".yh-highlight, .yh-reading-highlight");
+    if (!mark) {
+      if (!target.closest(".yh-annotation-popover")) {
+        this.popover.hide();
+      }
+      return;
+    }
+
+    const annotationId = mark.dataset.yhId;
+    const file = this.app.workspace.getActiveFile();
+    if (!annotationId || !(file instanceof TFile)) {
+      return;
+    }
+
+    const document = this.store.getCachedDocument(file.path) ?? (await this.store.getDocument(file));
+    const primary =
+      document.comments.find((comment) => comment.id === annotationId) ??
+      document.highlights.find((highlight) => highlight.id === annotationId);
+    if (!primary) {
+      unwrapStaleHighlight(mark);
+      return;
+    }
+
+    const sameAnchorComments = document.comments.filter((comment) => {
+      return (
+        comment.id !== primary.id &&
+        !comment.orphaned &&
+        comment.anchor.startOffset === primary.anchor.startOffset &&
+        comment.anchor.endOffset === primary.anchor.endOffset
+      );
+    });
+    const items = [primary, ...sameAnchorComments].map((annotation) => AnnotationPopover.itemFromAnnotation(annotation));
+
+    event.preventDefault();
+    event.stopPropagation();
+    this.popover.show({
+      rect: mark.getBoundingClientRect(),
+      sourcePath: file.path,
+      items,
+    });
+  }
+
+  private async renderReadingHighlights(element: HTMLElement, context: MarkdownPostProcessorContext): Promise<void> {
+    if (!context.sourcePath) {
+      return;
+    }
+
+    await sleep(100);
+
+    const file = this.app.vault.getAbstractFileByPath(context.sourcePath);
+    if (!(file instanceof TFile)) {
+      return;
+    }
+
+    const document = await this.store.getDocument(file);
+    const marks = [...document.highlights, ...document.comments].filter((item) => !item.orphaned);
+    installReadingViewHighlights({ root: element, context, marks });
+  }
+}
+
+function locateRenderedSelectionInSource(
+  source: string,
+  selectedText: string,
+  occurrenceIndex = 0,
+  preferRendered = false,
+): { startOffset: number; endOffset: number } | null {
+  const exact = nthIndexOf(source, selectedText, occurrenceIndex);
+  if (exact >= 0) {
+    return {
+      startOffset: exact,
+      endOffset: exact + selectedText.length,
+    };
+  }
+
+  if (preferRendered) {
+    const rendered = locateSelectionIgnoringQuoteMarkers(source, selectedText, occurrenceIndex);
+    if (rendered) {
+      return rendered;
+    }
+  }
+
+  return locateSelectionIgnoringQuoteMarkers(source, selectedText, occurrenceIndex);
+}
+
+function createAnchorForSnapshot(source: string, snapshot: SelectionSnapshot) {
+  const anchor = createTextAnchor(source, snapshot.startOffset, snapshot.endOffset);
+  const selectedText = snapshot.selectedText.replace(/\r\n/g, "\n").trim();
+  const sourceText = anchor.selectedText.replace(/\r\n/g, "\n").trim();
+  if (!selectedText || selectedText === sourceText) {
+    return anchor;
+  }
+
+  return {
+    ...anchor,
+    selectedText,
+  };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function findPreviewRoot(view: MarkdownView): HTMLElement | null {
+  const previewMode = (
+    view as MarkdownView & {
+      previewMode?: {
+        containerEl?: HTMLElement;
+      };
+    }
+  ).previewMode;
+
+  return (
+    view.containerEl.querySelector<HTMLElement>(".markdown-preview-view") ??
+    view.containerEl.querySelector<HTMLElement>(".markdown-preview-section") ??
+    view.containerEl.querySelector<HTMLElement>(".mod-preview") ??
+    previewMode?.containerEl?.querySelector<HTMLElement>(".markdown-preview-section") ??
+    previewMode?.containerEl ??
+    null
+  );
+}
+
+function unwrapStaleHighlight(mark: HTMLElement): void {
+  const parent = mark.parentNode;
+  if (!parent) {
+    mark.remove();
+    return;
+  }
+
+  while (mark.firstChild) {
+    parent.insertBefore(mark.firstChild, mark);
+  }
+  parent.removeChild(mark);
+  parent.normalize();
+}
+
+function locateSelectionIgnoringQuoteMarkers(
+  source: string,
+  selectedText: string,
+  occurrenceIndex = 0,
+): { startOffset: number; endOffset: number } | null {
+  const normalizedSelection = selectedText.replace(/\r\n/g, "\n");
+  const sourceToRendered: number[] = [];
+  let rendered = "";
+  let lineStart = true;
+  let quotePrefix = false;
+  let index = 0;
+
+  while (index < source.length) {
+    const char = source[index];
+
+    if (lineStart && char === ">") {
+      quotePrefix = true;
+      lineStart = false;
+      index += 1;
+      continue;
+    }
+
+    if (quotePrefix && char === " ") {
+      quotePrefix = false;
+      index += 1;
+      continue;
+    }
+
+    if (!quotePrefix && char === "[" && source.slice(index).match(/^\[![\w-]+\]/)) {
+      while (index < source.length && source[index] !== "\n") {
+        index += 1;
+      }
+      quotePrefix = false;
+      continue;
+    }
+
+    quotePrefix = false;
+    rendered += char;
+    sourceToRendered.push(index);
+    lineStart = char === "\n";
+    index += 1;
+  }
+
+  const renderedStart = nthIndexOf(rendered, normalizedSelection, occurrenceIndex);
+  if (renderedStart < 0) {
+    return null;
+  }
+
+  const renderedEnd = renderedStart + normalizedSelection.length - 1;
+  return {
+    startOffset: sourceToRendered[renderedStart],
+    endOffset: sourceToRendered[renderedEnd] + 1,
+  };
+}
+
+function renderedOccurrenceBeforeSelection(selection: Selection, selectedText: string): number {
+  if (!selection.rangeCount || !selectedText) {
+    return 0;
+  }
+
+  const range = selection.getRangeAt(0);
+  const root = selectionRoot(range);
+  if (!root) {
+    return 0;
+  }
+
+  const before = document.createRange();
+  before.selectNodeContents(root);
+  before.setEnd(range.startContainer, range.startOffset);
+  const beforeText = before.toString().replace(/\r\n/g, "\n");
+  before.detach();
+  return countOccurrences(beforeText, selectedText);
+}
+
+function selectionRoot(range: Range): HTMLElement | null {
+  const container =
+    range.commonAncestorContainer instanceof HTMLElement
+      ? range.commonAncestorContainer
+      : range.commonAncestorContainer.parentElement;
+
+  return (
+    container?.closest<HTMLElement>(".markdown-preview-view") ??
+    container?.closest<HTMLElement>(".markdown-preview-section") ??
+    container?.closest<HTMLElement>(".mod-preview") ??
+    null
+  );
+}
+
+function isSelectionInsideCallout(selection: Selection): boolean {
+  if (!selection.rangeCount) {
+    return false;
+  }
+
+  const range = selection.getRangeAt(0);
+  const container =
+    range.commonAncestorContainer instanceof HTMLElement
+      ? range.commonAncestorContainer
+      : range.commonAncestorContainer.parentElement;
+
+  return Boolean(container?.closest(".callout, .callout-content"));
+}
+
+function countOccurrences(source: string, target: string): number {
+  if (!target) {
+    return 0;
+  }
+
+  let count = 0;
+  let cursor = source.indexOf(target);
+  while (cursor >= 0) {
+    count += 1;
+    cursor = source.indexOf(target, cursor + target.length);
+  }
+  return count;
+}
+
+function nthIndexOf(source: string, target: string, occurrenceIndex: number): number {
+  if (!target) {
+    return -1;
+  }
+
+  let cursor = source.indexOf(target);
+  let seen = 0;
+  while (cursor >= 0) {
+    if (seen >= occurrenceIndex) {
+      return cursor;
+    }
+    seen += 1;
+    cursor = source.indexOf(target, cursor + target.length);
+  }
+  return -1;
+}
+
+class CommentModal extends Modal {
+  private value: CommentModalValue | null = null;
+  private resolve!: (value: CommentModalValue | null) => void;
+
+  constructor(
+    app: OverlayAnnotationsPlugin["app"],
+    private readonly initialTitle: string,
+    private readonly initialContent: string,
+  ) {
+    super(app);
+  }
+
+  openAndRead(): Promise<CommentModalValue | null> {
+    this.open();
+    return new Promise((resolve) => {
+      this.resolve = resolve;
+    });
+  }
+
+  onOpen(): void {
+    this.contentEl.empty();
+    this.contentEl.createEl("h2", { text: "便签" });
+
+    const titleRow = this.contentEl.createDiv({ cls: "yh-modal-row" });
+    titleRow.createEl("label", { cls: "yh-modal-label", text: "类型" });
+    const title = titleRow.createEl("select", { cls: "yh-modal-select" });
+    for (const option of NOTE_TITLE_OPTIONS) {
+      title.createEl("option", { text: option.label, attr: { value: option.value } });
+    }
+    title.value = normalizedNoteTitle(this.initialTitle);
+
+    const contentRow = this.contentEl.createDiv({ cls: "yh-modal-row" });
+    contentRow.createEl("label", { cls: "yh-modal-label", text: "笔记" });
+    const input = contentRow.createEl("textarea", {
+      cls: "yh-modal-textarea",
+      attr: { rows: "8", placeholder: "写下你的想法..." },
+    });
+    input.value = this.initialContent;
+
+    const actions = this.contentEl.createDiv({ cls: "yh-modal-actions" });
+    const cancel = actions.createEl("button", { text: "取消", cls: "yh-modal-cancel", attr: { type: "button" } });
+    const save = actions.createEl("button", { text: "保存", cls: "yh-modal-save", attr: { type: "button" } });
+    const cancelValue = (): void => {
+      this.value = null;
+      this.close();
+    };
+    const saveValue = (): void => {
+      this.value = {
+        title: title.value.trim(),
+        content: input.value.trim(),
+      };
+      this.close();
+    };
+    cancel.addEventListener("click", cancelValue);
+    save.addEventListener("click", saveValue);
+    input.addEventListener("keydown", (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        saveValue();
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancelValue();
+      }
+    });
+  }
+
+  onClose(): void {
+    this.resolve?.(this.value);
+  }
+}
+
+function normalizedNoteTitle(value: string): string {
+  return NOTE_TITLE_OPTIONS.some((option) => option.value === value) ? value : NOTE_TITLE_OPTIONS[0].value;
+}

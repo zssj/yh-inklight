@@ -1,0 +1,15 @@
+{
+  "defaultHighlightColor": "yellow",
+  "stickyWidth": 280,
+  "stickySide": "right",
+  "stickyCollapseWidth": 800,
+  "showLeaderLines": true,
+  "defaultAuthor": "读者",
+  "migrateOnRename": true,
+  "stickyNotesVisible": true,
+  "epubDefaultFlow": "paginated",
+  "epubFontSize": 25,
+  "epubReadingTheme": "sepia",
+  "epubHighlightStyle": "fill",
+  "pdfProgressTracking": true
+}

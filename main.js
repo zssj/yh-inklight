@@ -13432,6 +13432,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       `  color: ${colors.textColor} !important;`,
       `  font-size: ${size}px !important;`,
       "  line-height: 1.72 !important;",
+      ...import_obsidian13.Platform.isMobile ? ["  padding-bottom: 60px !important;"] : [],
       "}",
       "p, div, span, li, h1, h2, h3, h4, h5, h6, blockquote, td, th, dt, dd {",
       `  color: ${colors.textColor} !important;`,

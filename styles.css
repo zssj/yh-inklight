@@ -12,6 +12,15 @@
   --yh-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
   --yh-shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.12);
   --yh-border: var(--background-modifier-border);
+  --yh-safe-top: 0px;
+  --yh-safe-bottom: 0px;
+}
+
+@supports (padding-top: env(safe-area-inset-top)) {
+  :root {
+    --yh-safe-top: env(safe-area-inset-top);
+    --yh-safe-bottom: env(safe-area-inset-bottom);
+  }
 }
 
 /* ===== Overlay highlights ===== */
@@ -1195,6 +1204,8 @@ span.yh-ov-expand-btn:hover {
   height: 100%;
   overflow: hidden;
   background: var(--background-primary);
+  padding-top: var(--yh-safe-top);
+  padding-bottom: var(--yh-safe-bottom);
 }
 
 .yh-epub-toolbar {
@@ -2178,12 +2189,4 @@ a.yh-epub-goto-link:hover {
   border-radius: 2px;
 }
 
-/* 移动端安全区域适配（刘海屏/状态栏/底部横条） */
-@supports (padding-top: env(safe-area-inset-top)) {
-  .yh-epub-toolbar {
-    padding-top: calc(6px + env(safe-area-inset-top));
-  }
-  .yh-epub-progress {
-    padding-bottom: env(safe-area-inset-bottom);
-  }
-}
+

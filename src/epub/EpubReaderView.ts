@@ -10,7 +10,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
-import { FileView, Notice, setIcon, TFile, WorkspaceLeaf } from "obsidian";
+import { FileView, Notice, Platform, setIcon, TFile, WorkspaceLeaf } from "obsidian";
 
 import {
 	ANNOTATION_COLORS,
@@ -306,6 +306,12 @@ private contextMenuEl: HTMLElement | null = null;
 	 */
 	private buildLayout(): void {
 		this.containerEl.empty();
+
+		if (Platform.isAndroidApp) {
+			// Android 状态栏在 CSS 像素中通常 ~24px（env(safe-area-inset-top) 非刘海屏返回 0）
+			this.containerEl.style.setProperty("--yh-safe-top", "24px");
+			this.containerEl.style.setProperty("--yh-safe-bottom", "16px");
+		}
 
 		this.toolbarEl = this.containerEl.createDiv({ cls: "yh-epub-toolbar" });
 
@@ -693,8 +699,9 @@ private contextMenuEl: HTMLElement | null = null;
 			this.dismissContextMenu();
 		});
 
+		const safeTop = parseInt(getComputedStyle(this.containerEl).getPropertyValue("--yh-safe-top")) || 0;
 		const clampedLeft = Math.max(8, Math.min(left, window.innerWidth - 260));
-		const clampedTop = Math.max(8, Math.min(top + 8, window.innerHeight - 48));
+		const clampedTop = Math.max(8 + safeTop, Math.min(top + 8, window.innerHeight - 48));
 		menu.style.left = `${clampedLeft}px`;
 		menu.style.top = `${clampedTop}px`;
 

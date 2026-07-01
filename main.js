@@ -12025,6 +12025,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       }, 300);
     };
     this.canvasSendBtn = null;
+    this.documentKeyHandler = null;
     // ---- 定时器 / 追踪 ----
     this.readingTimeSeconds = 0;
     this.readingTimeFlushTimer = null;
@@ -12094,6 +12095,10 @@ var EpubReaderView = class extends import_obsidian13.FileView {
   }
   /** 视图关闭时释放 foliate 资源与定时器 */
   async onClose() {
+    if (this.documentKeyHandler) {
+      document.removeEventListener("keydown", this.documentKeyHandler);
+      this.documentKeyHandler = null;
+    }
     this.stopReadingTimeTracker();
     this.dismissContextMenu();
     this.destroyRendition();
@@ -12146,6 +12151,10 @@ var EpubReaderView = class extends import_obsidian13.FileView {
    */
   buildLayout() {
     this.containerEl.empty();
+    if (import_obsidian13.Platform.isAndroidApp) {
+      this.containerEl.style.setProperty("--yh-safe-top", "24px");
+      this.containerEl.style.setProperty("--yh-safe-bottom", "16px");
+    }
     this.toolbarEl = this.containerEl.createDiv({ cls: "yh-epub-toolbar" });
     const body = this.containerEl.createDiv({ cls: "yh-epub-body" });
     this.sidebarContainerEl = body.createDiv({ cls: "yh-epub-sidebar" });
@@ -12160,7 +12169,8 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     this.sidebarContentEl = this.sidebarContainerEl.createDiv({ cls: "yh-epub-sidebar-content" });
     this.readerContainerEl = body.createDiv({ cls: "yh-epub-reader-area" });
     this.progressEl = this.containerEl.createDiv({ cls: "yh-epub-progress" });
-    this.containerEl.addEventListener("keydown", (event) => this.handleKeydown(event));
+    this.documentKeyHandler = (event) => this.handleKeydown(event);
+    document.addEventListener("keydown", this.documentKeyHandler);
     this.readerContainerEl.addEventListener("wheel", (event) => this.handleWheel(event), { passive: false });
   }
   // ================================================================
@@ -12479,8 +12489,9 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       void this.openNoteModal(cfiRange, text);
       this.dismissContextMenu();
     });
+    const safeTop = parseInt(getComputedStyle(this.containerEl).getPropertyValue("--yh-safe-top")) || 0;
     const clampedLeft = Math.max(8, Math.min(left, window.innerWidth - 260));
-    const clampedTop = Math.max(8, Math.min(top + 8, window.innerHeight - 48));
+    const clampedTop = Math.max(8 + safeTop, Math.min(top + 8, window.innerHeight - 48));
     menu.style.left = `${clampedLeft}px`;
     menu.style.top = `${clampedTop}px`;
     document.body.appendChild(menu);

@@ -13642,15 +13642,15 @@ var EpubBookshelfView = class extends import_obsidian14.ItemView {
     return "book-open";
   }
   async onOpen() {
-    this.render();
+    await this.render();
   }
   async onClose() {
     this.contentEl.empty();
   }
   refresh() {
-    this.render();
+    void this.render();
   }
-  render() {
+  async render() {
     const container = this.contentEl;
     container.empty();
     container.addClass("yh-epub-bookshelf-view");
@@ -13666,9 +13666,11 @@ var EpubBookshelfView = class extends import_obsidian14.ItemView {
       });
       return;
     }
+    const docs = await Promise.all(bookFiles.map((f3) => this.store.getDocument(f3)));
+    const progressMap = new Map(docs.map((d2) => [d2.filePath, d2.epubProgress]));
     const list = container.createDiv({ cls: "bookshelf-list" });
     for (const file of bookFiles) {
-      const progress = this.store.getCachedDocument(file.path)?.epubProgress;
+      const progress = progressMap.get(file.path) ?? null;
       const percent = progress ? Math.round(progress.percent * 100) : 0;
       const item = list.createDiv({ cls: "bookshelf-item" });
       const info = item.createDiv({ cls: "bookshelf-info" });

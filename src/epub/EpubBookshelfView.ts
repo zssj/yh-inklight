@@ -37,7 +37,7 @@ export class EpubBookshelfView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
-    this.render();
+    await this.render();
   }
 
   async onClose(): Promise<void> {
@@ -45,10 +45,10 @@ export class EpubBookshelfView extends ItemView {
   }
 
   refresh(): void {
-    this.render();
+    void this.render();
   }
 
-  private render(): void {
+  private async render(): Promise<void> {
     const container = this.contentEl;
     container.empty();
     container.addClass("yh-epub-bookshelf-view");
@@ -70,10 +70,14 @@ export class EpubBookshelfView extends ItemView {
       return;
     }
 
+    // 并行加载所有电子书的 sidecar 数据（从磁盘读取，填充缓存）
+    const docs = await Promise.all(bookFiles.map((f) => this.store.getDocument(f)));
+    const progressMap = new Map(docs.map((d) => [d.filePath, d.epubProgress]));
+
     const list = container.createDiv({ cls: "bookshelf-list" });
 
     for (const file of bookFiles) {
-      const progress = this.store.getCachedDocument(file.path)?.epubProgress;
+      const progress = progressMap.get(file.path) ?? null;
       const percent = progress ? Math.round(progress.percent * 100) : 0;
 
       const item = list.createDiv({ cls: "bookshelf-item" });

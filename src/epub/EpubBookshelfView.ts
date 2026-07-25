@@ -93,13 +93,14 @@ export class EpubBookshelfView extends ItemView {
 
       // 进度条
       const progressBar = meta.createDiv({ cls: "bookshelf-progress-wrap" });
-      const bar = progressBar.createDiv({ cls: "bookshelf-progress-bar" });
-      bar.setCssProps({ width: `${percent}%` });
+      const barOuter = progressBar.createDiv({ cls: "bookshelf-progress-bar" });
+      const fill = barOuter.createDiv({ cls: "bookshelf-progress-fill" });
+      fill.style.width = `${percent}%`;
       const readCount = progress?.readCount ?? 0;
       const readIdx = Math.min(readCount + 1, 4);
       const COLORS = ["", "#f5c518", "#4a9eff", "#4caf50", "#9c27b0"];
-      bar.classList.add(`read-${readIdx}`);
-      bar.style.background = COLORS[readIdx];
+      fill.classList.add(`read-${readIdx}`);
+      fill.style.background = COLORS[readIdx];
       progressBar.createEl("span", {
         cls: "bookshelf-percent",
         text: `${percent}%`,
@@ -126,16 +127,14 @@ export class EpubBookshelfView extends ItemView {
           });
         }
 
-        if (readCount > 0) {
-          let readLabel = `已读完 ${readCount} 遍`;
-          if (progress.lastCompletedAt) {
-            readLabel += ` · ${progress.lastCompletedAt.slice(0, 10)}`;
-          }
-          meta.createEl("div", {
-            cls: "bookshelf-read-count",
-            text: readLabel,
-          });
+        let readLabel = `已读 ${readCount} 遍`;
+        if (progress?.lastCompletedAt) {
+          readLabel += ` · ${progress.lastCompletedAt.slice(0, 10)}`;
         }
+        meta.createEl("div", {
+          cls: "bookshelf-read-count",
+          text: readLabel,
+        });
       }
 
       item.addEventListener("click", () => {

@@ -1078,6 +1078,7 @@ export class EpubReaderView extends FileView {
 
 		try {
 			await this.store.saveEpubProgress(this.file, progress);
+			this.refreshAnnotations();
 		} catch (error) {
 			console.error("yh-inklight: EPUB progress save failed", error);
 		}

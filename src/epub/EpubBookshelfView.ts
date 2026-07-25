@@ -97,7 +97,9 @@ export class EpubBookshelfView extends ItemView {
       bar.setCssProps({ width: `${percent}%` });
       const readCount = progress?.readCount ?? 0;
       const readIdx = Math.min(readCount + 1, 4);
+      const COLORS = ["", "#f5c518", "#4a9eff", "#4caf50", "#9c27b0"];
       bar.classList.add(`read-${readIdx}`);
+      bar.style.background = COLORS[readIdx];
       progressBar.createEl("span", {
         cls: "bookshelf-percent",
         text: `${percent}%`,

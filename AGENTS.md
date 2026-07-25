@@ -1,23 +1,38 @@
-# obsidian-annotation-plugin/ - Axl Light overlay annotation plugin for Obsidian reading
-> L2 | 父级: /Users/epiphanyxiao/Documents/Playground/AGENTS.md
+# yh-inklight — 墨光批注
 
-成员清单
-.github/AGENTS.md: GitHub 自动化地图，描述 release workflow 的发布职责。
-.gitignore: 发布仓库忽略规则，排除依赖、构建产物、本地 vault 数据。
-LICENSE: MIT 开源许可证，满足 Obsidian 社区插件提交前置要求。
-annotation-layout-mocks.html: 四种阅读注释布局的静态视觉 mock，用于决策便利贴显示策略。
-docs/AGENTS.md: 文档资产地图，管理 README 使用的安装与使用流程图。
-package.json: 插件工程依赖与脚本入口，定义构建与开发命令。
-manifest.json: Obsidian 插件清单，声明插件标识、版本与最低兼容版本。
-versions.json: Obsidian 版本到插件版本的发布映射。
-tsconfig.json: TypeScript 编译约束，收紧类型边界与构建目标。
-esbuild.config.mjs: esbuild 打包入口，把 src/main.ts 编译为 Obsidian 可加载产物。
-styles.css: 标注面板与阅读视图高亮样式。
-main.ts: 插件主入口，装配 sidecar store、CM6 extension、floating toolbar、sticky note lane、sidebar、settings 与 vault 事件。
-README.md: 使用说明与非侵入式 sidecar 存储承诺。
-scripts/AGENTS.md: 安装脚本地图，描述一条命令安装器的职责。
-src/AGENTS.md: src 模块地图，描述 Markdown/PDF 注释通道与核心代码分层。
+Obsidian 非侵入式阅读批注插件，支持 Markdown / PDF / EPUB。
 
-法则: overlay 优先·原文不动·服务单一·视图解耦
+## Commands
 
-[PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
+```bash
+npm run dev       # esbuild watch mode, outputs main.js
+npm run build     # esbuild production bundle
+npx tsc --noEmit  # type check (separate from build)
+```
+
+No lint, no test, no formatter config. CI only verifies `npm run build`. Release via tagged push — GitHub Actions creates release with `main.js` + `manifest.json` + `styles.css`.
+
+## Key Architecture
+
+- **main.ts** — plugin entry, wires modules together. Exports `OverlayAnnotationsPlugin`.
+- **src/storage/annotationStore.ts** — sole persistence layer. Annotations go to `<vault>/.obsidian-annotations/` sidecar JSON. Never touches original files.
+- **src/storage/types.ts** — single source of truth for all annotation/settings types.
+- **src/anchor/textAnchor.ts** — offset + context (prefix/suffix) anchor system with fuzzy matching fallback.
+- **src/editor/** — CM6 highlight extension + reading view DOM highlight layer (separate paths).
+- **src/pdf/** — PDF overlay highlights using page number + rect % coordinates.
+- **src/epub/** — foliate-js based EPUB reader view, registered as `inklight-epub-reader`.
+- **src/views/sidebarView.ts** — unified annotation sidebar (`yh-inklight-sidebar`), shared across all 3 formats.
+- **Build output `main.js` is gitignored** — always rebuild before testing.
+
+## Conventions
+
+- Non-invasive first: all annotation data in sidecar, document zero-modification.
+- Three disjoint annotation coordinate systems: CM6 offset (MD), page+rect (PDF), CFI (EPUB).
+- UI strings are Chinese (zh-CN). Comments and notices in Chinese.
+- Module header convention: `[INPUT]` / `[OUTPUT]` / `[POS]` / `[PROTOCOL]` doc comments.
+- `SUPPORTED_BOOK_EXTENSIONS` in types.ts lists all foliate-compatible formats registered as view handlers.
+- Rename/move migration is debounced at 100ms (`main.ts:377`).
+
+## Testing
+
+No test framework. Manual testing: copy `main.js` + `manifest.json` + `styles.css` to `<vault>/.obsidian/plugins/yh-inklight/` and reload Obsidian.

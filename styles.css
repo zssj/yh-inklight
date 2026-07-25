@@ -1505,6 +1505,16 @@ span.yh-ov-expand-btn:hover {
   text-align: right;
 }
 
+/* ===== 阅读遍数进度条颜色 ===== */
+.yh-epub-progress-fill.read-1,
+.bookshelf-progress-bar.read-1 { background: #f5c518 !important; }
+.yh-epub-progress-fill.read-2,
+.bookshelf-progress-bar.read-2 { background: #4a9eff !important; }
+.yh-epub-progress-fill.read-3,
+.bookshelf-progress-bar.read-3 { background: #4caf50 !important; }
+.yh-epub-progress-fill.read-4,
+.bookshelf-progress-bar.read-4 { background: #9c27b0 !important; }
+
 /* ============================================================
    EPUB 阅读器 — 浮动选区上下文菜单
    ============================================================ */

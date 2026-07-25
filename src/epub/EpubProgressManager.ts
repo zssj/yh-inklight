@@ -52,6 +52,7 @@ export class EpubProgressManager {
       lastRead: new Date().toISOString(),
       readingTimeSeconds: existing?.readingTimeSeconds ?? 0,
       estimatedRemainingMinutes: estimatedRemaining,
+      readCount: existing?.readCount ?? 0,
     };
 
     try {
@@ -120,6 +121,7 @@ export class EpubProgressManager {
         lastRead: existing?.lastRead ?? new Date().toISOString(),
         readingTimeSeconds: total,
         estimatedRemainingMinutes: this.estimateRemaining(percent, total),
+        readCount: existing?.readCount ?? 0,
       });
       this.persistedReadingSeconds = total;
     } catch (err) {

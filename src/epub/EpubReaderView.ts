@@ -158,7 +158,9 @@ export class EpubReaderView extends FileView {
 	private currentFontSize: number;
 	private currentTheme: EpubReadingTheme;
 	private sidebarOpen = false;
-private contextMenuEl: HTMLElement | null = null;
+	private currentReadCount = 0;
+	private completedThisCycle = false;
+	private contextMenuEl: HTMLElement | null = null;
 		private lastSelectedCfiRange = "";
 		private lastSelectedText = "";
 		private searchInputEl: HTMLInputElement | null = null;
@@ -962,6 +964,13 @@ private contextMenuEl: HTMLElement | null = null;
 		this.currentChapter = detail?.tocItem?.label ?? resolveChapterLabel(this.tocEntries, this.currentSectionIndex);
 		this.currentPercent = percent;
 
+		if (percent < 0.5) {
+			this.completedThisCycle = false;
+		} else if (percent >= 0.98 && !this.completedThisCycle) {
+			this.currentReadCount++;
+			this.completedThisCycle = true;
+		}
+
 		this.updateProgressBar(percent);
 		this.debouncedSaveProgress(this.currentCfi, percent);
 	}
@@ -981,6 +990,8 @@ private contextMenuEl: HTMLElement | null = null;
 		const fill = bar.querySelector<HTMLElement>(".yh-epub-progress-fill");
 		if (fill) {
 			fill.style.width = `${Math.round(percent * 100)}%`;
+			const readIdx = Math.min(this.currentReadCount + 1, 4);
+			fill.classList.add(`read-${readIdx}`);
 		}
 
 		const percentText = `${Math.round(percent * 100)}%`;
@@ -1061,6 +1072,8 @@ private contextMenuEl: HTMLElement | null = null;
 			lastRead: new Date().toISOString(),
 			readingTimeSeconds: this.readingTimeSeconds,
 			estimatedRemainingMinutes: this.estimateRemainingMinutes(),
+			readCount: this.currentReadCount,
+			lastCompletedAt: this.completedThisCycle && percent >= 0.98 ? new Date().toISOString() : undefined,
 		};
 
 		try {
@@ -1106,6 +1119,7 @@ private contextMenuEl: HTMLElement | null = null;
 		}
 
 		this.readingTimeSeconds = progress.readingTimeSeconds ?? 0;
+		this.currentReadCount = progress.readCount ?? 0;
 
 		const cfi = normalizeCfi(progress.cfi);
 		if (cfi) {
@@ -1120,6 +1134,7 @@ private contextMenuEl: HTMLElement | null = null;
 		}
 
 		this.currentPercent = normalizePercent(progress.percent);
+		this.completedThisCycle = this.currentPercent >= 0.98;
 		this.updateProgressBar(this.currentPercent);
 		this.restoreAnnotations();
 	}

@@ -12009,6 +12009,8 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     this.currentChapter = "";
     this.currentPercent = 0;
     this.sidebarOpen = false;
+    this.currentReadCount = 0;
+    this.completedThisCycle = false;
     this.contextMenuEl = null;
     this.lastSelectedCfiRange = "";
     this.lastSelectedText = "";
@@ -12711,6 +12713,12 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     this.currentSectionIndex = Number.isFinite(spineIndex) ? spineIndex : 0;
     this.currentChapter = detail?.tocItem?.label ?? resolveChapterLabel(this.tocEntries, this.currentSectionIndex);
     this.currentPercent = percent;
+    if (percent < 0.5) {
+      this.completedThisCycle = false;
+    } else if (percent >= 0.98 && !this.completedThisCycle) {
+      this.currentReadCount++;
+      this.completedThisCycle = true;
+    }
     this.updateProgressBar(percent);
     this.debouncedSaveProgress(this.currentCfi, percent);
   }
@@ -12728,6 +12736,8 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     const fill = bar.querySelector(".yh-epub-progress-fill");
     if (fill) {
       fill.style.width = `${Math.round(percent * 100)}%`;
+      const readIdx = Math.min(this.currentReadCount + 1, 4);
+      fill.classList.add(`read-${readIdx}`);
     }
     const percentText = `${Math.round(percent * 100)}%`;
     const remaining = this.formatRemainingTime();
@@ -12794,7 +12804,9 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       percent,
       lastRead: (/* @__PURE__ */ new Date()).toISOString(),
       readingTimeSeconds: this.readingTimeSeconds,
-      estimatedRemainingMinutes: this.estimateRemainingMinutes()
+      estimatedRemainingMinutes: this.estimateRemainingMinutes(),
+      readCount: this.currentReadCount,
+      lastCompletedAt: this.completedThisCycle && percent >= 0.98 ? (/* @__PURE__ */ new Date()).toISOString() : void 0
     };
     try {
       await this.store.saveEpubProgress(this.file, progress);
@@ -12833,6 +12845,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       return;
     }
     this.readingTimeSeconds = progress.readingTimeSeconds ?? 0;
+    this.currentReadCount = progress.readCount ?? 0;
     const cfi = normalizeCfi(progress.cfi);
     if (cfi) {
       try {
@@ -12845,6 +12858,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       await showFoliateStart(this.foliateView);
     }
     this.currentPercent = normalizePercent(progress.percent);
+    this.completedThisCycle = this.currentPercent >= 0.98;
     this.updateProgressBar(this.currentPercent);
     this.restoreAnnotations();
   }
@@ -13683,6 +13697,9 @@ var EpubBookshelfView = class extends import_obsidian14.ItemView {
       const progressBar = meta.createDiv({ cls: "bookshelf-progress-wrap" });
       const bar = progressBar.createDiv({ cls: "bookshelf-progress-bar" });
       bar.setCssProps({ width: `${percent}%` });
+      const readCount = progress?.readCount ?? 0;
+      const readIdx = Math.min(readCount + 1, 4);
+      bar.classList.add(`read-${readIdx}`);
       progressBar.createEl("span", {
         cls: "bookshelf-percent",
         text: `${percent}%`
@@ -13703,6 +13720,16 @@ var EpubBookshelfView = class extends import_obsidian14.ItemView {
           meta.createEl("div", {
             cls: "bookshelf-remaining",
             text: `\u5269\u4F59\u7EA6 ${Math.ceil(progress.estimatedRemainingMinutes)} \u5206\u949F`
+          });
+        }
+        if (readCount > 0) {
+          let readLabel = `\u5DF2\u8BFB\u5B8C ${readCount} \u904D`;
+          if (progress.lastCompletedAt) {
+            readLabel += ` \xB7 ${progress.lastCompletedAt.slice(0, 10)}`;
+          }
+          meta.createEl("div", {
+            cls: "bookshelf-read-count",
+            text: readLabel
           });
         }
       }

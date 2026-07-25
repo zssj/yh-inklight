@@ -244,6 +244,8 @@ export interface EpubReadingProgress {
   lastRead: string;
   readingTimeSeconds: number;
   estimatedRemainingMinutes?: number;
+  readCount: number;
+  lastCompletedAt?: string;
 }
 
 // ===== PDF 进度 =====

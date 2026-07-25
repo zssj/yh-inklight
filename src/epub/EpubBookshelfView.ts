@@ -95,6 +95,9 @@ export class EpubBookshelfView extends ItemView {
       const progressBar = meta.createDiv({ cls: "bookshelf-progress-wrap" });
       const bar = progressBar.createDiv({ cls: "bookshelf-progress-bar" });
       bar.setCssProps({ width: `${percent}%` });
+      const readCount = progress?.readCount ?? 0;
+      const readIdx = Math.min(readCount + 1, 4);
+      bar.classList.add(`read-${readIdx}`);
       progressBar.createEl("span", {
         cls: "bookshelf-percent",
         text: `${percent}%`,
@@ -118,6 +121,17 @@ export class EpubBookshelfView extends ItemView {
           meta.createEl("div", {
             cls: "bookshelf-remaining",
             text: `剩余约 ${Math.ceil(progress.estimatedRemainingMinutes)} 分钟`,
+          });
+        }
+
+        if (readCount > 0) {
+          let readLabel = `已读完 ${readCount} 遍`;
+          if (progress.lastCompletedAt) {
+            readLabel += ` · ${progress.lastCompletedAt.slice(0, 10)}`;
+          }
+          meta.createEl("div", {
+            cls: "bookshelf-read-count",
+            text: readLabel,
           });
         }
       }

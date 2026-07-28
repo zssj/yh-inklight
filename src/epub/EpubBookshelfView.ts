@@ -97,7 +97,7 @@ export class EpubBookshelfView extends ItemView {
       const fill = barOuter.createDiv({ cls: "bookshelf-progress-fill" });
       fill.style.width = `${percent}%`;
       const readCount = progress?.readCount ?? 0;
-      const readIdx = Math.min(readCount + 1, 4);
+      const readIdx = Math.min(readCount || 1, 4);
       const COLORS = ["", "#f5c518", "#4a9eff", "#4caf50", "#9c27b0"];
       fill.classList.add(`read-${readIdx}`);
       fill.style.background = COLORS[readIdx];

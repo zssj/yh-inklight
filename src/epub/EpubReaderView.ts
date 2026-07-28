@@ -85,6 +85,7 @@ interface FoliateRelocateDetail {
 	fraction?: number;
 	range?: Range;
 	tocItem?: { label?: string };
+	section?: { current: number; total: number };
 }
 
 interface FoliateLoadDetail {
@@ -154,8 +155,12 @@ export class EpubReaderView extends FileView {
 	private tocEntries: TocSpineEntry[] = [];
 	private currentChapter = "";
 	private currentPercent = 0;
-	/** foliate 滚动模式最后一页 fraction ≈0.97 达不到 1.0，标记为已读到尾后锁定 */
+	/** 本会话中见到的最大 fraction（滚动模式末页达不到 1.0） */
+	private maxSeenPercent = 0;
+	/** 标记为已读到尾后锁定 100% */
 	private clampedToEnd = false;
+	/** 连续 relocate 事件中 fraction 未增长的次数（末页检测） */
+	private stableCountAtEnd = 0;
 	private currentFlowMode: EpubFlowMode;
 	private currentFontSize: number;
 	private currentTheme: EpubReadingTheme;
@@ -266,7 +271,9 @@ export class EpubReaderView extends FileView {
 	 * @param file - 用户打开的 EPUB TFile
 	 */
 	override async onLoadFile(file: TFile): Promise<void> {
+		this.maxSeenPercent = 0;
 		this.clampedToEnd = false;
+		this.stableCountAtEnd = 0;
 		this.destroyRendition();
 
 		try {
@@ -962,9 +969,24 @@ export class EpubReaderView extends FileView {
 		const rawPercent = normalizePercent(detail?.fraction ?? this.currentPercent);
 		const spineIndex = typeof detail.index === "number" ? detail.index : this.currentSectionIndex;
 
-		// foliate 的 fraction 已是书级进度；滚动模式最后一页 ≈0.97 达不到 1.0，补偿修正
-		if (this.clampedToEnd || rawPercent >= 0.95) {
-			this.clampedToEnd = true;
+		// 跟踪历史最高 fraction（滚动模式下末页 ≈0.9x 达不到 1.0）
+		if (rawPercent > this.maxSeenPercent) {
+			this.maxSeenPercent = rawPercent;
+			this.stableCountAtEnd = 0;
+		}
+		// 末节 + fraction 停滞在历史高位 + 连续未增长 → 已读完全书
+		const isLast = detail.section != null && detail.section.current >= detail.section.total - 1;
+		if (!this.clampedToEnd && isLast && rawPercent >= 0.80) {
+			if (rawPercent >= this.maxSeenPercent) {
+				this.stableCountAtEnd++;
+				// 单节图书用更高阈值防中途误判，多节图书末节即可
+				const threshold = detail.section.total === 1 ? 0.92 : 0.80;
+				if (this.stableCountAtEnd >= 3 && rawPercent >= threshold) {
+					this.clampedToEnd = true;
+				}
+			} else {
+				this.stableCountAtEnd = 0;
+			}
 		}
 		const percent = this.clampedToEnd ? 1 : rawPercent;
 

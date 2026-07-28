@@ -988,19 +988,24 @@ export class EpubReaderView extends FileView {
 				this.stableCountAtEnd = 0;
 			}
 		}
+		// 回到前半 → 新一轮阅读，释放末页锁定并清 completion 标志
+		if (rawPercent < 0.5) {
+			this.clampedToEnd = false;
+			this.stableCountAtEnd = 0;
+			this.maxSeenPercent = 0;
+			this.completedThisCycle = false;
+		}
 		const percent = this.clampedToEnd ? 1 : rawPercent;
+
+		if (rawPercent >= 0.98 && !this.completedThisCycle) {
+			this.currentReadCount++;
+			this.completedThisCycle = true;
+		}
 
 		this.currentCfi = cfi || this.currentCfi;
 		this.currentSectionIndex = Number.isFinite(spineIndex) ? spineIndex : 0;
 		this.currentChapter = detail?.tocItem?.label ?? resolveChapterLabel(this.tocEntries, this.currentSectionIndex);
 		this.currentPercent = percent;
-
-		if (percent < 0.5) {
-			this.completedThisCycle = false;
-		} else if (percent >= 0.98 && !this.completedThisCycle) {
-			this.currentReadCount++;
-			this.completedThisCycle = true;
-		}
 
 		this.updateProgressBar(percent);
 		this.debouncedSaveProgress(this.currentCfi, percent);

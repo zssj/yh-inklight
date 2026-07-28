@@ -987,11 +987,16 @@ export class EpubReaderView extends FileView {
 				this.stableCountAtEnd = 0;
 			}
 		}
-		// 回到前半 → 新一轮阅读，释放末页锁定并清 completion 标志
-		if (rawPercent < 0.5) {
+		// 往回翻且低于历史最高 5% → 释放末页锁定，显示真实进度
+		if (this.clampedToEnd && rawPercent < this.maxSeenPercent - 0.05) {
 			this.clampedToEnd = false;
 			this.stableCountAtEnd = 0;
+		}
+		// 回到开头附近（< 15%）→ 新一轮阅读，重置全部状态
+		if (rawPercent < 0.15) {
 			this.maxSeenPercent = 0;
+			this.stableCountAtEnd = 0;
+			this.clampedToEnd = false;
 			this.completedThisCycle = false;
 		}
 		const percent = this.clampedToEnd ? 1 : rawPercent;

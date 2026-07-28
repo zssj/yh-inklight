@@ -154,6 +154,8 @@ export class EpubReaderView extends FileView {
 	private tocEntries: TocSpineEntry[] = [];
 	private currentChapter = "";
 	private currentPercent = 0;
+	/** foliate 滚动模式最后一页 fraction ≈0.97 达不到 1.0，标记为已读到尾后锁定 */
+	private clampedToEnd = false;
 	private currentFlowMode: EpubFlowMode;
 	private currentFontSize: number;
 	private currentTheme: EpubReadingTheme;
@@ -264,6 +266,7 @@ export class EpubReaderView extends FileView {
 	 * @param file - 用户打开的 EPUB TFile
 	 */
 	override async onLoadFile(file: TFile): Promise<void> {
+		this.clampedToEnd = false;
 		this.destroyRendition();
 
 		try {
@@ -959,8 +962,11 @@ export class EpubReaderView extends FileView {
 		const rawPercent = normalizePercent(detail?.fraction ?? this.currentPercent);
 		const spineIndex = typeof detail.index === "number" ? detail.index : this.currentSectionIndex;
 
-		const lastIndex = (this.foliateView?.book?.sections?.length ?? 1) - 1;
-		const percent = spineIndex >= lastIndex && rawPercent >= 0.95 ? 1 : rawPercent;
+		// foliate 的 fraction 已是书级进度；滚动模式最后一页 ≈0.97 达不到 1.0，补偿修正
+		if (this.clampedToEnd || rawPercent >= 0.95) {
+			this.clampedToEnd = true;
+		}
+		const percent = this.clampedToEnd ? 1 : rawPercent;
 
 		this.currentCfi = cfi || this.currentCfi;
 		this.currentSectionIndex = Number.isFinite(spineIndex) ? spineIndex : 0;

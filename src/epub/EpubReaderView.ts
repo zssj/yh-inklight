@@ -972,6 +972,7 @@ export class EpubReaderView extends FileView {
 		// 跟踪历史最高 fraction（滚动模式下末页 ≈0.9x 达不到 1.0）
 		if (rawPercent > this.maxSeenPercent) {
 			this.maxSeenPercent = rawPercent;
+			this.clampedToEnd = false;
 			this.stableCountAtEnd = 0;
 		}
 		// 末节 + fraction 停滞在历史高位 + 连续未增长 → 已读完全书
@@ -979,9 +980,7 @@ export class EpubReaderView extends FileView {
 		if (!this.clampedToEnd && isLast && rawPercent >= 0.80) {
 			if (rawPercent >= this.maxSeenPercent) {
 				this.stableCountAtEnd++;
-				// 单节图书用更高阈值防中途误判，多节图书末节即可
-				const threshold = detail.section.total === 1 ? 0.92 : 0.80;
-				if (this.stableCountAtEnd >= 3 && rawPercent >= threshold) {
+				if (this.stableCountAtEnd >= 3) {
 					this.clampedToEnd = true;
 				}
 			} else {

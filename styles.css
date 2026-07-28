@@ -1514,6 +1514,10 @@ span.yh-ov-expand-btn:hover {
 .bookshelf-progress-fill.read-3 { background: #4caf50 !important; }
 .yh-epub-progress-fill.read-4,
 .bookshelf-progress-fill.read-4 { background: #9c27b0 !important; }
+.yh-epub-progress-fill.read-5,
+.bookshelf-progress-fill.read-5 { background: #ff9800 !important; }
+.yh-epub-progress-fill.read-6,
+.bookshelf-progress-fill.read-6 { background: #e53935 !important; }
 
 .bookshelf-progress-fill {
   height: 100%;

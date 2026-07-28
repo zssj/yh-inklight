@@ -97,8 +97,8 @@ export class EpubBookshelfView extends ItemView {
       const fill = barOuter.createDiv({ cls: "bookshelf-progress-fill" });
       fill.style.width = `${percent}%`;
       const readCount = progress?.readCount ?? 0;
-      const readIdx = Math.min(readCount || 1, 4);
-      const COLORS = ["", "#f5c518", "#4a9eff", "#4caf50", "#9c27b0"];
+      const readIdx = Math.min(readCount + 1, 6);
+      const COLORS = ["", "#f5c518", "#4a9eff", "#4caf50", "#9c27b0", "#ff9800", "#e53935"];
       fill.classList.add(`read-${readIdx}`);
       fill.style.background = COLORS[readIdx];
       progressBar.createEl("span", {
@@ -127,7 +127,8 @@ export class EpubBookshelfView extends ItemView {
           });
         }
 
-        let readLabel = `已读 ${readCount} 遍`;
+        const cycle = readCount + 1;
+        let readLabel = `第 ${cycle} 遍`;
         if (progress?.lastCompletedAt) {
           readLabel += ` · ${progress.lastCompletedAt.slice(0, 10)}`;
         }

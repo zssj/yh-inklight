@@ -1030,7 +1030,7 @@ export class EpubReaderView extends FileView {
 		const fill = bar.querySelector<HTMLElement>(".yh-epub-progress-fill");
 		if (fill) {
 			fill.style.width = `${Math.round(percent * 100)}%`;
-			const readIdx = Math.min(this.currentReadCount || 1, 4);
+			const readIdx = Math.min(this.currentReadCount + 1, 6);
 			fill.classList.add(`read-${readIdx}`);
 		}
 

@@ -98,6 +98,7 @@ export function normalizePercent(percent: number): number {
     return 0;
   }
   if (percent > 1) {
+    if (percent <= 2) return 1;
     return Math.min(percent / 100, 1);
   }
   return percent;

@@ -956,8 +956,11 @@ export class EpubReaderView extends FileView {
 	 */
 	private handleRelocated(detail: FoliateRelocateDetail): void {
 		const cfi = normalizeCfi(detail?.cfi);
-		const percent = normalizePercent(detail?.fraction ?? this.currentPercent);
+		const rawPercent = normalizePercent(detail?.fraction ?? this.currentPercent);
 		const spineIndex = typeof detail.index === "number" ? detail.index : this.currentSectionIndex;
+
+		const lastIndex = (this.foliateView?.book?.sections?.length ?? 1) - 1;
+		const percent = spineIndex >= lastIndex && rawPercent >= 0.95 ? 1 : rawPercent;
 
 		this.currentCfi = cfi || this.currentCfi;
 		this.currentSectionIndex = Number.isFinite(spineIndex) ? spineIndex : 0;

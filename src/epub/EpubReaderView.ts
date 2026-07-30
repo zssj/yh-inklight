@@ -501,7 +501,7 @@ export class EpubReaderView extends FileView {
 		for (let i = 0; i < this.tocEntries.length; i++) {
 			const entry = this.tocEntries[i];
 			const isCurrent = isSingleSection
-				? entry.label === this.currentChapter
+				? entry.label === (this.currentChapter || "").trim()
 				: entry.spineIndex <= this.currentSectionIndex;
 
 			const item = list.createEl("button", {
@@ -983,7 +983,7 @@ export class EpubReaderView extends FileView {
 	private handleRelocated(detail: FoliateRelocateDetail): void {
 		const cfi = normalizeCfi(detail?.cfi);
 		const rawPercent = normalizePercent(detail?.fraction ?? this.currentPercent);
-		const spineIndex = typeof detail.index === "number" ? detail.index : this.currentSectionIndex;
+		const spineIndex = typeof detail.section?.current === "number" ? detail.section.current : this.currentSectionIndex;
 
 		// 跟踪历史最高 fraction（滚动模式下末页 ≈0.9x 达不到 1.0）
 		if (rawPercent > this.maxSeenPercent) {

@@ -495,14 +495,30 @@ export class EpubReaderView extends FileView {
 		}
 
 		const list = this.sidebarContentEl.createDiv({ cls: "yh-epub-toc-list" });
+		const isSingleSection = this.tocEntries.every(e => e.spineIndex === this.tocEntries[0].spineIndex);
+		let activeIndex = -1;
 
-		for (const entry of this.tocEntries) {
+		for (let i = 0; i < this.tocEntries.length; i++) {
+			const entry = this.tocEntries[i];
+			const isCurrent = isSingleSection
+				? entry.label === this.currentChapter
+				: entry.spineIndex <= this.currentSectionIndex;
+
 			const item = list.createEl("button", {
-				cls: "yh-epub-toc-item",
+				cls: `yh-epub-toc-item${isCurrent ? " is-current" : ""}`,
 				text: entry.label,
 				attr: { type: "button" },
 			});
 			item.addEventListener("click", () => this.navigateToSpineIndex(entry.spineIndex));
+
+			if (isCurrent) {
+				activeIndex = i;
+			}
+		}
+
+		if (activeIndex >= 0) {
+			const activeEl = list.children[activeIndex] as HTMLElement;
+			setTimeout(() => activeEl?.scrollIntoView({ block: "center" }), 50);
 		}
 	}
 

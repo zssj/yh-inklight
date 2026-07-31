@@ -157,11 +157,11 @@ export class EpubNoteModal extends Modal {
     const ta = body.createEl("textarea", { cls: "yh-epub-note-textarea" });
     ta.placeholder = "在这里写下你的想法、疑问或联想…";
     ta.value = this.note;
-    ta.rows = 6;
+    ta.rows = Platform.isMobile ? 4 : 6;
     window.setTimeout(() => ta.focus(), 30);
 
-    // 按钮行
-    const actions = contentEl.createDiv({ cls: "yh-epub-note-actions" });
+    // 按钮行（放入可滚动主体，测量失败时也能下滑到按钮）
+    const actions = body.createDiv({ cls: "yh-epub-note-actions" });
     const cancelBtn = actions.createEl("button", {
       text: "取消",
       cls: "yh-epub-note-cancel",
@@ -191,35 +191,73 @@ export class EpubNoteModal extends Modal {
   }
 
   /**
-   * 移动端软键盘感知：visualViewport 随键盘开合变化，
-   * 把 Modal 容器钉在可视区域内，避免输入框/保存按钮被键盘遮挡。
+   * 移动端软键盘感知（Android 优先）。
+   *
+   * 通过多路测量源交叉取"键盘上方可视区高度"，再把 Modal 容器钉进该区域：
+   * 1. navigator.virtualKeyboard.geometrychange → boundingRect 精确键盘高度
+   * 2. window.visualViewport.resize/scroll → 视觉视口高度（覆盖键盘模式）
+   * 3. window.resize + window.innerHeight（adjustResize 模式下布局视口被压缩）
+   * 4. focusin + 延迟重测，兜底事件漏发
+   *
+   * 按钮已放进可滚动主体：即使所有测量都失效，用户也能下滑到"取消/保存"。
    */
   private setupKeyboardAwareness(): void {
     const vv = window.visualViewport;
-    if (!vv) {
-      return;
-    }
+    const vk = (navigator as unknown as {
+      virtualKeyboard?: {
+        boundingRect?: { height: number };
+        addEventListener?: (type: "geometrychange", listener: () => void) => void;
+        removeEventListener?: (type: "geometrychange", listener: () => void) => void;
+      };
+    }).virtualKeyboard;
 
     const apply = (): void => {
-      const top = vv.offsetTop;
-      const height = Math.max(160, vv.height);
-      this.containerEl.style.top = `${top}px`;
+      const innerH = window.innerHeight;
+      const vvH = vv?.height ?? innerH;
+      const vkH = vk?.boundingRect?.height ?? 0;
+
+      let height = Math.max(120, Math.min(vvH, innerH));
+      let source = vv ? "visualViewport" : "innerHeight";
+      if (vkH > 0 && height >= innerH - 4) {
+        // 视口未收缩（vv 不更新且非 adjustResize 模式），用键盘矩形估算
+        height = Math.max(120, innerH - vkH);
+        source = "virtualKeyboard";
+      }
+
+      this.containerEl.style.top = "0px";
       this.containerEl.style.height = `${height}px`;
-      this.modalEl.style.maxHeight = `${height - 16}px`;
+      this.containerEl.style.alignItems = "flex-start";
+      this.modalEl.style.marginTop = "calc(env(safe-area-inset-top, 0px) + 10px)";
+      this.modalEl.style.maxHeight = `${height - 20}px`;
       this.modalEl.style.overflow = "hidden";
+
+      console.warn(
+        `yh-inklight: keyboard-measure[${source}] innerH=${innerH} vvH=${vvH} vkH=${vkH} clampH=${height}`,
+      );
     };
 
     apply();
-    vv.addEventListener("resize", apply);
-    vv.addEventListener("scroll", apply);
+    vk?.addEventListener?.("geometrychange", apply);
+    vv?.addEventListener("resize", apply);
+    vv?.addEventListener("scroll", apply);
     window.addEventListener("resize", apply);
 
+    const focusApply = (): void => {
+      window.setTimeout(apply, 120);
+      window.setTimeout(apply, 450);
+    };
+    document.addEventListener("focusin", focusApply);
+
     this.keyboardCleanup = () => {
-      vv.removeEventListener("resize", apply);
-      vv.removeEventListener("scroll", apply);
+      vk?.removeEventListener?.("geometrychange", apply);
+      vv?.removeEventListener("resize", apply);
+      vv?.removeEventListener("scroll", apply);
       window.removeEventListener("resize", apply);
+      document.removeEventListener("focusin", focusApply);
       this.containerEl.style.top = "";
       this.containerEl.style.height = "";
+      this.containerEl.style.alignItems = "";
+      this.modalEl.style.marginTop = "";
       this.modalEl.style.maxHeight = "";
       this.modalEl.style.overflow = "";
     };

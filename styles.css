@@ -1782,6 +1782,7 @@ span.yh-ov-expand-btn:hover {
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  padding-bottom: 8px;
 }
 
 .yh-epub-note-quote {

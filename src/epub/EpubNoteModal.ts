@@ -78,10 +78,12 @@ export class EpubNoteModal extends Modal {
     contentEl.empty();
     contentEl.addClass("yh-epub-note-modal");
 
-    contentEl.createEl("h3", { text: this.titleText });
+    const body = contentEl.createDiv({ cls: "yh-epub-note-body" });
+
+    body.createEl("h3", { text: this.titleText });
 
     // 引用选中文本
-    const quote = contentEl.createDiv({ cls: "yh-epub-note-quote" });
+    const quote = body.createDiv({ cls: "yh-epub-note-quote" });
     quote.setText(
       this.selectedText.length > 240
         ? this.selectedText.slice(0, 240) + "…"
@@ -89,7 +91,7 @@ export class EpubNoteModal extends Modal {
     );
 
     // 颜色选择行
-    const colorRow = contentEl.createDiv({ cls: "yh-epub-note-colors" });
+    const colorRow = body.createDiv({ cls: "yh-epub-note-colors" });
     colorRow.createEl("span", { cls: "yh-epub-note-label", text: "画线颜色" });
     const dots = colorRow.createDiv({ cls: "yh-epub-color-dots" });
     const dotEls: Record<string, HTMLElement> = {};
@@ -110,7 +112,7 @@ export class EpubNoteModal extends Modal {
     }
 
     // 高亮样式选择行
-    const styleRow = contentEl.createDiv({ cls: "yh-epub-note-styles" });
+    const styleRow = body.createDiv({ cls: "yh-epub-note-styles" });
     styleRow.createEl("span", { cls: "yh-epub-note-label", text: "标注样式" });
     const styleChips = styleRow.createDiv({ cls: "yh-epub-style-chips" });
     const styleEls: Record<string, HTMLElement> = {};
@@ -131,7 +133,7 @@ export class EpubNoteModal extends Modal {
     }
 
     // 想法类型选择行
-    const typeRow = contentEl.createDiv({ cls: "yh-epub-note-type-row" });
+    const typeRow = body.createDiv({ cls: "yh-epub-note-type-row" });
     typeRow.createEl("span", { cls: "yh-epub-note-label", text: "想法类型" });
     const chips = typeRow.createDiv({ cls: "yh-epub-note-type-chips" });
     const chipEls: Record<string, HTMLElement> = {};
@@ -152,7 +154,7 @@ export class EpubNoteModal extends Modal {
     }
 
     // 文本输入区域
-    const ta = contentEl.createEl("textarea", { cls: "yh-epub-note-textarea" });
+    const ta = body.createEl("textarea", { cls: "yh-epub-note-textarea" });
     ta.placeholder = "在这里写下你的想法、疑问或联想…";
     ta.value = this.note;
     ta.rows = 6;
@@ -190,7 +192,7 @@ export class EpubNoteModal extends Modal {
 
   /**
    * 移动端软键盘感知：visualViewport 随键盘开合变化，
-   * 动态钳制 Modal 高度并上移容器底部，避免输入框/保存按钮被键盘遮挡。
+   * 把 Modal 容器钉在可视区域内，避免输入框/保存按钮被键盘遮挡。
    */
   private setupKeyboardAwareness(): void {
     const vv = window.visualViewport;
@@ -199,21 +201,27 @@ export class EpubNoteModal extends Modal {
     }
 
     const apply = (): void => {
-      const visibleHeight = vv.height;
-      const keyboardOffset = Math.max(0, window.innerHeight - vv.height);
-      this.modalEl.style.maxHeight = `${Math.max(200, visibleHeight - 24)}px`;
-      this.containerEl.style.bottom = `${keyboardOffset + 12}px`;
+      const top = vv.offsetTop;
+      const height = Math.max(160, vv.height);
+      this.containerEl.style.top = `${top}px`;
+      this.containerEl.style.height = `${height}px`;
+      this.modalEl.style.maxHeight = `${height - 16}px`;
+      this.modalEl.style.overflow = "hidden";
     };
 
     apply();
     vv.addEventListener("resize", apply);
     vv.addEventListener("scroll", apply);
+    window.addEventListener("resize", apply);
 
     this.keyboardCleanup = () => {
       vv.removeEventListener("resize", apply);
       vv.removeEventListener("scroll", apply);
+      window.removeEventListener("resize", apply);
+      this.containerEl.style.top = "";
+      this.containerEl.style.height = "";
       this.modalEl.style.maxHeight = "";
-      this.containerEl.style.bottom = "";
+      this.modalEl.style.overflow = "";
     };
   }
 

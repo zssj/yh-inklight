@@ -1614,6 +1614,16 @@ span.yh-ov-expand-btn:hover {
 
 .yh-epub-note-modal {
   padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.yh-epub-note-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .yh-epub-note-quote {
@@ -1704,6 +1714,7 @@ span.yh-ov-expand-btn:hover {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 12px;
+  flex-shrink: 0;
 }
 
 .yh-epub-note-save,
@@ -1737,8 +1748,7 @@ span.yh-ov-expand-btn:hover {
     max-height: 72px;
   }
   .yh-epub-note-modal {
-    overflow-y: auto;
-    max-height: 100%;
+    padding: 12px;
   }
   .yh-epub-note-textarea {
     min-height: 70px;

@@ -1742,11 +1742,12 @@ span.yh-ov-expand-btn:hover {
 .yh-epub-card-btn.is-delete {
   background: var(--background-modifier-error);
   border-color: transparent;
-  color: var(--text-error, #fff);
+  color: #fff;
 }
 
 .yh-epub-card-btn.is-delete:hover {
   background: var(--background-modifier-error-hover);
+  color: #fff;
 }
 
 @media (max-width: 800px) {

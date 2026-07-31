@@ -217,11 +217,9 @@ export class EpubNoteModal extends Modal {
       const vkH = vk?.boundingRect?.height ?? 0;
 
       let height = Math.max(120, Math.min(vvH, innerH));
-      let source = vv ? "visualViewport" : "innerHeight";
       if (vkH > 0 && height >= innerH - 4) {
         // 视口未收缩（vv 不更新且非 adjustResize 模式），用键盘矩形估算
         height = Math.max(120, innerH - vkH);
-        source = "virtualKeyboard";
       }
 
       this.containerEl.style.top = "0px";
@@ -230,10 +228,6 @@ export class EpubNoteModal extends Modal {
       this.modalEl.style.marginTop = "calc(env(safe-area-inset-top, 0px) + 10px)";
       this.modalEl.style.maxHeight = `${height - 20}px`;
       this.modalEl.style.overflow = "hidden";
-
-      console.warn(
-        `yh-inklight: keyboard-measure[${source}] innerH=${innerH} vvH=${vvH} vkH=${vkH} clampH=${height}`,
-      );
     };
 
     apply();

@@ -5,7 +5,7 @@
  *          EpubThemeManager 的主题颜色解析
  * [OUTPUT]: 对外提供 EpubReaderView，将 foliate-js 渲染引擎嵌入 Obsidian leaf，
  *          承载工具栏、侧边栏（目录/标注）、阅读区（iframe）、进度条、
- *          选区上下文菜单、标注 CRUD、进度持久化与阅读时间追踪
+ *          选区上下文菜单、点击高亮弹出标注详情卡片、标注 CRUD、进度持久化与阅读时间追踪
  * [POS]: epub 模块的唯一视图入口，由插件主类通过 registerView 注册
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
@@ -44,6 +44,7 @@ import {
 	showFoliateStart,
 } from "./EpubFoliateLoader";
 import { EpubNoteModal, EpubNoteResult } from "./EpubNoteModal";
+import { EpubAnnotationCard } from "./EpubAnnotationCard";
 
 // ---- 常量 ----
 
@@ -103,6 +104,12 @@ interface FoliateDrawAnnotationDetail {
 		drawer: (rects: Array<DOMRect | { left: number; top: number; width: number; height: number }>) => SVGElement,
 		options?: unknown,
 	) => void;
+}
+
+interface FoliateShowAnnotationDetail {
+	value?: string;
+	index?: number;
+	range?: Range;
 }
 
 	interface EpubSelectionSnapshot {
@@ -168,6 +175,7 @@ export class EpubReaderView extends FileView {
 	private currentReadCount = 0;
 	private completedThisCycle = false;
 	private contextMenuEl: HTMLElement | null = null;
+	private annotationCardEl: EpubAnnotationCard | null = null;
 		private lastSelectedCfiRange = "";
 		private lastSelectedText = "";
 		private searchInputEl: HTMLInputElement | null = null;
@@ -650,6 +658,7 @@ export class EpubReaderView extends FileView {
 		view.addEventListener("load", this.handleFoliateLoad as EventListener);
 		view.addEventListener("relocate", this.handleFoliateRelocate as EventListener);
 		view.addEventListener("draw-annotation", this.handleFoliateDrawAnnotation as EventListener);
+		view.addEventListener("show-annotation", this.handleFoliateShowAnnotation as EventListener);
 	}
 
 	// ================================================================
@@ -1609,12 +1618,15 @@ export class EpubReaderView extends FileView {
 				this.foliateView.removeEventListener("load", this.handleFoliateLoad as EventListener);
 				this.foliateView.removeEventListener("relocate", this.handleFoliateRelocate as EventListener);
 				this.foliateView.removeEventListener("draw-annotation", this.handleFoliateDrawAnnotation as EventListener);
+				this.foliateView.removeEventListener("show-annotation", this.handleFoliateShowAnnotation as EventListener);
 				this.foliateView.close?.();
 			} catch {
 				/* foliate-view 可能已经销毁 */
 			}
 			this.foliateView = null;
 		}
+		this.annotationCardEl?.dismiss();
+		this.annotationCardEl = null;
 		this.renderedAnnotationMeta.clear();
 
 		if (this.readerContainerEl) {
@@ -1679,6 +1691,188 @@ export class EpubReaderView extends FileView {
 		const style = detail.annotation.style ?? this.pluginSettings.epubHighlightStyle;
 		detail.draw((rects) => this.createAnnotationOverlay(rects, color, style));
 	};
+
+	private handleFoliateShowAnnotation = (event: Event): void => {
+		const detail = (event as CustomEvent<FoliateShowAnnotationDetail>).detail;
+		if (!detail?.value) {
+			return;
+		}
+		this.showAnnotationCard(detail.value, detail.index, detail.range);
+	};
+
+	/**
+	 * 点击阅读区高亮后弹出标注详情卡片。
+	 * 优先展示笔记（epub-comment），纯画线则提示可添加笔记。
+	 *
+	 * @param cfiRange - foliate show-annotation 事件携带的标注 value（= CFI 范围）
+	 * @param index - 所在 spine 索引
+	 * @param range - 标注覆盖的文本 Range
+	 */
+	private showAnnotationCard(cfiRange: string, index?: number, range?: Range): void {
+		if (!this.file) {
+			return;
+		}
+		const document = this.store.getCachedDocument(this.file.path);
+		if (!document) {
+			return;
+		}
+
+		const comment = document.epubComments.find((c) => c.anchor.cfiRange === cfiRange);
+		const highlight = comment ?? document.epubHighlights.find((h) => h.anchor.cfiRange === cfiRange);
+		if (!highlight) {
+			return;
+		}
+
+		this.annotationCardEl?.dismiss();
+
+		const anchor = this.resolveAnnotationCardAnchor(index, range);
+		const card = new EpubAnnotationCard(
+			{
+				quote: highlight.anchor.selectedText,
+				note: comment?.note,
+				noteType: comment?.noteType,
+				color: highlight.color,
+				chapter: highlight.anchor.chapter,
+				createdAt: highlight.createdAt,
+				hasNote: comment != null,
+			},
+			{
+				onEdit: () => this.editComment(cfiRange),
+				onAddNote: () => this.addNoteToHighlight(cfiRange),
+				onDelete: () => {
+					void this.deleteAnnotation(highlight.id);
+				},
+			},
+		);
+		card.show(anchor, Platform.isMobile);
+		this.annotationCardEl = card;
+	}
+
+	private resolveAnnotationCardAnchor(index?: number, range?: Range): { left: number; top: number } {
+		if (range) {
+			const doc =
+				index != null
+					? this.foliateView?.renderer?.getContents?.().find((c) => c.index === index)?.doc
+					: undefined;
+			if (doc) {
+				const rect = this.createSelectionViewportRect(doc, range);
+				if (rect) {
+					return { left: rect.left + rect.width / 2, top: rect.bottom };
+				}
+			}
+		}
+		const area = this.readerContainerEl?.getBoundingClientRect();
+		return {
+			left: area ? area.left + area.width / 2 : window.innerWidth / 2,
+			top: area ? area.top + 16 : 16,
+		};
+	}
+
+	/**
+	 * 编辑已有标注（epub-comment）：用现有内容预填弹窗，保存后原位更新。
+	 *
+	 * @param cfiRange - 标注 CFI 范围
+	 */
+	private editComment(cfiRange: string): void {
+		if (!this.file) {
+			return;
+		}
+		const document = this.store.getCachedDocument(this.file.path);
+		const comment = document?.epubComments.find((c) => c.anchor.cfiRange === cfiRange);
+		if (!comment) {
+			return;
+		}
+
+		new EpubNoteModal(
+			this.app,
+			comment.anchor.selectedText,
+			{
+				note: comment.note,
+				color: comment.color,
+				style: comment.style,
+				noteType: comment.noteType,
+			},
+			async (result: EpubNoteResult) => {
+				if (!result.note.trim()) {
+					return;
+				}
+				const updated: EpubCommentAnnotation = {
+					...comment,
+					color: result.color,
+					style: result.style,
+					noteType: result.noteType,
+					note: result.note.trim(),
+					updatedAt: new Date().toISOString(),
+				};
+				try {
+					await this.store.updateEpubComment(this.file!, updated);
+					this.refreshRenditionAnnotations();
+					this.renderSidebar();
+					this.refreshAnnotations();
+					new Notice("标注已更新");
+				} catch (error) {
+					console.error("yh-inklight: EPUB comment update failed", error);
+					new Notice("标注更新失败");
+				}
+			},
+			"编辑想法",
+		).open();
+	}
+
+	/**
+	 * 为纯画线高亮补充笔记：删除原高亮并用相同 id 创建 epub-comment，
+	 * 保证 foliate 高亮层 value（= CFI 范围）与 sidecar 保持一一对应。
+	 *
+	 * @param cfiRange - 高亮 CFI 范围
+	 */
+	private addNoteToHighlight(cfiRange: string): void {
+		if (!this.file) {
+			return;
+		}
+		const document = this.store.getCachedDocument(this.file.path);
+		const highlight = document?.epubHighlights.find((h) => h.anchor.cfiRange === cfiRange);
+		if (!highlight) {
+			return;
+		}
+
+		new EpubNoteModal(
+			this.app,
+			highlight.anchor.selectedText,
+			{ color: highlight.color, style: highlight.style },
+			async (result: EpubNoteResult) => {
+				if (!result.note.trim()) {
+					return;
+				}
+				const now = new Date().toISOString();
+				const comment: EpubCommentAnnotation = {
+					id: highlight.id,
+					type: "epub-comment",
+					color: result.color,
+					style: result.style,
+					anchor: highlight.anchor,
+					note: result.note.trim(),
+					noteType: result.noteType,
+					createdAt: highlight.createdAt,
+					collapsed: false,
+					author: this.pluginSettings.defaultAuthor,
+					updatedAt: now,
+					replies: [],
+					resolved: false,
+				};
+				try {
+					await this.store.removeAnnotation(this.file!, highlight.id);
+					await this.store.addEpubComment(this.file!, comment);
+					this.refreshRenditionAnnotations();
+					this.renderSidebar();
+					this.refreshAnnotations();
+					new Notice("已添加标注");
+				} catch (error) {
+					console.error("yh-inklight: EPUB highlight to comment conversion failed", error);
+					new Notice("标注创建失败");
+				}
+			},
+		).open();
+	}
 
 	private attachSelectionListeners(doc: Document): void {
 		if (this.documentSelectionCleanups.has(doc)) {

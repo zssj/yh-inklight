@@ -4,7 +4,7 @@
  * [POS]: EPUB 想法输入 UI，与 yh-inklight 的 CommentModal 保持一致的风格
  */
 
-import { App, Modal } from "obsidian";
+import { App, Modal, Platform } from "obsidian";
 import {
   AnnotationColor,
   ANNOTATION_COLORS,
@@ -38,6 +38,7 @@ export class EpubNoteModal extends Modal {
   private noteType: "insight" | "question" | "reminder";
   private onSubmit: (result: EpubNoteResult) => void;
   private titleText: string;
+  private keyboardCleanup?: () => void;
 
   constructor(
     app: App,
@@ -181,9 +182,43 @@ export class EpubNoteModal extends Modal {
         this.close();
       }
     });
+
+    if (Platform.isMobile) {
+      this.setupKeyboardAwareness();
+    }
+  }
+
+  /**
+   * 移动端软键盘感知：visualViewport 随键盘开合变化，
+   * 动态钳制 Modal 高度并上移容器底部，避免输入框/保存按钮被键盘遮挡。
+   */
+  private setupKeyboardAwareness(): void {
+    const vv = window.visualViewport;
+    if (!vv) {
+      return;
+    }
+
+    const apply = (): void => {
+      const visibleHeight = vv.height;
+      const keyboardOffset = Math.max(0, window.innerHeight - vv.height);
+      this.modalEl.style.maxHeight = `${Math.max(200, visibleHeight - 24)}px`;
+      this.containerEl.style.bottom = `${keyboardOffset + 12}px`;
+    };
+
+    apply();
+    vv.addEventListener("resize", apply);
+    vv.addEventListener("scroll", apply);
+
+    this.keyboardCleanup = () => {
+      vv.removeEventListener("resize", apply);
+      vv.removeEventListener("scroll", apply);
+      this.modalEl.style.maxHeight = "";
+      this.containerEl.style.bottom = "";
+    };
   }
 
   onClose(): void {
+    this.keyboardCleanup?.();
     this.contentEl.empty();
   }
 }

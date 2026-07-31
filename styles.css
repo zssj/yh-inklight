@@ -1732,6 +1732,20 @@ span.yh-ov-expand-btn:hover {
   background: var(--background-modifier-hover);
 }
 
+@media (max-width: 800px) {
+  .yh-epub-note-modal .yh-epub-note-quote {
+    max-height: 72px;
+  }
+  .yh-epub-note-modal {
+    overflow-y: auto;
+    max-height: 100%;
+  }
+  .yh-epub-note-textarea {
+    min-height: 70px;
+    resize: none;
+  }
+}
+
 /* ============================================================
    EPUB 书架侧栏视图
    ============================================================ */

@@ -9653,8 +9653,19 @@ var AnnotationStore = class {
   }
   // ===== EPUB 进度 =====
   async getEpubProgress(file) {
-    const document2 = await this.getDocument(file);
-    return document2.epubProgress ?? null;
+    const cacheKey = this.toCacheKey(file.path);
+    const cached = this.documents.get(cacheKey);
+    if (cached) {
+      return cached.epubProgress ?? null;
+    }
+    const sidecarPath = this.toSidecarPath(file.path);
+    const sidecar = await this.readJson(sidecarPath, null);
+    if (!sidecar) {
+      return null;
+    }
+    const normalized = this.normalizeDocument(sidecar, this.normalizeVaultPath(file.path));
+    this.documents.set(cacheKey, normalized);
+    return normalized.epubProgress ?? null;
   }
   async saveEpubProgress(file, progress) {
     const document2 = await this.getDocument(file);
@@ -9770,7 +9781,7 @@ var AnnotationStore = class {
   async createEmptyDocument(file) {
     return {
       filePath: this.normalizeVaultPath(file.path),
-      fileHash: await this.hashFile(file),
+      fileHash: "",
       lastModified: (/* @__PURE__ */ new Date()).toISOString(),
       highlights: [],
       comments: [],
@@ -14111,14 +14122,14 @@ var EpubBookshelfView = class extends import_obsidian14.ItemView {
     }
     this.buildControls(container);
     this.listEl = container.createDiv({ cls: "bookshelf-list" });
-    const docs = await Promise.all(bookFiles.map((f3) => this.store.getDocument(f3)));
+    const progresses = await Promise.all(bookFiles.map((f3) => this.store.getEpubProgress(f3)));
     if (!container.isConnected) {
       return;
     }
     this.books = bookFiles.map((file, i3) => ({
       file,
-      progress: docs[i3].epubProgress ?? null,
-      lastReadTime: docs[i3].epubProgress ? parseLastReadTime(docs[i3].epubProgress.lastRead) : 0
+      progress: progresses[i3],
+      lastReadTime: progresses[i3] ? parseLastReadTime(progresses[i3].lastRead) : 0
     }));
     this.updateHeading();
     this.applyFilterAndSort();

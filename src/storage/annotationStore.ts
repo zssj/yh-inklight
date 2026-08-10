@@ -387,8 +387,19 @@ export class AnnotationStore {
   // ===== EPUB 进度 =====
 
   async getEpubProgress(file: TFile): Promise<EpubReadingProgress | null> {
-    const document = await this.getDocument(file);
-    return document.epubProgress ?? null;
+    const cacheKey = this.toCacheKey(file.path);
+    const cached = this.documents.get(cacheKey);
+    if (cached) {
+      return cached.epubProgress ?? null;
+    }
+    const sidecarPath = this.toSidecarPath(file.path);
+    const sidecar = await this.readJson<FileAnnotationDocument | null>(sidecarPath, null);
+    if (!sidecar) {
+      return null;
+    }
+    const normalized = this.normalizeDocument(sidecar, this.normalizeVaultPath(file.path));
+    this.documents.set(cacheKey, normalized);
+    return normalized.epubProgress ?? null;
   }
 
   async saveEpubProgress(file: TFile, progress: EpubReadingProgress): Promise<void> {
@@ -530,7 +541,7 @@ export class AnnotationStore {
   private async createEmptyDocument(file: TFile): Promise<FileAnnotationDocument> {
     return {
       filePath: this.normalizeVaultPath(file.path),
-      fileHash: await this.hashFile(file),
+      fileHash: "",
       lastModified: new Date().toISOString(),
       highlights: [],
       comments: [],

@@ -118,15 +118,15 @@ export class EpubBookshelfView extends ItemView {
     this.buildControls(container);
     this.listEl = container.createDiv({ cls: "bookshelf-list" });
 
-    // 并行加载所有电子书的 sidecar 数据（从磁盘读取，仅本次 render 加载一次）
-    const docs = await Promise.all(bookFiles.map((f) => this.store.getDocument(f)));
+    // 并行加载所有电子书的阅读进度（只读 sidecar，不读整本文件）
+    const progresses = await Promise.all(bookFiles.map((f) => this.store.getEpubProgress(f)));
     if (!container.isConnected) {
       return;
     }
     this.books = bookFiles.map((file, i) => ({
       file,
-      progress: docs[i].epubProgress ?? null,
-      lastReadTime: docs[i].epubProgress ? parseLastReadTime(docs[i].epubProgress!.lastRead) : 0,
+      progress: progresses[i],
+      lastReadTime: progresses[i] ? parseLastReadTime(progresses[i]!.lastRead) : 0,
     }));
     this.updateHeading();
     this.applyFilterAndSort();

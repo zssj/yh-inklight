@@ -1937,6 +1937,43 @@ span.yh-ov-expand-btn:hover {
   font-size: var(--yh-font-sm);
 }
 
+.yh-epub-bookshelf-view .bookshelf-controls {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.yh-epub-bookshelf-view .bookshelf-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--yh-border);
+  border-radius: var(--yh-radius-sm);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--yh-font-sm);
+}
+
+.yh-epub-bookshelf-view .bookshelf-search::placeholder {
+  color: var(--text-faint);
+}
+
+.yh-epub-bookshelf-view .bookshelf-search:focus {
+  border-color: var(--yh-yellow);
+}
+
+.yh-epub-bookshelf-view .bookshelf-sort {
+  flex-shrink: 0;
+  height: 30px;
+  padding: 0 4px;
+  border: 1px solid var(--yh-border);
+  border-radius: var(--yh-radius-sm);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--yh-font-sm);
+}
+
 .bookshelf-list {
   display: flex;
   flex-direction: column;

@@ -11189,6 +11189,7 @@ function normalizePercent(percent) {
     return 0;
   }
   if (percent > 1) {
+    if (percent <= 2) return 1;
     return Math.min(percent / 100, 1);
   }
   return percent;
@@ -11886,12 +11887,13 @@ var EpubNoteModal = class extends import_obsidian12.Modal {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("yh-epub-note-modal");
-    contentEl.createEl("h3", { text: this.titleText });
-    const quote = contentEl.createDiv({ cls: "yh-epub-note-quote" });
+    const body = contentEl.createDiv({ cls: "yh-epub-note-body" });
+    body.createEl("h3", { text: this.titleText });
+    const quote = body.createDiv({ cls: "yh-epub-note-quote" });
     quote.setText(
       this.selectedText.length > 240 ? this.selectedText.slice(0, 240) + "\u2026" : this.selectedText
     );
-    const colorRow = contentEl.createDiv({ cls: "yh-epub-note-colors" });
+    const colorRow = body.createDiv({ cls: "yh-epub-note-colors" });
     colorRow.createEl("span", { cls: "yh-epub-note-label", text: "\u753B\u7EBF\u989C\u8272" });
     const dots = colorRow.createDiv({ cls: "yh-epub-color-dots" });
     const dotEls = {};
@@ -11910,7 +11912,7 @@ var EpubNoteModal = class extends import_obsidian12.Modal {
       });
       dotEls[c2] = dot;
     }
-    const styleRow = contentEl.createDiv({ cls: "yh-epub-note-styles" });
+    const styleRow = body.createDiv({ cls: "yh-epub-note-styles" });
     styleRow.createEl("span", { cls: "yh-epub-note-label", text: "\u6807\u6CE8\u6837\u5F0F" });
     const styleChips = styleRow.createDiv({ cls: "yh-epub-style-chips" });
     const styleEls = {};
@@ -11929,7 +11931,7 @@ var EpubNoteModal = class extends import_obsidian12.Modal {
       });
       styleEls[s3.id] = chip;
     }
-    const typeRow = contentEl.createDiv({ cls: "yh-epub-note-type-row" });
+    const typeRow = body.createDiv({ cls: "yh-epub-note-type-row" });
     typeRow.createEl("span", { cls: "yh-epub-note-label", text: "\u60F3\u6CD5\u7C7B\u578B" });
     const chips = typeRow.createDiv({ cls: "yh-epub-note-type-chips" });
     const chipEls = {};
@@ -11948,12 +11950,12 @@ var EpubNoteModal = class extends import_obsidian12.Modal {
       });
       chipEls[t3.value] = chip;
     }
-    const ta = contentEl.createEl("textarea", { cls: "yh-epub-note-textarea" });
+    const ta = body.createEl("textarea", { cls: "yh-epub-note-textarea" });
     ta.placeholder = "\u5728\u8FD9\u91CC\u5199\u4E0B\u4F60\u7684\u60F3\u6CD5\u3001\u7591\u95EE\u6216\u8054\u60F3\u2026";
     ta.value = this.note;
-    ta.rows = 6;
+    ta.rows = import_obsidian12.Platform.isMobile ? 4 : 6;
     window.setTimeout(() => ta.focus(), 30);
-    const actions = contentEl.createDiv({ cls: "yh-epub-note-actions" });
+    const actions = body.createDiv({ cls: "yh-epub-note-actions" });
     const cancelBtn = actions.createEl("button", {
       text: "\u53D6\u6D88",
       cls: "yh-epub-note-cancel"
@@ -11975,9 +11977,188 @@ var EpubNoteModal = class extends import_obsidian12.Modal {
         this.close();
       }
     });
+    if (import_obsidian12.Platform.isMobile) {
+      this.setupKeyboardAwareness();
+    }
+  }
+  /**
+   * 移动端软键盘感知（Android 优先）。
+   *
+   * 通过多路测量源交叉取"键盘上方可视区高度"，再把 Modal 容器钉进该区域：
+   * 1. navigator.virtualKeyboard.geometrychange → boundingRect 精确键盘高度
+   * 2. window.visualViewport.resize/scroll → 视觉视口高度（覆盖键盘模式）
+   * 3. window.resize + window.innerHeight（adjustResize 模式下布局视口被压缩）
+   * 4. focusin + 延迟重测，兜底事件漏发
+   *
+   * 按钮已放进可滚动主体：即使所有测量都失效，用户也能下滑到"取消/保存"。
+   */
+  setupKeyboardAwareness() {
+    const vv = window.visualViewport;
+    const vk = navigator.virtualKeyboard;
+    const apply = () => {
+      const innerH = window.innerHeight;
+      const vvH = vv?.height ?? innerH;
+      const vkH = vk?.boundingRect?.height ?? 0;
+      let height = Math.max(120, Math.min(vvH, innerH));
+      if (vkH > 0 && height >= innerH - 4) {
+        height = Math.max(120, innerH - vkH);
+      }
+      this.containerEl.style.top = "0px";
+      this.containerEl.style.height = `${height}px`;
+      this.containerEl.style.alignItems = "flex-start";
+      this.modalEl.style.marginTop = "calc(env(safe-area-inset-top, 0px) + 10px)";
+      this.modalEl.style.maxHeight = `${height - 20}px`;
+      this.modalEl.style.overflow = "hidden";
+    };
+    apply();
+    vk?.addEventListener?.("geometrychange", apply);
+    vv?.addEventListener("resize", apply);
+    vv?.addEventListener("scroll", apply);
+    window.addEventListener("resize", apply);
+    const focusApply = () => {
+      window.setTimeout(apply, 120);
+      window.setTimeout(apply, 450);
+    };
+    document.addEventListener("focusin", focusApply);
+    this.keyboardCleanup = () => {
+      vk?.removeEventListener?.("geometrychange", apply);
+      vv?.removeEventListener("resize", apply);
+      vv?.removeEventListener("scroll", apply);
+      window.removeEventListener("resize", apply);
+      document.removeEventListener("focusin", focusApply);
+      this.containerEl.style.top = "";
+      this.containerEl.style.height = "";
+      this.containerEl.style.alignItems = "";
+      this.modalEl.style.marginTop = "";
+      this.modalEl.style.maxHeight = "";
+      this.modalEl.style.overflow = "";
+    };
   }
   onClose() {
+    this.keyboardCleanup?.();
     this.contentEl.empty();
+  }
+};
+
+// src/epub/EpubAnnotationCard.ts
+var NOTE_TYPE_LABELS = {
+  insight: "\u{1F4A1} \u6D1E\u89C1",
+  question: "\u2753 \u7591\u95EE",
+  reminder: "\u{1F514} \u63D0\u9192"
+};
+var EpubAnnotationCard = class {
+  constructor(data, options = {}) {
+    this.outsideHandler = null;
+    this.options = options;
+    this.el = document.body.createDiv({ cls: "yh-epub-annotation-card" });
+    this.build(data);
+  }
+  build(data) {
+    const accent = this.el.createDiv({ cls: "yh-epub-card-accent" });
+    accent.style.background = EPUB_COLOR_MAP[data.color];
+    const body = this.el.createDiv({ cls: "yh-epub-card-body" });
+    const top = body.createDiv({ cls: "yh-epub-card-top" });
+    const badgeText = data.noteType && NOTE_TYPE_LABELS[data.noteType] ? NOTE_TYPE_LABELS[data.noteType] : "\u{1F4DD} \u753B\u7EBF";
+    top.createSpan({ cls: "yh-epub-card-badge", text: badgeText });
+    top.createSpan({ cls: "yh-epub-card-color-label", text: COLOR_LABELS[data.color] });
+    const closeBtn = top.createEl("button", {
+      cls: "yh-epub-card-close",
+      attr: { type: "button", title: "\u5173\u95ED", "aria-label": "\u5173\u95ED" },
+      text: "\u2715"
+    });
+    closeBtn.addEventListener("click", () => this.dismiss());
+    body.createDiv({ cls: "yh-epub-card-quote", text: data.quote });
+    if (data.hasNote && data.note) {
+      body.createDiv({ cls: "yh-epub-card-note", text: data.note });
+    } else {
+      body.createDiv({ cls: "yh-epub-card-note is-empty", text: "\u6B64\u9AD8\u4EAE\u6682\u65E0\u7B14\u8BB0" });
+    }
+    const metaParts = [];
+    if (data.chapter) {
+      metaParts.push(data.chapter);
+    }
+    if (data.createdAt) {
+      metaParts.push(this.formatDate(data.createdAt));
+    }
+    if (metaParts.length > 0) {
+      body.createDiv({ cls: "yh-epub-card-meta", text: metaParts.join(" \xB7 ") });
+    }
+    const actions = body.createDiv({ cls: "yh-epub-card-actions" });
+    if (data.hasNote) {
+      const editBtn = actions.createEl("button", {
+        cls: "yh-epub-card-btn is-edit",
+        attr: { type: "button" },
+        text: "\u7F16\u8F91"
+      });
+      editBtn.addEventListener("click", () => {
+        this.options.onEdit?.();
+        this.dismiss();
+      });
+    } else {
+      const addBtn = actions.createEl("button", {
+        cls: "yh-epub-card-btn is-edit",
+        attr: { type: "button" },
+        text: "\u6DFB\u52A0\u7B14\u8BB0"
+      });
+      addBtn.addEventListener("click", () => {
+        this.options.onAddNote?.();
+        this.dismiss();
+      });
+    }
+    const delBtn = actions.createEl("button", {
+      cls: "yh-epub-card-btn is-delete",
+      attr: { type: "button" },
+      text: "\u5220\u9664"
+    });
+    delBtn.addEventListener("click", () => {
+      this.options.onDelete?.();
+      this.dismiss();
+    });
+  }
+  show(anchor, isMobile) {
+    if (isMobile) {
+      this.el.addClass("is-mobile");
+    } else {
+      const width = Math.min(320, window.innerWidth - 24);
+      const left = Math.max(8, Math.min(anchor.left - width / 2, window.innerWidth - width - 8));
+      const estimatedHeight = 260;
+      const top = Math.max(8, Math.min(anchor.top + 10, window.innerHeight - estimatedHeight - 8));
+      this.el.style.left = `${left}px`;
+      this.el.style.top = `${top}px`;
+    }
+    document.body.appendChild(this.el);
+    this.registerOutsideClick();
+  }
+  registerOutsideClick() {
+    this.outsideHandler = (ev) => {
+      if (this.el.isConnected && ev.target instanceof Node && !this.el.contains(ev.target)) {
+        this.dismiss();
+      }
+    };
+    window.setTimeout(() => {
+      if (this.outsideHandler) {
+        document.addEventListener("pointerdown", this.outsideHandler, true);
+      }
+    }, 0);
+  }
+  dismiss() {
+    if (this.outsideHandler) {
+      document.removeEventListener("pointerdown", this.outsideHandler, true);
+      this.outsideHandler = null;
+    }
+    if (this.el.isConnected) {
+      this.el.remove();
+    }
+    this.options.onDismiss?.();
+  }
+  formatDate(iso) {
+    try {
+      const d2 = new Date(iso);
+      const pad = (n3) => String(n3).padStart(2, "0");
+      return `${pad(d2.getMonth() + 1)}-${pad(d2.getDate())} ${pad(d2.getHours())}:${pad(d2.getMinutes())}`;
+    } catch {
+      return "";
+    }
   }
 };
 
@@ -12008,10 +12189,17 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     this.tocEntries = [];
     this.currentChapter = "";
     this.currentPercent = 0;
+    /** 本会话中见到的最大 fraction（滚动模式末页达不到 1.0） */
+    this.maxSeenPercent = 0;
+    /** 标记为已读到尾后锁定 100% */
+    this.clampedToEnd = false;
+    /** 连续 relocate 事件中 fraction 未增长的次数（末页检测） */
+    this.stableCountAtEnd = 0;
     this.sidebarOpen = false;
     this.currentReadCount = 0;
     this.completedThisCycle = false;
     this.contextMenuEl = null;
+    this.annotationCardEl = null;
     this.lastSelectedCfiRange = "";
     this.lastSelectedText = "";
     this.searchInputEl = null;
@@ -12068,6 +12256,13 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       const style2 = detail.annotation.style ?? this.pluginSettings.epubHighlightStyle;
       detail.draw((rects) => this.createAnnotationOverlay(rects, color, style2));
     };
+    this.handleFoliateShowAnnotation = (event) => {
+      const detail = event.detail;
+      if (!detail?.value) {
+        return;
+      }
+      this.showAnnotationCard(detail.value, detail.index, detail.range);
+    };
     this.store = store;
     this.pluginSettings = settings;
     this.refreshAnnotations = refreshAnnotations;
@@ -12115,6 +12310,9 @@ var EpubReaderView = class extends import_obsidian13.FileView {
    * @param file - 用户打开的 EPUB TFile
    */
   async onLoadFile(file) {
+    this.maxSeenPercent = 0;
+    this.clampedToEnd = false;
+    this.stableCountAtEnd = 0;
     this.destroyRendition();
     try {
       const arrayBuffer = await this.app.vault.readBinary(file);
@@ -12297,13 +12495,24 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       return;
     }
     const list = this.sidebarContentEl.createDiv({ cls: "yh-epub-toc-list" });
-    for (const entry of this.tocEntries) {
+    const isSingleSection = this.tocEntries.every((e3) => e3.spineIndex === this.tocEntries[0].spineIndex);
+    let activeIndex = -1;
+    for (let i3 = 0; i3 < this.tocEntries.length; i3++) {
+      const entry = this.tocEntries[i3];
+      const isCurrent = isSingleSection ? entry.label === (this.currentChapter || "").trim() : entry.spineIndex <= this.currentSectionIndex;
       const item = list.createEl("button", {
-        cls: "yh-epub-toc-item",
+        cls: `yh-epub-toc-item${isCurrent ? " is-current" : ""}`,
         text: entry.label,
         attr: { type: "button" }
       });
       item.addEventListener("click", () => this.navigateToSpineIndex(entry.spineIndex));
+      if (isCurrent) {
+        activeIndex = i3;
+      }
+    }
+    if (activeIndex >= 0) {
+      const activeEl = list.children[activeIndex];
+      setTimeout(() => activeEl?.scrollIntoView({ block: "center" }), 50);
     }
   }
   // ================================================================
@@ -12425,6 +12634,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     view.addEventListener("load", this.handleFoliateLoad);
     view.addEventListener("relocate", this.handleFoliateRelocate);
     view.addEventListener("draw-annotation", this.handleFoliateDrawAnnotation);
+    view.addEventListener("show-annotation", this.handleFoliateShowAnnotation);
   }
   // ================================================================
   // 安全处理
@@ -12707,18 +12917,43 @@ var EpubReaderView = class extends import_obsidian13.FileView {
    */
   handleRelocated(detail) {
     const cfi = normalizeCfi(detail?.cfi);
-    const percent = normalizePercent(detail?.fraction ?? this.currentPercent);
-    const spineIndex = typeof detail.index === "number" ? detail.index : this.currentSectionIndex;
+    const rawPercent = normalizePercent(detail?.fraction ?? this.currentPercent);
+    const spineIndex = typeof detail.section?.current === "number" ? detail.section.current : this.currentSectionIndex;
+    if (rawPercent > this.maxSeenPercent) {
+      this.maxSeenPercent = rawPercent;
+      this.clampedToEnd = false;
+      this.stableCountAtEnd = 0;
+    }
+    const isLast = detail.section != null && detail.section.current >= detail.section.total - 1;
+    if (!this.clampedToEnd && isLast && rawPercent >= 0.8) {
+      if (rawPercent >= this.maxSeenPercent) {
+        this.stableCountAtEnd++;
+        if (this.stableCountAtEnd >= 3) {
+          this.clampedToEnd = true;
+        }
+      } else {
+        this.stableCountAtEnd = 0;
+      }
+    }
+    if (this.clampedToEnd && rawPercent < this.maxSeenPercent - 0.05) {
+      this.clampedToEnd = false;
+      this.stableCountAtEnd = 0;
+    }
+    if (rawPercent < 0.15) {
+      this.maxSeenPercent = 0;
+      this.stableCountAtEnd = 0;
+      this.clampedToEnd = false;
+      this.completedThisCycle = false;
+    }
+    const percent = this.clampedToEnd ? 1 : rawPercent;
+    if (percent >= 0.98 && !this.completedThisCycle) {
+      this.currentReadCount++;
+      this.completedThisCycle = true;
+    }
     this.currentCfi = cfi || this.currentCfi;
     this.currentSectionIndex = Number.isFinite(spineIndex) ? spineIndex : 0;
     this.currentChapter = detail?.tocItem?.label ?? resolveChapterLabel(this.tocEntries, this.currentSectionIndex);
     this.currentPercent = percent;
-    if (percent < 0.5) {
-      this.completedThisCycle = false;
-    } else if (percent >= 0.98 && !this.completedThisCycle) {
-      this.currentReadCount++;
-      this.completedThisCycle = true;
-    }
     this.updateProgressBar(percent);
     this.debouncedSaveProgress(this.currentCfi, percent);
   }
@@ -12736,7 +12971,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     const fill = bar.querySelector(".yh-epub-progress-fill");
     if (fill) {
       fill.style.width = `${Math.round(percent * 100)}%`;
-      const readIdx = Math.min(this.currentReadCount + 1, 4);
+      const readIdx = Math.min(this.currentReadCount + 1, 6);
       fill.classList.add(`read-${readIdx}`);
     }
     const percentText = `${Math.round(percent * 100)}%`;
@@ -12810,6 +13045,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     };
     try {
       await this.store.saveEpubProgress(this.file, progress);
+      this.refreshAnnotations();
     } catch (error) {
       console.error("yh-inklight: EPUB progress save failed", error);
     }
@@ -13227,11 +13463,14 @@ var EpubReaderView = class extends import_obsidian13.FileView {
         this.foliateView.removeEventListener("load", this.handleFoliateLoad);
         this.foliateView.removeEventListener("relocate", this.handleFoliateRelocate);
         this.foliateView.removeEventListener("draw-annotation", this.handleFoliateDrawAnnotation);
+        this.foliateView.removeEventListener("show-annotation", this.handleFoliateShowAnnotation);
         this.foliateView.close?.();
       } catch {
       }
       this.foliateView = null;
     }
+    this.annotationCardEl?.dismiss();
+    this.annotationCardEl = null;
     this.renderedAnnotationMeta.clear();
     if (this.readerContainerEl) {
       this.readerContainerEl.empty();
@@ -13263,6 +13502,168 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       return id === href || id === normalizedHref || id.endsWith(normalizedHref);
     });
     return index >= 0 ? index : null;
+  }
+  /**
+   * 点击阅读区高亮后弹出标注详情卡片。
+   * 优先展示笔记（epub-comment），纯画线则提示可添加笔记。
+   *
+   * @param cfiRange - foliate show-annotation 事件携带的标注 value（= CFI 范围）
+   * @param index - 所在 spine 索引
+   * @param range - 标注覆盖的文本 Range
+   */
+  showAnnotationCard(cfiRange, index, range) {
+    if (!this.file) {
+      return;
+    }
+    const document2 = this.store.getCachedDocument(this.file.path);
+    if (!document2) {
+      return;
+    }
+    const comment = document2.epubComments.find((c2) => c2.anchor.cfiRange === cfiRange);
+    const highlight = comment ?? document2.epubHighlights.find((h3) => h3.anchor.cfiRange === cfiRange);
+    if (!highlight) {
+      return;
+    }
+    this.annotationCardEl?.dismiss();
+    const anchor = this.resolveAnnotationCardAnchor(index, range);
+    const card = new EpubAnnotationCard(
+      {
+        quote: highlight.anchor.selectedText,
+        note: comment?.note,
+        noteType: comment?.noteType,
+        color: highlight.color,
+        chapter: highlight.anchor.chapter,
+        createdAt: highlight.createdAt,
+        hasNote: comment != null
+      },
+      {
+        onEdit: () => this.editComment(cfiRange),
+        onAddNote: () => this.addNoteToHighlight(cfiRange),
+        onDelete: () => {
+          void this.deleteAnnotation(highlight.id);
+        }
+      }
+    );
+    card.show(anchor, import_obsidian13.Platform.isMobile);
+    this.annotationCardEl = card;
+  }
+  resolveAnnotationCardAnchor(index, range) {
+    if (range) {
+      const doc = index != null ? this.foliateView?.renderer?.getContents?.().find((c2) => c2.index === index)?.doc : void 0;
+      if (doc) {
+        const rect = this.createSelectionViewportRect(doc, range);
+        if (rect) {
+          return { left: rect.left + rect.width / 2, top: rect.bottom };
+        }
+      }
+    }
+    const area = this.readerContainerEl?.getBoundingClientRect();
+    return {
+      left: area ? area.left + area.width / 2 : window.innerWidth / 2,
+      top: area ? area.top + 16 : 16
+    };
+  }
+  /**
+   * 编辑已有标注（epub-comment）：用现有内容预填弹窗，保存后原位更新。
+   *
+   * @param cfiRange - 标注 CFI 范围
+   */
+  editComment(cfiRange) {
+    if (!this.file) {
+      return;
+    }
+    const document2 = this.store.getCachedDocument(this.file.path);
+    const comment = document2?.epubComments.find((c2) => c2.anchor.cfiRange === cfiRange);
+    if (!comment) {
+      return;
+    }
+    new EpubNoteModal(
+      this.app,
+      comment.anchor.selectedText,
+      {
+        note: comment.note,
+        color: comment.color,
+        style: comment.style,
+        noteType: comment.noteType
+      },
+      async (result) => {
+        if (!result.note.trim()) {
+          return;
+        }
+        const updated = {
+          ...comment,
+          color: result.color,
+          style: result.style,
+          noteType: result.noteType,
+          note: result.note.trim(),
+          updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        try {
+          await this.store.updateEpubComment(this.file, updated);
+          this.refreshRenditionAnnotations();
+          this.renderSidebar();
+          this.refreshAnnotations();
+          new import_obsidian13.Notice("\u6807\u6CE8\u5DF2\u66F4\u65B0");
+        } catch (error) {
+          console.error("yh-inklight: EPUB comment update failed", error);
+          new import_obsidian13.Notice("\u6807\u6CE8\u66F4\u65B0\u5931\u8D25");
+        }
+      },
+      "\u7F16\u8F91\u60F3\u6CD5"
+    ).open();
+  }
+  /**
+   * 为纯画线高亮补充笔记：删除原高亮并用相同 id 创建 epub-comment，
+   * 保证 foliate 高亮层 value（= CFI 范围）与 sidecar 保持一一对应。
+   *
+   * @param cfiRange - 高亮 CFI 范围
+   */
+  addNoteToHighlight(cfiRange) {
+    if (!this.file) {
+      return;
+    }
+    const document2 = this.store.getCachedDocument(this.file.path);
+    const highlight = document2?.epubHighlights.find((h3) => h3.anchor.cfiRange === cfiRange);
+    if (!highlight) {
+      return;
+    }
+    new EpubNoteModal(
+      this.app,
+      highlight.anchor.selectedText,
+      { color: highlight.color, style: highlight.style },
+      async (result) => {
+        if (!result.note.trim()) {
+          return;
+        }
+        const now = (/* @__PURE__ */ new Date()).toISOString();
+        const comment = {
+          id: highlight.id,
+          type: "epub-comment",
+          color: result.color,
+          style: result.style,
+          anchor: highlight.anchor,
+          note: result.note.trim(),
+          noteType: result.noteType,
+          createdAt: highlight.createdAt,
+          collapsed: false,
+          author: this.pluginSettings.defaultAuthor,
+          updatedAt: now,
+          replies: [],
+          resolved: false
+        };
+        try {
+          await this.store.removeAnnotation(this.file, highlight.id);
+          await this.store.addEpubComment(this.file, comment);
+          this.refreshRenditionAnnotations();
+          this.renderSidebar();
+          this.refreshAnnotations();
+          new import_obsidian13.Notice("\u5DF2\u6DFB\u52A0\u6807\u6CE8");
+        } catch (error) {
+          console.error("yh-inklight: EPUB highlight to comment conversion failed", error);
+          new import_obsidian13.Notice("\u6807\u6CE8\u521B\u5EFA\u5931\u8D25");
+        }
+      }
+    ).open();
   }
   attachSelectionListeners(doc) {
     if (this.documentSelectionCleanups.has(doc)) {
@@ -13640,9 +14041,38 @@ var EpubReaderView = class extends import_obsidian13.FileView {
 // src/epub/EpubBookshelfView.ts
 var import_obsidian14 = require("obsidian");
 var EPUB_BOOKSHELF_VIEW_TYPE = "inklight-epub-bookshelf";
+var SORT_OPTIONS = [
+  ["name", "\u4E66\u540D"],
+  ["recent", "\u6700\u8FD1\u9605\u8BFB"],
+  ["progress", "\u9605\u8BFB\u8FDB\u5EA6"],
+  ["readCount", "\u5DF2\u8BFB\u904D\u6570"]
+];
+function parseLastReadTime(value) {
+  if (!value) {
+    return 0;
+  }
+  if (/^\d{4}-\d{2}-\d{2}T/.test(value)) {
+    return Date.parse(value) || 0;
+  }
+  const legacy = /^(\d{4})\/(\d{1,2})\/(\d{1,2})[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/.exec(value);
+  if (legacy) {
+    return Date.UTC(
+      Number(legacy[1]),
+      Number(legacy[2]) - 1,
+      Number(legacy[3]),
+      Number(legacy[4]) || 0,
+      Number(legacy[5]) || 0,
+      legacy[6] ? Number(legacy[6]) : 0
+    );
+  }
+  return 0;
+}
 var EpubBookshelfView = class extends import_obsidian14.ItemView {
   constructor(leaf, store, onOpen) {
     super(leaf);
+    this.books = [];
+    this.searchQuery = "";
+    this.sortMode = "name";
     this.store = store;
     this.openCallback = onOpen;
   }
@@ -13668,75 +14098,154 @@ var EpubBookshelfView = class extends import_obsidian14.ItemView {
     const container = this.contentEl;
     container.empty();
     container.addClass("yh-epub-bookshelf-view");
-    container.createEl("h4", {
-      cls: "bookshelf-heading",
-      text: "\u{1F4DA} \u7535\u5B50\u4E66\u4E66\u67B6"
-    });
+    this.headingEl = container.createEl("h4", { cls: "bookshelf-heading" });
     const bookFiles = this.app.vault.getFiles().filter((f3) => SUPPORTED_BOOK_EXTENSIONS.includes(f3.extension.toLowerCase()));
     if (bookFiles.length === 0) {
+      this.headingEl.setText("\u{1F4DA} \u7535\u5B50\u4E66\u4E66\u67B6");
+      this.books = [];
       container.createEl("p", {
         cls: "bookshelf-empty",
         text: "Vault \u4E2D\u6CA1\u6709\u627E\u5230\u7535\u5B50\u4E66\u6587\u4EF6\u3002"
       });
       return;
     }
+    this.buildControls(container);
+    this.listEl = container.createDiv({ cls: "bookshelf-list" });
     const docs = await Promise.all(bookFiles.map((f3) => this.store.getDocument(f3)));
-    const progressMap = new Map(docs.map((d2) => [d2.filePath, d2.epubProgress]));
-    const list = container.createDiv({ cls: "bookshelf-list" });
-    for (const file of bookFiles) {
-      const progress = progressMap.get(file.path) ?? null;
-      const percent = progress ? Math.round(progress.percent * 100) : 0;
-      const item = list.createDiv({ cls: "bookshelf-item" });
-      const info = item.createDiv({ cls: "bookshelf-info" });
-      info.createEl("div", { cls: "bookshelf-title", text: file.basename });
-      info.createEl("div", {
-        cls: "bookshelf-path",
-        text: `${file.extension.toUpperCase()} \xB7 ${file.path}`
+    if (!container.isConnected) {
+      return;
+    }
+    this.books = bookFiles.map((file, i3) => ({
+      file,
+      progress: docs[i3].epubProgress ?? null,
+      lastReadTime: docs[i3].epubProgress ? parseLastReadTime(docs[i3].epubProgress.lastRead) : 0
+    }));
+    this.updateHeading();
+    this.applyFilterAndSort();
+  }
+  buildControls(container) {
+    const controls = container.createDiv({ cls: "bookshelf-controls" });
+    const searchInput = controls.createEl("input", {
+      cls: "bookshelf-search",
+      attr: { type: "text", placeholder: "\u641C\u7D22\u4E66\u540D\u2026", value: this.searchQuery }
+    });
+    searchInput.addEventListener("input", () => {
+      this.searchQuery = searchInput.value.trim().toLowerCase();
+      this.updateHeading();
+      this.applyFilterAndSort();
+    });
+    const sortSelect = controls.createEl("select", { cls: "bookshelf-sort" });
+    for (const [value, label] of SORT_OPTIONS) {
+      sortSelect.createEl("option", { text: label, value });
+    }
+    sortSelect.value = this.sortMode;
+    sortSelect.addEventListener("change", () => {
+      this.sortMode = sortSelect.value;
+      this.applyFilterAndSort();
+    });
+  }
+  updateHeading() {
+    const total = this.books.length;
+    const shown = this.getFiltered().length;
+    this.headingEl.setText(
+      this.searchQuery ? `\u{1F4DA} \u7535\u5B50\u4E66\u4E66\u67B6 \xB7 \u5171 ${shown} / ${total} \u672C` : `\u{1F4DA} \u7535\u5B50\u4E66\u4E66\u67B6 \xB7 \u5171 ${total} \u672C`
+    );
+  }
+  /** 按书名过滤（搜索词小写化后子串匹配），返回新数组。 */
+  getFiltered() {
+    if (!this.searchQuery) {
+      return [...this.books];
+    }
+    return this.books.filter(({ file }) => file.basename.toLowerCase().includes(this.searchQuery));
+  }
+  applyFilterAndSort() {
+    if (!this.listEl) {
+      return;
+    }
+    const filtered = this.getFiltered().sort(this.makeComparator());
+    this.listEl.empty();
+    if (filtered.length === 0) {
+      this.listEl.createEl("p", {
+        cls: "bookshelf-empty",
+        text: "\u6CA1\u6709\u627E\u5230\u5339\u914D\u7684\u4E66\u540D\u3002"
       });
-      const meta = item.createDiv({ cls: "bookshelf-meta" });
-      const progressBar = meta.createDiv({ cls: "bookshelf-progress-wrap" });
-      const bar = progressBar.createDiv({ cls: "bookshelf-progress-bar" });
-      bar.setCssProps({ width: `${percent}%` });
-      const readCount = progress?.readCount ?? 0;
-      const readIdx = Math.min(readCount + 1, 4);
-      bar.classList.add(`read-${readIdx}`);
-      progressBar.createEl("span", {
-        cls: "bookshelf-percent",
-        text: `${percent}%`
-      });
-      if (progress) {
-        meta.createEl("div", {
-          cls: "bookshelf-last-read",
-          text: `\u4E0A\u6B21\u9605\u8BFB\uFF1A${progress.chapter || "\u672A\u77E5\u7AE0\u8282"} \xB7 ${progress.lastRead.slice(0, 10)}`
-        });
-        const readingSeconds = progress.readingTimeSeconds ?? 0;
-        if (readingSeconds > 0) {
-          meta.createEl("div", {
-            cls: "bookshelf-reading-time",
-            text: `\u5DF2\u8BFB ${this.formatReadingTime(readingSeconds)}`
-          });
-        }
-        if (progress.estimatedRemainingMinutes != null && progress.estimatedRemainingMinutes > 0) {
-          meta.createEl("div", {
-            cls: "bookshelf-remaining",
-            text: `\u5269\u4F59\u7EA6 ${Math.ceil(progress.estimatedRemainingMinutes)} \u5206\u949F`
-          });
-        }
-        if (readCount > 0) {
-          let readLabel = `\u5DF2\u8BFB\u5B8C ${readCount} \u904D`;
-          if (progress.lastCompletedAt) {
-            readLabel += ` \xB7 ${progress.lastCompletedAt.slice(0, 10)}`;
-          }
-          meta.createEl("div", {
-            cls: "bookshelf-read-count",
-            text: readLabel
-          });
-        }
+      return;
+    }
+    for (const entry of filtered) {
+      this.renderItem(entry);
+    }
+  }
+  makeComparator() {
+    const byName = (a3, b3) => a3.file.basename.localeCompare(b3.file.basename, "zh-CN");
+    switch (this.sortMode) {
+      case "recent": {
+        return (a3, b3) => b3.lastReadTime - a3.lastReadTime || byName(a3, b3);
       }
-      item.addEventListener("click", () => {
-        this.openCallback(file);
+      case "progress": {
+        return (a3, b3) => (b3.progress?.percent ?? -1) - (a3.progress?.percent ?? -1) || byName(a3, b3);
+      }
+      case "readCount": {
+        return (a3, b3) => (b3.progress?.readCount ?? 0) - (a3.progress?.readCount ?? 0) || byName(a3, b3);
+      }
+      default:
+        return byName;
+    }
+  }
+  renderItem(entry) {
+    const { file, progress } = entry;
+    const percent = progress ? Math.round(progress.percent * 100) : 0;
+    const item = this.listEl.createDiv({ cls: "bookshelf-item" });
+    const info = item.createDiv({ cls: "bookshelf-info" });
+    info.createEl("div", { cls: "bookshelf-title", text: file.basename });
+    info.createEl("div", {
+      cls: "bookshelf-path",
+      text: `${file.extension.toUpperCase()} \xB7 ${file.path}`
+    });
+    const meta = item.createDiv({ cls: "bookshelf-meta" });
+    const progressBar = meta.createDiv({ cls: "bookshelf-progress-wrap" });
+    const barOuter = progressBar.createDiv({ cls: "bookshelf-progress-bar" });
+    const fill = barOuter.createDiv({ cls: "bookshelf-progress-fill" });
+    fill.style.width = `${percent}%`;
+    const readCount = progress?.readCount ?? 0;
+    const readIdx = Math.min(readCount + 1, 6);
+    const COLORS = ["", "#f5c518", "#4a9eff", "#4caf50", "#9c27b0", "#ff9800", "#e53935"];
+    fill.classList.add(`read-${readIdx}`);
+    fill.style.background = COLORS[readIdx];
+    progressBar.createEl("span", {
+      cls: "bookshelf-percent",
+      text: `${percent}%`
+    });
+    if (progress) {
+      meta.createEl("div", {
+        cls: "bookshelf-last-read",
+        text: `\u4E0A\u6B21\u9605\u8BFB\uFF1A${progress.chapter || "\u672A\u77E5\u7AE0\u8282"} \xB7 ${progress.lastRead.slice(0, 10).trim()}`
+      });
+      const readingSeconds = progress.readingTimeSeconds ?? 0;
+      if (readingSeconds > 0) {
+        meta.createEl("div", {
+          cls: "bookshelf-reading-time",
+          text: `\u5DF2\u8BFB ${this.formatReadingTime(readingSeconds)}`
+        });
+      }
+      if (progress.estimatedRemainingMinutes != null && progress.estimatedRemainingMinutes > 0) {
+        meta.createEl("div", {
+          cls: "bookshelf-remaining",
+          text: `\u5269\u4F59\u7EA6 ${Math.ceil(progress.estimatedRemainingMinutes)} \u5206\u949F`
+        });
+      }
+      const cycle = readCount + 1;
+      let readLabel = `\u7B2C ${cycle} \u904D`;
+      if (progress?.lastCompletedAt) {
+        readLabel += ` \xB7 ${progress.lastCompletedAt.slice(0, 10)}`;
+      }
+      meta.createEl("div", {
+        cls: "bookshelf-read-count",
+        text: readLabel
       });
     }
+    item.addEventListener("click", () => {
+      this.openCallback(file);
+    });
   }
   formatReadingTime(seconds) {
     const total = Math.max(0, Math.floor(seconds));

@@ -22,6 +22,33 @@ const SORT_OPTIONS: Array<[SortMode, string]> = [
 interface BookshelfEntry {
   file: TFile;
   progress: EpubReadingProgress | null;
+  lastReadTime: number;
+}
+
+/**
+ * 解析 lastRead 时间戳。当前写入的是 ISO 8601（"2026-08-10T05:12:00.000Z"），
+ * 但旧版本 sidecar 里可能是本地时间 "2026/7/18 0:30:26"，字符串比较会错乱，
+ * 因此统一解析为数值时间戳再排序。
+ */
+function parseLastReadTime(value: string): number {
+  if (!value) {
+    return 0;
+  }
+  if (/^\d{4}-\d{2}-\d{2}T/.test(value)) {
+    return Date.parse(value) || 0;
+  }
+  const legacy = /^(\d{4})\/(\d{1,2})\/(\d{1,2})[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/.exec(value);
+  if (legacy) {
+    return Date.UTC(
+      Number(legacy[1]),
+      Number(legacy[2]) - 1,
+      Number(legacy[3]),
+      Number(legacy[4]) || 0,
+      Number(legacy[5]) || 0,
+      legacy[6] ? Number(legacy[6]) : 0,
+    );
+  }
+  return 0;
 }
 
 export class EpubBookshelfView extends ItemView {
@@ -96,7 +123,11 @@ export class EpubBookshelfView extends ItemView {
     if (!container.isConnected) {
       return;
     }
-    this.books = bookFiles.map((file, i) => ({ file, progress: docs[i].epubProgress ?? null }));
+    this.books = bookFiles.map((file, i) => ({
+      file,
+      progress: docs[i].epubProgress ?? null,
+      lastReadTime: docs[i].epubProgress ? parseLastReadTime(docs[i].epubProgress!.lastRead) : 0,
+    }));
     this.updateHeading();
     this.applyFilterAndSort();
   }
@@ -166,14 +197,7 @@ export class EpubBookshelfView extends ItemView {
       a.file.basename.localeCompare(b.file.basename, "zh-CN");
     switch (this.sortMode) {
       case "recent": {
-        return (a, b) => {
-          const aHas = a.progress ? 1 : 0;
-          const bHas = b.progress ? 1 : 0;
-          if (aHas !== bHas) {
-            return bHas - aHas;
-          }
-          return String(b.progress!.lastRead).localeCompare(String(a.progress!.lastRead)) || byName(a, b);
-        };
+        return (a, b) => (b.lastReadTime - a.lastReadTime) || byName(a, b);
       }
       case "progress": {
         return (a, b) => (b.progress?.percent ?? -1) - (a.progress?.percent ?? -1) || byName(a, b);
@@ -219,7 +243,7 @@ export class EpubBookshelfView extends ItemView {
     if (progress) {
       meta.createEl("div", {
         cls: "bookshelf-last-read",
-        text: `上次阅读：${progress.chapter || "未知章节"} · ${progress.lastRead.slice(0, 10)}`,
+        text: `上次阅读：${progress.chapter || "未知章节"} · ${progress.lastRead.slice(0, 10).trim()}`,
       });
 
       const readingSeconds = progress.readingTimeSeconds ?? 0;

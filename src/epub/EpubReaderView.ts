@@ -517,7 +517,7 @@ export class EpubReaderView extends FileView {
 				text: entry.label,
 				attr: { type: "button" },
 			});
-			item.addEventListener("click", () => this.navigateToSpineIndex(entry.spineIndex));
+			item.addEventListener("click", () => this.navigateToSpineIndex(entry));
 
 			if (isCurrent) {
 				activeIndex = i;
@@ -1305,15 +1305,22 @@ export class EpubReaderView extends FileView {
 	// ================================================================
 
 	/**
-	 * 导航到指定的 spine index 位置。
+	 * 导航到目录条目位置。
 	 *
-	 * @param spineIndex - 目标章节的 spine 索引
+	 * 带锚点的条目把原始 href（含 #锚点）字符串交给 foliate，由它解析并滚动到小节标题；
+	 * 无锚点的条目退化为按 spine index 跳到章节开头。
+	 *
+	 * @param entry - 目录条目
 	 */
-	private navigateToSpineIndex(spineIndex: number): void {
+	private navigateToSpineIndex(entry: TocSpineEntry): void {
 		if (!this.foliateView) {
 			return;
 		}
-		void this.foliateView.goTo(spineIndex);
+		if (entry.href) {
+			void this.foliateView.goTo(entry.href);
+		} else {
+			void this.foliateView.goTo(entry.spineIndex);
+		}
 	}
 
 	/**
@@ -1640,7 +1647,7 @@ export class EpubReaderView extends FileView {
 			for (const item of items) {
 				const index = this.resolveFoliateHrefIndex(item.href);
 				if (index !== null) {
-					entries.push({ label: (item.label ?? "").trim() || `章节 ${index + 1}`, spineIndex: index });
+					entries.push({ label: (item.label ?? "").trim() || `章节 ${index + 1}`, spineIndex: index, href: item.href });
 				}
 				if (item.subitems?.length) {
 					walk(item.subitems.filter((child): child is FoliateTocItem => typeof child === "object" && child !== null));

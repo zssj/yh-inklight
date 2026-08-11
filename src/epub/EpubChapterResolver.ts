@@ -7,6 +7,8 @@
 export interface TocSpineEntry {
   label: string;
   spineIndex: number;
+  /** 原始 TOC 链接（可含 #锚点），用于目录小节跳转定位 */
+  href?: string;
 }
 
 /** 深度优先遍历 TOC，解析每项对应的 spine index */

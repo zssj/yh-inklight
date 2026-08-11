@@ -13876,10 +13876,14 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       "}",
       "p, div, span, li, h1, h2, h3, h4, h5, h6, blockquote, td, th, dt, dd {",
       `  color: ${colors.textColor} !important;`,
+      `  line-height: ${this.pluginSettings.epubLineHeight} !important;`,
       "}",
       `a, a:link, a:visited { color: ${colors.linkColor} !important; }`,
       `::selection { background: ${colors.selectionBg} !important; }`,
-      "img { max-width: 100% !important; height: auto !important; }"
+      "img { max-width: 100% !important; height: auto !important; }",
+      "pre, code {",
+      `  line-height: ${this.pluginSettings.epubLineHeight} !important;`,
+      "}"
     ].join("\n");
     this.foliateView.renderer?.setStyles?.(css);
     this.foliateView.renderer?.render?.();

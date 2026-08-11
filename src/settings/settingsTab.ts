@@ -135,6 +135,20 @@ export class AnnotationSettingsTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName("阅读行距")
+      .setDesc("EPUB 正文行距（倍）。修改后重新打开电子书生效。")
+      .addSlider((slider) => {
+        slider
+          .setLimits(1.0, 2.5, 0.05)
+          .setValue(this.plugin.settings.epubLineHeight)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.epubLineHeight = value;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
       .setName("阅读主题")
       .setDesc("EPUB 阅读区背景与文字配色。")
       .addDropdown((dropdown) => {

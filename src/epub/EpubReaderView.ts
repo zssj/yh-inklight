@@ -2080,7 +2080,7 @@ export class EpubReaderView extends FileView {
 			`  background-color: ${colors.background} !important;`,
 			`  color: ${colors.textColor} !important;`,
 			`  font-size: ${size}px !important;`,
-			"  line-height: 1.72 !important;",
+			`  line-height: ${this.pluginSettings.epubLineHeight} !important;`,
 			...(Platform.isMobile ? ["  padding-bottom: 60px !important;"] : []),
 			"}",
 			"p, div, span, li, h1, h2, h3, h4, h5, h6, blockquote, td, th, dt, dd {",

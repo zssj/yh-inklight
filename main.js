@@ -8424,6 +8424,7 @@ var DEFAULT_SETTINGS = {
   // EPUB
   epubDefaultFlow: "scrolled",
   epubFontSize: 16,
+  epubLineHeight: 1.72,
   epubReadingTheme: "obsidian",
   epubHighlightStyle: "fill",
   // PDF 增强
@@ -9322,6 +9323,12 @@ var AnnotationSettingsTab = class extends import_obsidian5.PluginSettingTab {
     new import_obsidian5.Setting(containerEl).setName("\u9605\u8BFB\u5B57\u53F7").setDesc("EPUB \u6B63\u6587\u57FA\u7840\u5B57\u53F7\uFF08px\uFF09\u3002\u4FEE\u6539\u540E\u91CD\u65B0\u6253\u5F00\u7535\u5B50\u4E66\u751F\u6548\u3002").addSlider((slider) => {
       slider.setLimits(12, 28, 1).setValue(this.plugin.settings.epubFontSize).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.epubFontSize = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    new import_obsidian5.Setting(containerEl).setName("\u9605\u8BFB\u884C\u8DDD").setDesc("EPUB \u6B63\u6587\u884C\u8DDD\uFF08\u500D\uFF09\u3002\u4FEE\u6539\u540E\u91CD\u65B0\u6253\u5F00\u7535\u5B50\u4E66\u751F\u6548\u3002").addSlider((slider) => {
+      slider.setLimits(1, 2.5, 0.05).setValue(this.plugin.settings.epubLineHeight).setDynamicTooltip().onChange(async (value) => {
+        this.plugin.settings.epubLineHeight = value;
         await this.plugin.saveSettings();
       });
     });
@@ -13857,7 +13864,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       `  background-color: ${colors.background} !important;`,
       `  color: ${colors.textColor} !important;`,
       `  font-size: ${size}px !important;`,
-      "  line-height: 1.72 !important;",
+      `  line-height: ${this.pluginSettings.epubLineHeight} !important;`,
       ...import_obsidian13.Platform.isMobile ? ["  padding-bottom: 60px !important;"] : [],
       "}",
       "p, div, span, li, h1, h2, h3, h4, h5, h6, blockquote, td, th, dt, dd {",

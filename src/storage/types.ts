@@ -164,6 +164,7 @@ export interface AnnotationPluginSettings {
   // --- EPUB 阅读 ---
   epubDefaultFlow: EpubFlowMode;
   epubFontSize: number;
+  epubLineHeight: number;
   epubReadingTheme: EpubReadingTheme;
   epubHighlightStyle: EpubHighlightStyle;
   // --- PDF 增强 ---
@@ -189,6 +190,7 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   // EPUB
   epubDefaultFlow: "scrolled",
   epubFontSize: 16,
+  epubLineHeight: 1.72,
   epubReadingTheme: "obsidian",
   epubHighlightStyle: "fill",
   // PDF 增强

@@ -149,6 +149,18 @@ export class AnnotationSettingsTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName("统一正文字号")
+      .setDesc("忽略电子书自带的正文缩放倍数，所有书正文按「阅读字号」显示；仅对正文确实被书内 CSS 缩放的书生效，脚注/图注不受影响。修改后重新打开电子书生效。")
+      .addToggle((toggle) => {
+        toggle
+          .setValue(this.plugin.settings.epubUnifyBodyFontSize)
+          .onChange(async (value) => {
+            this.plugin.settings.epubUnifyBodyFontSize = value;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
       .setName("阅读主题")
       .setDesc("EPUB 阅读区背景与文字配色。")
       .addDropdown((dropdown) => {

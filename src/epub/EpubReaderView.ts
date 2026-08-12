@@ -171,6 +171,10 @@ export class EpubReaderView extends FileView {
 	private currentFlowMode: EpubFlowMode;
 	private currentFontSize: number;
 	private currentTheme: EpubReadingTheme;
+	/** 当前书正文是否被书内 CSS 缩放（统一正文字号设置用，每次加载测量一次） */
+	private bodyFontScaled = false;
+	/** 是否已完成正文缩放测量 */
+	private bodyScaleMeasured = false;
 	private sidebarOpen = false;
 	private currentReadCount = 0;
 	private completedThisCycle = false;
@@ -282,6 +286,8 @@ export class EpubReaderView extends FileView {
 		this.maxSeenPercent = 0;
 		this.clampedToEnd = false;
 		this.stableCountAtEnd = 0;
+		this.bodyFontScaled = false;
+		this.bodyScaleMeasured = false;
 		this.destroyRendition();
 
 		try {
@@ -1670,7 +1676,7 @@ export class EpubReaderView extends FileView {
 		return index >= 0 ? index : null;
 	}
 
-	private handleFoliateLoad = (event: Event): void => {
+	private handleFoliateLoad = async (event: Event): Promise<void> => {
 		const detail = (event as CustomEvent<FoliateLoadDetail>).detail;
 		const doc = detail?.doc;
 		if (!doc) {
@@ -1680,10 +1686,60 @@ export class EpubReaderView extends FileView {
 		this.loadedSectionDocs.set(doc, index);
 		this.currentLoadedDoc = doc;
 		stripScriptsFromDocument(doc);
-		void inlineBlockedStylesheets({ document: doc });
+		await inlineBlockedStylesheets({ document: doc });
 		this.attachSelectionListeners(doc);
 		this.handleRendered();
+		this.maybeMeasureBodyFontScale(doc);
 	};
+
+	/**
+	 * 统一正文字号：测量当前书正文段落在插件样式生效下的真实字号比例。
+	 * 仅在开启设置且尚未测量时执行一次；正文确实被书内 CSS 缩放（偏离 1 超过 2%）才标记，
+	 * 供 applyFoliateAppearance 注入覆盖规则。脚注/图注（font-size 非正文基准）不受影响。
+	 */
+	private maybeMeasureBodyFontScale(doc: Document): void {
+		if (this.bodyScaleMeasured) {
+			return;
+		}
+		if (!this.pluginSettings.epubUnifyBodyFontSize) {
+			this.bodyScaleMeasured = true;
+			return;
+		}
+		if (!doc.body) {
+			return;
+		}
+		const bodySize = parseFloat(getComputedStyle(doc.body).fontSize);
+		if (!Number.isFinite(bodySize) || bodySize <= 0) {
+			return;
+		}
+		const textParagraphs = Array.from(doc.body.querySelectorAll("p")).filter(
+			(p) => (p.textContent?.trim() ?? "") && !p.querySelector("img"),
+		);
+		if (textParagraphs.length === 0) {
+			return;
+		}
+		const ratios: number[] = [];
+		for (const p of textParagraphs) {
+			if (ratios.length >= 30) {
+				break;
+			}
+			const size = parseFloat(getComputedStyle(p).fontSize);
+			if (!Number.isFinite(size) || size <= 0) {
+				return;
+			}
+			ratios.push(size / bodySize);
+		}
+		this.bodyScaleMeasured = true;
+		if (ratios.length < 3) {
+			return;
+		}
+		ratios.sort((a, b) => a - b);
+		const median = ratios[Math.floor(ratios.length / 2)];
+		if (Math.abs(median - 1) > 0.02) {
+			this.bodyFontScaled = true;
+			this.applyFoliateAppearance();
+		}
+	}
 
 	private handleFoliateRelocate = (event: Event): void => {
 		this.handleRelocated((event as CustomEvent<FoliateRelocateDetail>).detail ?? {});
@@ -2094,6 +2150,9 @@ export class EpubReaderView extends FileView {
 			`  color: ${colors.textColor} !important;`,
 			`  line-height: ${this.pluginSettings.epubLineHeight} !important;`,
 			"}",
+			...(this.pluginSettings.epubUnifyBodyFontSize && this.bodyFontScaled
+				? ["p, li, td, th, dd, dt { font-size: 1em !important; }"]
+				: []),
 			`a, a:link, a:visited { color: ${colors.linkColor} !important; }`,
 			`::selection { background: ${colors.selectionBg} !important; }`,
 			"img { max-width: 100% !important; height: auto !important; }",

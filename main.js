@@ -8425,6 +8425,7 @@ var DEFAULT_SETTINGS = {
   epubDefaultFlow: "scrolled",
   epubFontSize: 16,
   epubLineHeight: 1.72,
+  epubUnifyBodyFontSize: false,
   epubReadingTheme: "obsidian",
   epubHighlightStyle: "fill",
   // PDF 增强
@@ -9329,6 +9330,12 @@ var AnnotationSettingsTab = class extends import_obsidian5.PluginSettingTab {
     new import_obsidian5.Setting(containerEl).setName("\u9605\u8BFB\u884C\u8DDD").setDesc("EPUB \u6B63\u6587\u884C\u8DDD\uFF08\u500D\uFF09\u3002\u4FEE\u6539\u540E\u91CD\u65B0\u6253\u5F00\u7535\u5B50\u4E66\u751F\u6548\u3002").addSlider((slider) => {
       slider.setLimits(1, 2.5, 0.05).setValue(this.plugin.settings.epubLineHeight).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.epubLineHeight = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    new import_obsidian5.Setting(containerEl).setName("\u7EDF\u4E00\u6B63\u6587\u5B57\u53F7").setDesc("\u5FFD\u7565\u7535\u5B50\u4E66\u81EA\u5E26\u7684\u6B63\u6587\u7F29\u653E\u500D\u6570\uFF0C\u6240\u6709\u4E66\u6B63\u6587\u6309\u300C\u9605\u8BFB\u5B57\u53F7\u300D\u663E\u793A\uFF1B\u4EC5\u5BF9\u6B63\u6587\u786E\u5B9E\u88AB\u4E66\u5185 CSS \u7F29\u653E\u7684\u4E66\u751F\u6548\uFF0C\u811A\u6CE8/\u56FE\u6CE8\u4E0D\u53D7\u5F71\u54CD\u3002\u4FEE\u6539\u540E\u91CD\u65B0\u6253\u5F00\u7535\u5B50\u4E66\u751F\u6548\u3002").addToggle((toggle) => {
+      toggle.setValue(this.plugin.settings.epubUnifyBodyFontSize).onChange(async (value) => {
+        this.plugin.settings.epubUnifyBodyFontSize = value;
         await this.plugin.saveSettings();
       });
     });
@@ -12213,6 +12220,10 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     this.clampedToEnd = false;
     /** 连续 relocate 事件中 fraction 未增长的次数（末页检测） */
     this.stableCountAtEnd = 0;
+    /** 当前书正文是否被书内 CSS 缩放（统一正文字号设置用，每次加载测量一次） */
+    this.bodyFontScaled = false;
+    /** 是否已完成正文缩放测量 */
+    this.bodyScaleMeasured = false;
     this.sidebarOpen = false;
     this.currentReadCount = 0;
     this.completedThisCycle = false;
@@ -12248,7 +12259,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
      * 销毁当前浮动上下文菜单。
      */
     this.contextMenuOutsideHandler = null;
-    this.handleFoliateLoad = (event) => {
+    this.handleFoliateLoad = async (event) => {
       const detail = event.detail;
       const doc = detail?.doc;
       if (!doc) {
@@ -12258,9 +12269,10 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       this.loadedSectionDocs.set(doc, index);
       this.currentLoadedDoc = doc;
       stripScriptsFromDocument(doc);
-      void inlineBlockedStylesheets({ document: doc });
+      await inlineBlockedStylesheets({ document: doc });
       this.attachSelectionListeners(doc);
       this.handleRendered();
+      this.maybeMeasureBodyFontScale(doc);
     };
     this.handleFoliateRelocate = (event) => {
       this.handleRelocated(event.detail ?? {});
@@ -12331,6 +12343,8 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     this.maxSeenPercent = 0;
     this.clampedToEnd = false;
     this.stableCountAtEnd = 0;
+    this.bodyFontScaled = false;
+    this.bodyScaleMeasured = false;
     this.destroyRendition();
     try {
       const arrayBuffer = await this.app.vault.readBinary(file);
@@ -13529,6 +13543,54 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     return index >= 0 ? index : null;
   }
   /**
+   * 统一正文字号：测量当前书正文段落在插件样式生效下的真实字号比例。
+   * 仅在开启设置且尚未测量时执行一次；正文确实被书内 CSS 缩放（偏离 1 超过 2%）才标记，
+   * 供 applyFoliateAppearance 注入覆盖规则。脚注/图注（font-size 非正文基准）不受影响。
+   */
+  maybeMeasureBodyFontScale(doc) {
+    if (this.bodyScaleMeasured) {
+      return;
+    }
+    if (!this.pluginSettings.epubUnifyBodyFontSize) {
+      this.bodyScaleMeasured = true;
+      return;
+    }
+    if (!doc.body) {
+      return;
+    }
+    const bodySize = parseFloat(getComputedStyle(doc.body).fontSize);
+    if (!Number.isFinite(bodySize) || bodySize <= 0) {
+      return;
+    }
+    const textParagraphs = Array.from(doc.body.querySelectorAll("p")).filter(
+      (p3) => (p3.textContent?.trim() ?? "") && !p3.querySelector("img")
+    );
+    if (textParagraphs.length === 0) {
+      return;
+    }
+    const ratios = [];
+    for (const p3 of textParagraphs) {
+      if (ratios.length >= 30) {
+        break;
+      }
+      const size = parseFloat(getComputedStyle(p3).fontSize);
+      if (!Number.isFinite(size) || size <= 0) {
+        return;
+      }
+      ratios.push(size / bodySize);
+    }
+    this.bodyScaleMeasured = true;
+    if (ratios.length < 3) {
+      return;
+    }
+    ratios.sort((a3, b3) => a3 - b3);
+    const median = ratios[Math.floor(ratios.length / 2)];
+    if (Math.abs(median - 1) > 0.02) {
+      this.bodyFontScaled = true;
+      this.applyFoliateAppearance();
+    }
+  }
+  /**
    * 点击阅读区高亮后弹出标注详情卡片。
    * 优先展示笔记（epub-comment），纯画线则提示可添加笔记。
    *
@@ -13878,6 +13940,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       `  color: ${colors.textColor} !important;`,
       `  line-height: ${this.pluginSettings.epubLineHeight} !important;`,
       "}",
+      ...this.pluginSettings.epubUnifyBodyFontSize && this.bodyFontScaled ? ["p, li, td, th, dd, dt { font-size: 1em !important; }"] : [],
       `a, a:link, a:visited { color: ${colors.linkColor} !important; }`,
       `::selection { background: ${colors.selectionBg} !important; }`,
       "img { max-width: 100% !important; height: auto !important; }",

@@ -12187,6 +12187,64 @@ var EpubAnnotationCard = class {
   }
 };
 
+// src/epub/EpubImageViewer.ts
+var EpubImageViewer = class {
+  constructor() {
+    this.el = null;
+    this.keyHandler = null;
+  }
+  open(src, alt = "") {
+    if (!this.el) {
+      this.el = document.body.createDiv({ cls: "yh-epub-image-viewer" });
+      const canvas = this.el.createDiv({ cls: "yh-epub-image-canvas" });
+      canvas.createEl("img", { cls: "yh-epub-image-big" });
+      this.el.createDiv({ cls: "yh-epub-image-caption" });
+      const closeBtn = this.el.createEl("button", {
+        cls: "yh-epub-image-close",
+        attr: { type: "button", title: "\u5173\u95ED", "aria-label": "\u5173\u95ED" },
+        text: "\u2715"
+      });
+      closeBtn.addEventListener("click", () => this.close());
+      this.el.addEventListener("click", (ev) => {
+        if (ev.target === this.el || ev.target instanceof HTMLElement && ev.target.classList.contains("yh-epub-image-canvas")) {
+          this.close();
+        }
+      });
+    }
+    const img = this.el.querySelector("img");
+    if (img) {
+      img.src = src;
+    }
+    const caption = this.el.querySelector(".yh-epub-image-caption");
+    if (caption) {
+      caption.setText(alt || "");
+    }
+    document.body.appendChild(this.el);
+    this.registerKeyHandler();
+  }
+  registerKeyHandler() {
+    if (this.keyHandler) {
+      return;
+    }
+    this.keyHandler = (ev) => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        this.close();
+      }
+    };
+    document.addEventListener("keydown", this.keyHandler, true);
+  }
+  close() {
+    if (this.keyHandler) {
+      document.removeEventListener("keydown", this.keyHandler, true);
+      this.keyHandler = null;
+    }
+    if (this.el?.isConnected) {
+      this.el.remove();
+    }
+  }
+};
+
 // src/epub/EpubReaderView.ts
 var EPUB_READER_VIEW_TYPE = "inklight-epub-reader";
 var READING_TIME_FLUSH_INTERVAL_MS = 6e4;
@@ -12229,6 +12287,8 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     this.completedThisCycle = false;
     this.contextMenuEl = null;
     this.annotationCardEl = null;
+    /** 点击图片放大的全屏查看器（单例，复用同一浮层） */
+    this.imageViewerEl = null;
     this.lastSelectedCfiRange = "";
     this.lastSelectedText = "";
     this.searchInputEl = null;
@@ -12328,6 +12388,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     }
     this.stopReadingTimeTracker();
     this.dismissContextMenu();
+    this.closeImageViewer();
     this.destroyRendition();
   }
   // ================================================================
@@ -12767,6 +12828,21 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       this.contextMenuEl.remove();
       this.contextMenuEl = null;
     }
+  }
+  // ================================================================
+  // 图片查看
+  // ================================================================
+  /** 打开全屏图片查看器（复用单例浮层）。 */
+  showImageZoom(src, alt) {
+    if (!this.imageViewerEl) {
+      this.imageViewerEl = new EpubImageViewer();
+    }
+    this.imageViewerEl.open(src, alt);
+  }
+  /** 关闭全屏图片查看器。 */
+  closeImageViewer() {
+    this.imageViewerEl?.close();
+    this.imageViewerEl = null;
   }
   // ================================================================
   // 标注 CRUD
@@ -13778,6 +13854,21 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     };
     const eventOptions = { capture: true };
     const win = doc.defaultView;
+    const handleImageClick = (ev) => {
+      const target = ev.target;
+      const img = target && typeof target.closest === "function" ? target.closest("img") : null;
+      if (!img) {
+        return;
+      }
+      const src = img.getAttribute("src");
+      if (!src) {
+        return;
+      }
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.showImageZoom(src, img.getAttribute("alt") ?? "");
+    };
+    doc.addEventListener("click", handleImageClick, eventOptions);
     doc.addEventListener("selectionchange", scheduleEmit, eventOptions);
     doc.addEventListener("mouseup", scheduleEmit, eventOptions);
     doc.addEventListener("pointerup", scheduleEmit, eventOptions);
@@ -13794,6 +13885,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       if (pendingRetry) {
         window.clearTimeout(pendingRetry);
       }
+      doc.removeEventListener("click", handleImageClick, true);
       doc.removeEventListener("selectionchange", scheduleEmit, true);
       doc.removeEventListener("mouseup", scheduleEmit, true);
       doc.removeEventListener("pointerup", scheduleEmit, true);

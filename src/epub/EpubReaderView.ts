@@ -45,6 +45,7 @@ import {
 } from "./EpubFoliateLoader";
 import { EpubNoteModal, EpubNoteResult } from "./EpubNoteModal";
 import { EpubAnnotationCard } from "./EpubAnnotationCard";
+import { EpubImageViewer } from "./EpubImageViewer";
 
 // ---- 常量 ----
 
@@ -180,6 +181,8 @@ export class EpubReaderView extends FileView {
 	private completedThisCycle = false;
 	private contextMenuEl: HTMLElement | null = null;
 	private annotationCardEl: EpubAnnotationCard | null = null;
+	/** 点击图片放大的全屏查看器（单例，复用同一浮层） */
+	private imageViewerEl: EpubImageViewer | null = null;
 		private lastSelectedCfiRange = "";
 		private lastSelectedText = "";
 		private searchInputEl: HTMLInputElement | null = null;
@@ -269,6 +272,7 @@ export class EpubReaderView extends FileView {
 		}
 		this.stopReadingTimeTracker();
 		this.dismissContextMenu();
+		this.closeImageViewer();
 		this.destroyRendition();
 	}
 
@@ -787,6 +791,24 @@ export class EpubReaderView extends FileView {
 			this.contextMenuEl.remove();
 			this.contextMenuEl = null;
 		}
+	}
+
+	// ================================================================
+	// 图片查看
+	// ================================================================
+
+	/** 打开全屏图片查看器（复用单例浮层）。 */
+	private showImageZoom(src: string, alt: string): void {
+		if (!this.imageViewerEl) {
+			this.imageViewerEl = new EpubImageViewer();
+		}
+		this.imageViewerEl.open(src, alt);
+	}
+
+	/** 关闭全屏图片查看器。 */
+	private closeImageViewer(): void {
+		this.imageViewerEl?.close();
+		this.imageViewerEl = null;
 	}
 
 	// ================================================================
@@ -1966,6 +1988,22 @@ export class EpubReaderView extends FileView {
 		const eventOptions: AddEventListenerOptions = { capture: true };
 		const win = doc.defaultView;
 
+		const handleImageClick = (ev: Event): void => {
+			const target = ev.target as Element | null;
+			const img = target && typeof target.closest === "function" ? target.closest("img") : null;
+			if (!img) {
+				return;
+			}
+			const src = img.getAttribute("src");
+			if (!src) {
+				return;
+			}
+			ev.preventDefault();
+			ev.stopPropagation();
+			this.showImageZoom(src, img.getAttribute("alt") ?? "");
+		};
+		doc.addEventListener("click", handleImageClick, eventOptions);
+
 		doc.addEventListener("selectionchange", scheduleEmit, eventOptions);
 		doc.addEventListener("mouseup", scheduleEmit, eventOptions);
 		doc.addEventListener("pointerup", scheduleEmit, eventOptions);
@@ -1983,6 +2021,7 @@ export class EpubReaderView extends FileView {
 			if (pendingRetry) {
 				window.clearTimeout(pendingRetry);
 			}
+			doc.removeEventListener("click", handleImageClick, true);
 			doc.removeEventListener("selectionchange", scheduleEmit, true);
 			doc.removeEventListener("mouseup", scheduleEmit, true);
 			doc.removeEventListener("pointerup", scheduleEmit, true);

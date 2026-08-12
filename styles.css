@@ -2429,4 +2429,78 @@ a.yh-epub-goto-link:hover {
   border-radius: 2px;
 }
 
+/* ===== 图片查看器（点击放大） ===== */
+
+.yh-epub-image-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.95);
+  cursor: zoom-out;
+}
+
+.yh-epub-image-viewer[hidden] {
+  display: none;
+}
+
+.yh-epub-image-canvas {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 8px 8px 40px;
+  box-sizing: border-box;
+  cursor: zoom-out;
+}
+
+.yh-epub-image-big {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: 0 4px 32px rgba(0, 0, 0, 0.6);
+}
+
+.yh-epub-image-caption {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 10px;
+  text-align: center;
+  font-size: var(--yh-font-sm, 13px);
+  color: rgba(255, 255, 255, 0.85);
+  pointer-events: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.yh-epub-image-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.yh-epub-image-close:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+
 

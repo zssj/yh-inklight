@@ -68,15 +68,29 @@ const CONTEXT_MENU_DISMISS_MS = 300;
 const SELECTION_SYNC_RETRY_DELAY_MS = 120;
 
 /**
- * 通读检查点（百分比）：依次到过这些位置才计一次「已读一遍」。
- * 中间检查点只在 rawPercent < 0.95 时置位，防止末页 fraction≈1 一次置满。
- * 末位（0.98）由 clampedToEnd（滚动模式真实滚到书末）或 rawPercent>=0.98 触发。
+ * 通读检查点（目标 10/30/50/70/90/98）：
+ * 每个检查点是「容差区间」而非精确点，避免书籍 foliate fraction 粒度粗、
+ * 事件值落在检查点之间而永远无法命中。区间有界且相邻相接，
+ * 必须真实经过该区间的事件才会置位——所以"重开在 90% 只读尾巴"只会置 90/末位，
+ * 不会误计；而任何从 0 真正读到尾的进度必然逐个区间置满。
+ * 末位（目标 0.98）由 clampedToEnd（真实滚到书末）或 rawPercent>=0.95 触发。
  */
-const READ_CHECKPOINTS = [0.1, 0.3, 0.5, 0.7, 0.9, 0.98] as const;
+const READ_CHECKPOINTS = [
+	{ target: 0.1, lo: 0.04, hi: 0.2 },
+	{ target: 0.3, lo: 0.2, hi: 0.4 },
+	{ target: 0.5, lo: 0.4, hi: 0.6 },
+	{ target: 0.7, lo: 0.6, hi: 0.8 },
+	{ target: 0.9, lo: 0.8, hi: 0.95 },
+	{ target: 0.98, lo: 0.95, hi: 1.001 },
+] as const;
 /** 六个检查点全部置位的掩码 */
 const READ_CHECKPOINTS_ALL_MASK = (1 << READ_CHECKPOINTS.length) - 1;
-/** 末位（读完）掩码 */
-const READ_CHECKPOINTS_END_BIT = 1 << (READ_CHECKPOINTS.length - 1);
+/**
+ * 跳转识别阈值：单次 relocated 事件 fraction 变化超过该值视为跳转
+ * （目录/滚动条/跳页），跳转事件不置位任何检查点，防止"开头直跳结尾"误计。
+ * 0.6 高于任何真实阅读的分节边界步进（最粗的书也只有 ~0.5），不会误伤正常阅读。
+ */
+const READ_CHECKPOINTS_JUMP_DELTA = 0.6;
 
 // ---- 辅助类型 ----
 
@@ -190,8 +204,10 @@ export class EpubReaderView extends FileView {
 	private sidebarOpen = false;
 	private currentReadCount = 0;
 	private completedThisCycle = false;
-	/** 通读检查点位掩码（10/30/50/70/90/98），随进度持久化到 sidecar */
+	/** 通读检查点位掩码（10/30/50/70/90/98 容差带），随进度持久化到 sidecar */
 	private readCheckpointMask = 0;
+	/** 上一次 relocated 的 fraction，用于识别跳转事件 */
+	private lastRelocatedFraction = 0;
 	private contextMenuEl: HTMLElement | null = null;
 	private annotationCardEl: EpubAnnotationCard | null = null;
 	/** 点击图片放大的全屏查看器（单例，复用同一浮层） */
@@ -304,6 +320,7 @@ export class EpubReaderView extends FileView {
 		this.clampedToEnd = false;
 		this.stableCountAtEnd = 0;
 		this.readCheckpointMask = 0;
+		this.lastRelocatedFraction = 0;
 		this.bodyFontScaled = false;
 		this.bodyScaleMeasured = false;
 		this.destroyRendition();
@@ -1059,27 +1076,33 @@ export class EpubReaderView extends FileView {
 			this.clampedToEnd = false;
 			this.stableCountAtEnd = 0;
 		}
-		// 回到开头附近（< 15%）→ 新一轮阅读，重置末尾锁定状态（通读计数由检查点掩码负责，不受此影响）
+		// 回到开头附近（< 15%）→ 新一轮阅读，重置末尾锁定与通读计数锁存
 		if (rawPercent < 0.15) {
 			this.maxSeenPercent = 0;
 			this.stableCountAtEnd = 0;
 			this.clampedToEnd = false;
+			this.completedThisCycle = false;
 		}
 		const percent = this.clampedToEnd ? 1 : rawPercent;
 
-		// 通读检查点：中间位按真实 rawPercent 置位（< 0.95 防末页一次置满），末位仅在读完时置位
+		// 通读检查点（有界容差区间）：跳转事件（fraction 突变）不置位，防"开头直跳结尾"误计
 		const prevMask = this.readCheckpointMask;
+		const isJump = Math.abs(rawPercent - this.lastRelocatedFraction) > READ_CHECKPOINTS_JUMP_DELTA;
+		this.lastRelocatedFraction = rawPercent;
 		let newMask = prevMask;
-		for (let i = 0; i < READ_CHECKPOINTS.length - 1; i++) {
-			if (rawPercent >= READ_CHECKPOINTS[i] && rawPercent < 0.95) {
-				newMask |= 1 << i;
+		if (!isJump) {
+			for (let i = 0; i < READ_CHECKPOINTS.length - 1; i++) {
+				const cp = READ_CHECKPOINTS[i];
+				if (rawPercent >= cp.lo && (cp.hi === undefined || rawPercent < cp.hi)) {
+					newMask |= 1 << i;
+				}
+			}
+			if (this.clampedToEnd || rawPercent >= READ_CHECKPOINTS[READ_CHECKPOINTS.length - 1].lo) {
+				newMask |= 1 << (READ_CHECKPOINTS.length - 1);
 			}
 		}
-		if (this.clampedToEnd || rawPercent >= 0.98) {
-			newMask |= READ_CHECKPOINTS_END_BIT;
-		}
-		// 全部检查点到齐且末位为本会话新置 → 计一次通读
-		if ((newMask & READ_CHECKPOINTS_ALL_MASK) === READ_CHECKPOINTS_ALL_MASK && !(prevMask & READ_CHECKPOINTS_END_BIT)) {
+		// 全部检查带到齐且本周期未计过 → 计一次通读
+		if ((newMask & READ_CHECKPOINTS_ALL_MASK) === READ_CHECKPOINTS_ALL_MASK && !this.completedThisCycle) {
 			this.currentReadCount++;
 			this.completedThisCycle = true;
 			this.readCheckpointMask = 0;
@@ -1244,6 +1267,7 @@ export class EpubReaderView extends FileView {
 		this.readingTimeSeconds = progress.readingTimeSeconds ?? 0;
 		this.currentReadCount = progress.readCount ?? 0;
 		this.readCheckpointMask = progress.readCheckpoints ?? 0;
+		this.lastRelocatedFraction = progress.percent ?? 0;
 
 		const cfi = normalizeCfi(progress.cfi);
 		if (cfi) {
@@ -1258,7 +1282,7 @@ export class EpubReaderView extends FileView {
 		}
 
 		this.currentPercent = normalizePercent(progress.percent);
-		this.completedThisCycle = this.currentPercent >= 0.98;
+		this.completedThisCycle = this.currentPercent >= 0.95;
 		this.updateProgressBar(this.currentPercent);
 		this.restoreAnnotations();
 	}

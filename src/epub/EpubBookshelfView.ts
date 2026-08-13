@@ -6,13 +6,18 @@
 
 import { ItemView, TFile, WorkspaceLeaf } from "obsidian";
 import { AnnotationStore } from "../storage/annotationStore";
-import { EpubReadingProgress, SUPPORTED_BOOK_EXTENSIONS } from "../storage/types";
+import {
+  AnnotationPluginSettings,
+  EpubBookshelfSortMode,
+  EpubReadingProgress,
+  SUPPORTED_BOOK_EXTENSIONS,
+} from "../storage/types";
 
 export const EPUB_BOOKSHELF_VIEW_TYPE = "inklight-epub-bookshelf";
 
-type SortMode = "name" | "recent" | "progress" | "readCount";
+type SortMode = EpubBookshelfSortMode;
 
-const SORT_OPTIONS: Array<[SortMode, string]> = [
+const SORT_OPTIONS: Array<[EpubBookshelfSortMode, string]> = [
   ["name", "书名"],
   ["recent", "最近阅读"],
   ["progress", "阅读进度"],
@@ -53,6 +58,8 @@ function parseLastReadTime(value: string): number {
 
 export class EpubBookshelfView extends ItemView {
   private store: AnnotationStore;
+  private settings: AnnotationPluginSettings;
+  private saveSettings: () => Promise<void>;
   private openCallback: (file: TFile) => void;
   private books: BookshelfEntry[] = [];
   private searchQuery = "";
@@ -63,11 +70,18 @@ export class EpubBookshelfView extends ItemView {
   constructor(
     leaf: WorkspaceLeaf,
     store: AnnotationStore,
+    settings: AnnotationPluginSettings,
+    saveSettings: () => Promise<void>,
     onOpen: (file: TFile) => void,
   ) {
     super(leaf);
     this.store = store;
+    this.settings = settings;
+    this.saveSettings = saveSettings;
     this.openCallback = onOpen;
+    this.sortMode = SORT_OPTIONS.some(([value]) => value === settings.epubBookshelfSort)
+      ? settings.epubBookshelfSort
+      : "name";
   }
 
   getViewType(): string {
@@ -152,6 +166,8 @@ export class EpubBookshelfView extends ItemView {
     sortSelect.value = this.sortMode;
     sortSelect.addEventListener("change", () => {
       this.sortMode = sortSelect.value as SortMode;
+      this.settings.epubBookshelfSort = this.sortMode;
+      void this.saveSettings();
       this.applyFilterAndSort();
     });
   }

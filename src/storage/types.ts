@@ -168,6 +168,7 @@ export interface AnnotationPluginSettings {
   epubUnifyBodyFontSize: boolean;
   epubReadingTheme: EpubReadingTheme;
   epubHighlightStyle: EpubHighlightStyle;
+  epubBookshelfSort: EpubBookshelfSortMode;
   // --- PDF 增强 ---
   pdfProgressTracking: boolean;
 }
@@ -195,6 +196,7 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   epubUnifyBodyFontSize: false,
   epubReadingTheme: "obsidian",
   epubHighlightStyle: "fill",
+  epubBookshelfSort: "name",
   // PDF 增强
   pdfProgressTracking: true,
 };
@@ -292,6 +294,7 @@ export interface CanvasExcerptNode {
 
 export type EpubReadingTheme = "obsidian" | "white" | "warm" | "green" | "sepia" | "dark";
 export type EpubFlowMode = "paginated" | "scrolled";
+export type EpubBookshelfSortMode = "name" | "recent" | "progress" | "readCount";
 
 export const EPUB_READING_THEMES: { id: EpubReadingTheme; label: string; background: string; text: string; swatch: string }[] = [
   { id: "obsidian", label: "跟随 Obsidian", background: "", text: "", swatch: "linear-gradient(135deg, #ffffff 50%, #1e1e1e 50%)" },

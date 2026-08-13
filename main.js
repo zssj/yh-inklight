@@ -8428,6 +8428,7 @@ var DEFAULT_SETTINGS = {
   epubUnifyBodyFontSize: false,
   epubReadingTheme: "obsidian",
   epubHighlightStyle: "fill",
+  epubBookshelfSort: "name",
   // PDF 增强
   pdfProgressTracking: true
 };
@@ -14252,13 +14253,16 @@ function parseLastReadTime(value) {
   return 0;
 }
 var EpubBookshelfView = class extends import_obsidian14.ItemView {
-  constructor(leaf, store, onOpen) {
+  constructor(leaf, store, settings, saveSettings, onOpen) {
     super(leaf);
     this.books = [];
     this.searchQuery = "";
     this.sortMode = "name";
     this.store = store;
+    this.settings = settings;
+    this.saveSettings = saveSettings;
     this.openCallback = onOpen;
+    this.sortMode = SORT_OPTIONS.some(([value]) => value === settings.epubBookshelfSort) ? settings.epubBookshelfSort : "name";
   }
   getViewType() {
     return EPUB_BOOKSHELF_VIEW_TYPE;
@@ -14325,6 +14329,8 @@ var EpubBookshelfView = class extends import_obsidian14.ItemView {
     sortSelect.value = this.sortMode;
     sortSelect.addEventListener("change", () => {
       this.sortMode = sortSelect.value;
+      this.settings.epubBookshelfSort = this.sortMode;
+      void this.saveSettings();
       this.applyFilterAndSort();
     });
   }
@@ -14611,7 +14617,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian16.Plugin {
     }
     this.registerView(
       EPUB_BOOKSHELF_VIEW_TYPE,
-      (leaf) => new EpubBookshelfView(leaf, this.store, (file) => this.openEpubBook(file))
+      (leaf) => new EpubBookshelfView(leaf, this.store, this.settings, () => this.saveSettings(), (file) => this.openEpubBook(file))
     );
     this.registerEditorExtension([
       createHighlightExtension({

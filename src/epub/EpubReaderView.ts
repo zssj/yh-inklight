@@ -67,6 +67,17 @@ const CONTEXT_MENU_DISMISS_MS = 300;
 /** foliate iframe 内选区稳定后再同步，参考 weave 的 SelectionToolbar 同步节奏 */
 const SELECTION_SYNC_RETRY_DELAY_MS = 120;
 
+/**
+ * 通读检查点（百分比）：依次到过这些位置才计一次「已读一遍」。
+ * 中间检查点只在 rawPercent < 0.95 时置位，防止末页 fraction≈1 一次置满。
+ * 末位（0.98）由 clampedToEnd（滚动模式真实滚到书末）或 rawPercent>=0.98 触发。
+ */
+const READ_CHECKPOINTS = [0.1, 0.3, 0.5, 0.7, 0.9, 0.98] as const;
+/** 六个检查点全部置位的掩码 */
+const READ_CHECKPOINTS_ALL_MASK = (1 << READ_CHECKPOINTS.length) - 1;
+/** 末位（读完）掩码 */
+const READ_CHECKPOINTS_END_BIT = 1 << (READ_CHECKPOINTS.length - 1);
+
 // ---- 辅助类型 ----
 
 /** 阅读时间追踪器状态快照 */
@@ -179,6 +190,8 @@ export class EpubReaderView extends FileView {
 	private sidebarOpen = false;
 	private currentReadCount = 0;
 	private completedThisCycle = false;
+	/** 通读检查点位掩码（10/30/50/70/90/98），随进度持久化到 sidecar */
+	private readCheckpointMask = 0;
 	private contextMenuEl: HTMLElement | null = null;
 	private annotationCardEl: EpubAnnotationCard | null = null;
 	/** 点击图片放大的全屏查看器（单例，复用同一浮层） */
@@ -290,6 +303,7 @@ export class EpubReaderView extends FileView {
 		this.maxSeenPercent = 0;
 		this.clampedToEnd = false;
 		this.stableCountAtEnd = 0;
+		this.readCheckpointMask = 0;
 		this.bodyFontScaled = false;
 		this.bodyScaleMeasured = false;
 		this.destroyRendition();
@@ -1045,18 +1059,32 @@ export class EpubReaderView extends FileView {
 			this.clampedToEnd = false;
 			this.stableCountAtEnd = 0;
 		}
-		// 回到开头附近（< 15%）→ 新一轮阅读，重置全部状态
+		// 回到开头附近（< 15%）→ 新一轮阅读，重置末尾锁定状态（通读计数由检查点掩码负责，不受此影响）
 		if (rawPercent < 0.15) {
 			this.maxSeenPercent = 0;
 			this.stableCountAtEnd = 0;
 			this.clampedToEnd = false;
-			this.completedThisCycle = false;
 		}
 		const percent = this.clampedToEnd ? 1 : rawPercent;
 
-		if (percent >= 0.98 && !this.completedThisCycle) {
+		// 通读检查点：中间位按真实 rawPercent 置位（< 0.95 防末页一次置满），末位仅在读完时置位
+		const prevMask = this.readCheckpointMask;
+		let newMask = prevMask;
+		for (let i = 0; i < READ_CHECKPOINTS.length - 1; i++) {
+			if (rawPercent >= READ_CHECKPOINTS[i] && rawPercent < 0.95) {
+				newMask |= 1 << i;
+			}
+		}
+		if (this.clampedToEnd || rawPercent >= 0.98) {
+			newMask |= READ_CHECKPOINTS_END_BIT;
+		}
+		// 全部检查点到齐且末位为本会话新置 → 计一次通读
+		if ((newMask & READ_CHECKPOINTS_ALL_MASK) === READ_CHECKPOINTS_ALL_MASK && !(prevMask & READ_CHECKPOINTS_END_BIT)) {
 			this.currentReadCount++;
 			this.completedThisCycle = true;
+			this.readCheckpointMask = 0;
+		} else {
+			this.readCheckpointMask = newMask;
 		}
 
 		this.currentCfi = cfi || this.currentCfi;
@@ -1166,6 +1194,7 @@ export class EpubReaderView extends FileView {
 			readingTimeSeconds: this.readingTimeSeconds,
 			estimatedRemainingMinutes: this.estimateRemainingMinutes(),
 			readCount: this.currentReadCount,
+			readCheckpoints: this.readCheckpointMask,
 			lastCompletedAt: this.completedThisCycle && percent >= 0.98 ? new Date().toISOString() : undefined,
 		};
 
@@ -1214,6 +1243,7 @@ export class EpubReaderView extends FileView {
 
 		this.readingTimeSeconds = progress.readingTimeSeconds ?? 0;
 		this.currentReadCount = progress.readCount ?? 0;
+		this.readCheckpointMask = progress.readCheckpoints ?? 0;
 
 		const cfi = normalizeCfi(progress.cfi);
 		if (cfi) {

@@ -277,8 +277,7 @@ export class EpubBookshelfView extends ItemView {
         });
       }
 
-      const cycle = readCount + 1;
-      let readLabel = `第 ${cycle} 遍`;
+      let readLabel = readCount > 0 ? `已读 ${readCount} 遍` : "在读中";
       if (progress?.lastCompletedAt) {
         readLabel += ` · ${progress.lastCompletedAt.slice(0, 10)}`;
       }

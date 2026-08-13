@@ -252,6 +252,11 @@ export interface EpubReadingProgress {
   estimatedRemainingMinutes?: number;
   readCount: number;
   lastCompletedAt?: string;
+  /**
+   * 通读检查点位掩码：10/30/50/70/90/98 六个检查点各占一位，
+   * 全满（含末位）且末位为新置时计一次 readCount。旧数据无此字段视为 0。
+   */
+  readCheckpoints?: number;
 }
 
 // ===== PDF 进度 =====

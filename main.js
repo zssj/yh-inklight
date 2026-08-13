@@ -12252,6 +12252,9 @@ var READING_TIME_FLUSH_INTERVAL_MS = 6e4;
 var WHEEL_DEBOUNCE_MS = 400;
 var PROGRESS_SAVE_DEBOUNCE_MS = 2e3;
 var SELECTION_SYNC_RETRY_DELAY_MS = 120;
+var READ_CHECKPOINTS = [0.1, 0.3, 0.5, 0.7, 0.9, 0.98];
+var READ_CHECKPOINTS_ALL_MASK = (1 << READ_CHECKPOINTS.length) - 1;
+var READ_CHECKPOINTS_END_BIT = 1 << READ_CHECKPOINTS.length - 1;
 var EpubReaderView = class extends import_obsidian13.FileView {
   // ================================================================
   // 构造 & 生命周期
@@ -12286,6 +12289,8 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     this.sidebarOpen = false;
     this.currentReadCount = 0;
     this.completedThisCycle = false;
+    /** 通读检查点位掩码（10/30/50/70/90/98），随进度持久化到 sidecar */
+    this.readCheckpointMask = 0;
     this.contextMenuEl = null;
     this.annotationCardEl = null;
     /** 点击图片放大的全屏查看器（单例，复用同一浮层） */
@@ -12405,6 +12410,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     this.maxSeenPercent = 0;
     this.clampedToEnd = false;
     this.stableCountAtEnd = 0;
+    this.readCheckpointMask = 0;
     this.bodyFontScaled = false;
     this.bodyScaleMeasured = false;
     this.destroyRendition();
@@ -13052,12 +13058,24 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       this.maxSeenPercent = 0;
       this.stableCountAtEnd = 0;
       this.clampedToEnd = false;
-      this.completedThisCycle = false;
     }
     const percent = this.clampedToEnd ? 1 : rawPercent;
-    if (percent >= 0.98 && !this.completedThisCycle) {
+    const prevMask = this.readCheckpointMask;
+    let newMask = prevMask;
+    for (let i3 = 0; i3 < READ_CHECKPOINTS.length - 1; i3++) {
+      if (rawPercent >= READ_CHECKPOINTS[i3] && rawPercent < 0.95) {
+        newMask |= 1 << i3;
+      }
+    }
+    if (this.clampedToEnd || rawPercent >= 0.98) {
+      newMask |= READ_CHECKPOINTS_END_BIT;
+    }
+    if ((newMask & READ_CHECKPOINTS_ALL_MASK) === READ_CHECKPOINTS_ALL_MASK && !(prevMask & READ_CHECKPOINTS_END_BIT)) {
       this.currentReadCount++;
       this.completedThisCycle = true;
+      this.readCheckpointMask = 0;
+    } else {
+      this.readCheckpointMask = newMask;
     }
     this.currentCfi = cfi || this.currentCfi;
     this.currentSectionIndex = Number.isFinite(spineIndex) ? spineIndex : 0;
@@ -13150,6 +13168,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       readingTimeSeconds: this.readingTimeSeconds,
       estimatedRemainingMinutes: this.estimateRemainingMinutes(),
       readCount: this.currentReadCount,
+      readCheckpoints: this.readCheckpointMask,
       lastCompletedAt: this.completedThisCycle && percent >= 0.98 ? (/* @__PURE__ */ new Date()).toISOString() : void 0
     };
     try {
@@ -13191,6 +13210,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     }
     this.readingTimeSeconds = progress.readingTimeSeconds ?? 0;
     this.currentReadCount = progress.readCount ?? 0;
+    this.readCheckpointMask = progress.readCheckpoints ?? 0;
     const cfi = normalizeCfi(progress.cfi);
     if (cfi) {
       try {
@@ -14423,8 +14443,7 @@ var EpubBookshelfView = class extends import_obsidian14.ItemView {
           text: `\u5269\u4F59\u7EA6 ${Math.ceil(progress.estimatedRemainingMinutes)} \u5206\u949F`
         });
       }
-      const cycle = readCount + 1;
-      let readLabel = `\u7B2C ${cycle} \u904D`;
+      let readLabel = readCount > 0 ? `\u5DF2\u8BFB ${readCount} \u904D` : "\u5728\u8BFB\u4E2D";
       if (progress?.lastCompletedAt) {
         readLabel += ` \xB7 ${progress.lastCompletedAt.slice(0, 10)}`;
       }

@@ -10,7 +10,28 @@ npm run build     # esbuild production bundle
 npx tsc --noEmit  # type check (separate from build)
 ```
 
-No lint, no test, no formatter config. CI only verifies `npm run build`. Release via tagged push — GitHub Actions creates release with `main.js` + `manifest.json` + `styles.css`.
+No lint, no test, no formatter config. CI only verifies `npm run build`.
+
+## Release Workflow (发版流程)
+
+Version lives in 3 files — bump ALL of them in sync: `manifest.json`, `package.json`, `versions.json` (add `"X.Y.Z": "1.0.0"` entry).
+
+Steps (run from repo root `E:\OB插件\yh-inklight-src`):
+
+```bash
+npm run build
+# 本地手动验证主路径，然后：
+git add -A
+git commit -m "v0.17.XX: type: 中文描述"   # 历史格式: v开头版本号 + 中文提交说明
+git push origin
+git tag 0.17.XX                            # 轻量标签，无 v 前缀（0.17.20 之后统一这样）
+git push origin 0.17.XX
+```
+
+- Tag MUST be lightweight (annotated) and WITHOUT `v` prefix. Older tags (`v0.17.19` 及之前) used `v` prefix — do not follow them.
+- After pushing the tag, GitHub Actions (`.github/workflows/release.yml`) auto-creates the GitHub Release with `main.js` + `manifest.json` + `styles.css` and auto-generated changelog. No web/`gh` CLI steps needed.
+- Verify: https://github.com/zssj/yh-inklight/releases/tag/0.17.XX shows the release with 3 assets.
+- Deploy target for manual testing: `E:\知识库\.obsidian\plugins\yh-inklight\`.
 
 ## Key Architecture
 

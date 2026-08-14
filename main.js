@@ -12283,6 +12283,8 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     // ---- 状态 ----
     this.tocEntries = [];
     this.currentChapter = "";
+    /** 当前读到的最深目录项原始 href（含 #锚点），用于目录高亮精确到小节 */
+    this.currentTocHref = "";
     this.currentPercent = 0;
     /** 本会话中见到的最大 fraction（滚动模式末页达不到 1.0） */
     this.maxSeenPercent = 0;
@@ -12607,10 +12609,11 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     }
     const list = this.sidebarContentEl.createDiv({ cls: "yh-epub-toc-list" });
     const isSingleSection = this.tocEntries.every((e3) => e3.spineIndex === this.tocEntries[0].spineIndex);
+    const hrefMatch = this.currentTocHref ? this.tocEntries.findIndex((e3) => e3.href === this.currentTocHref) : -1;
     let activeIndex = -1;
     for (let i3 = 0; i3 < this.tocEntries.length; i3++) {
       const entry = this.tocEntries[i3];
-      const isCurrent = isSingleSection ? entry.label === (this.currentChapter || "").trim() : entry.spineIndex <= this.currentSectionIndex;
+      const isCurrent = hrefMatch >= 0 ? i3 === hrefMatch : isSingleSection ? entry.label === (this.currentChapter || "").trim() : entry.spineIndex <= this.currentSectionIndex;
       const item = list.createEl("button", {
         cls: `yh-epub-toc-item${isCurrent ? " is-current" : ""}`,
         text: entry.label,
@@ -13097,6 +13100,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     }
     this.currentCfi = cfi || this.currentCfi;
     this.currentSectionIndex = Number.isFinite(spineIndex) ? spineIndex : 0;
+    this.currentTocHref = detail?.tocItem?.href ?? "";
     this.currentChapter = detail?.tocItem?.label ?? resolveChapterLabel(this.tocEntries, this.currentSectionIndex);
     this.currentPercent = percent;
     this.updateProgressBar(percent);

@@ -113,7 +113,7 @@ interface FoliateRelocateDetail {
 	index?: number;
 	fraction?: number;
 	range?: Range;
-	tocItem?: { label?: string };
+	tocItem?: { label?: string; href?: string };
 	section?: { current: number; total: number };
 }
 
@@ -189,6 +189,8 @@ export class EpubReaderView extends FileView {
 
 	private tocEntries: TocSpineEntry[] = [];
 	private currentChapter = "";
+	/** 当前读到的最深目录项原始 href（含 #锚点），用于目录高亮精确到小节 */
+	private currentTocHref = "";
 	private currentPercent = 0;
 	/** 本会话中见到的最大 fraction（滚动模式末页达不到 1.0） */
 	private maxSeenPercent = 0;
@@ -547,13 +549,20 @@ export class EpubReaderView extends FileView {
 
 		const list = this.sidebarContentEl.createDiv({ cls: "yh-epub-toc-list" });
 		const isSingleSection = this.tocEntries.every(e => e.spineIndex === this.tocEntries[0].spineIndex);
+		// foliate 已给出当前读到的最深目录项（原始 href 含锚点），优先精确匹配到小节；
+		// 匹配不到时（如 tocItem 缺失）回退到按章节/标签逻辑。
+		const hrefMatch = this.currentTocHref
+			? this.tocEntries.findIndex(e => e.href === this.currentTocHref)
+			: -1;
 		let activeIndex = -1;
 
 		for (let i = 0; i < this.tocEntries.length; i++) {
 			const entry = this.tocEntries[i];
-			const isCurrent = isSingleSection
-				? entry.label === (this.currentChapter || "").trim()
-				: entry.spineIndex <= this.currentSectionIndex;
+			const isCurrent = hrefMatch >= 0
+				? i === hrefMatch
+				: (isSingleSection
+					? entry.label === (this.currentChapter || "").trim()
+					: entry.spineIndex <= this.currentSectionIndex);
 
 			const item = list.createEl("button", {
 				cls: `yh-epub-toc-item${isCurrent ? " is-current" : ""}`,
@@ -1116,6 +1125,7 @@ export class EpubReaderView extends FileView {
 
 		this.currentCfi = cfi || this.currentCfi;
 		this.currentSectionIndex = Number.isFinite(spineIndex) ? spineIndex : 0;
+		this.currentTocHref = detail?.tocItem?.href ?? "";
 		this.currentChapter = detail?.tocItem?.label ?? resolveChapterLabel(this.tocEntries, this.currentSectionIndex);
 		this.currentPercent = percent;
 

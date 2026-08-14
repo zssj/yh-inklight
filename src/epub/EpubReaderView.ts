@@ -85,6 +85,8 @@ const READ_CHECKPOINTS = [
 ] as const;
 /** 六个检查点全部置位的掩码 */
 const READ_CHECKPOINTS_ALL_MASK = (1 << READ_CHECKPOINTS.length) - 1;
+/** 末位（读完）掩码，用于旧数据清洗 */
+const READ_CHECKPOINTS_END_BIT = 1 << (READ_CHECKPOINTS.length - 1);
 /**
  * 跳转识别阈值：单次 relocated 事件 fraction 变化超过该值视为跳转
  * （目录/滚动条/跳页），跳转事件不置位任何检查点，防止"开头直跳结尾"误计。
@@ -1076,21 +1078,23 @@ export class EpubReaderView extends FileView {
 			this.clampedToEnd = false;
 			this.stableCountAtEnd = 0;
 		}
-		// 回到开头附近（< 15%）→ 新一轮阅读，重置末尾锁定与通读计数锁存
+		// 回到开头附近（< 15%）→ 新一轮阅读，重置末尾锁定、计数锁存与检查点累计
 		if (rawPercent < 0.15) {
 			this.maxSeenPercent = 0;
 			this.stableCountAtEnd = 0;
 			this.clampedToEnd = false;
 			this.completedThisCycle = false;
+			this.readCheckpointMask = 0;
 		}
 		const percent = this.clampedToEnd ? 1 : rawPercent;
 
-		// 通读检查点（有界容差区间）：跳转事件（fraction 突变）不置位，防"开头直跳结尾"误计
+		// 通读检查点（有界容差区间）：已计过的周期不再累积位（防止末位残留进下一轮），
+		// 跳转事件（fraction 突变）也不置位，防"开头直跳结尾"误计
 		const prevMask = this.readCheckpointMask;
 		const isJump = Math.abs(rawPercent - this.lastRelocatedFraction) > READ_CHECKPOINTS_JUMP_DELTA;
 		this.lastRelocatedFraction = rawPercent;
 		let newMask = prevMask;
-		if (!isJump) {
+		if (!isJump && !this.completedThisCycle) {
 			for (let i = 0; i < READ_CHECKPOINTS.length - 1; i++) {
 				const cp = READ_CHECKPOINTS[i];
 				if (rawPercent >= cp.lo && (cp.hi === undefined || rawPercent < cp.hi)) {
@@ -1266,7 +1270,6 @@ export class EpubReaderView extends FileView {
 
 		this.readingTimeSeconds = progress.readingTimeSeconds ?? 0;
 		this.currentReadCount = progress.readCount ?? 0;
-		this.readCheckpointMask = progress.readCheckpoints ?? 0;
 		this.lastRelocatedFraction = progress.percent ?? 0;
 
 		const cfi = normalizeCfi(progress.cfi);
@@ -1283,6 +1286,15 @@ export class EpubReaderView extends FileView {
 
 		this.currentPercent = normalizePercent(progress.percent);
 		this.completedThisCycle = this.currentPercent >= 0.95;
+		// 清洗检查点掩码：停在/越过末尾则从零开始；中段残留的末位（旧版本遗留）强制去除，
+		// 确保本轮必须重新读到真正的末尾才计遍数
+		let readCheckpointMask = progress.readCheckpoints ?? 0;
+		if (this.currentPercent >= 0.95) {
+			readCheckpointMask = 0;
+		} else if ((readCheckpointMask & READ_CHECKPOINTS_END_BIT) !== 0) {
+			readCheckpointMask &= ~READ_CHECKPOINTS_END_BIT;
+		}
+		this.readCheckpointMask = readCheckpointMask;
 		this.updateProgressBar(this.currentPercent);
 		this.restoreAnnotations();
 	}

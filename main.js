@@ -12261,6 +12261,7 @@ var READ_CHECKPOINTS = [
   { target: 0.98, lo: 0.95, hi: 1.001 }
 ];
 var READ_CHECKPOINTS_ALL_MASK = (1 << READ_CHECKPOINTS.length) - 1;
+var READ_CHECKPOINTS_END_BIT = 1 << READ_CHECKPOINTS.length - 1;
 var READ_CHECKPOINTS_JUMP_DELTA = 0.6;
 var EpubReaderView = class extends import_obsidian13.FileView {
   // ================================================================
@@ -13069,13 +13070,14 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       this.stableCountAtEnd = 0;
       this.clampedToEnd = false;
       this.completedThisCycle = false;
+      this.readCheckpointMask = 0;
     }
     const percent = this.clampedToEnd ? 1 : rawPercent;
     const prevMask = this.readCheckpointMask;
     const isJump = Math.abs(rawPercent - this.lastRelocatedFraction) > READ_CHECKPOINTS_JUMP_DELTA;
     this.lastRelocatedFraction = rawPercent;
     let newMask = prevMask;
-    if (!isJump) {
+    if (!isJump && !this.completedThisCycle) {
       for (let i3 = 0; i3 < READ_CHECKPOINTS.length - 1; i3++) {
         const cp = READ_CHECKPOINTS[i3];
         if (rawPercent >= cp.lo && (cp.hi === void 0 || rawPercent < cp.hi)) {
@@ -13226,7 +13228,6 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     }
     this.readingTimeSeconds = progress.readingTimeSeconds ?? 0;
     this.currentReadCount = progress.readCount ?? 0;
-    this.readCheckpointMask = progress.readCheckpoints ?? 0;
     this.lastRelocatedFraction = progress.percent ?? 0;
     const cfi = normalizeCfi(progress.cfi);
     if (cfi) {
@@ -13241,6 +13242,13 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     }
     this.currentPercent = normalizePercent(progress.percent);
     this.completedThisCycle = this.currentPercent >= 0.95;
+    let readCheckpointMask = progress.readCheckpoints ?? 0;
+    if (this.currentPercent >= 0.95) {
+      readCheckpointMask = 0;
+    } else if ((readCheckpointMask & READ_CHECKPOINTS_END_BIT) !== 0) {
+      readCheckpointMask &= ~READ_CHECKPOINTS_END_BIT;
+    }
+    this.readCheckpointMask = readCheckpointMask;
     this.updateProgressBar(this.currentPercent);
     this.restoreAnnotations();
   }

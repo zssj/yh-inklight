@@ -13051,7 +13051,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       this.stableCountAtEnd = 0;
     }
     const isLast = detail.section != null && detail.section.current >= detail.section.total - 1;
-    if (!this.clampedToEnd && isLast && rawPercent >= 0.8) {
+    if (!this.clampedToEnd && isLast && rawPercent >= 0.95) {
       if (rawPercent >= this.maxSeenPercent) {
         this.stableCountAtEnd++;
         if (this.stableCountAtEnd >= 3) {

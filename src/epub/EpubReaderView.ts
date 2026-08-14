@@ -1063,7 +1063,7 @@ export class EpubReaderView extends FileView {
 		}
 		// 末节 + fraction 停滞在历史高位 + 连续未增长 → 已读完全书
 		const isLast = detail.section != null && detail.section.current >= detail.section.total - 1;
-		if (!this.clampedToEnd && isLast && rawPercent >= 0.80) {
+		if (!this.clampedToEnd && isLast && rawPercent >= 0.95) {
 			if (rawPercent >= this.maxSeenPercent) {
 				this.stableCountAtEnd++;
 				if (this.stableCountAtEnd >= 3) {

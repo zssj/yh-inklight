@@ -12545,7 +12545,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       cls: "yh-epub-toolbar-btn",
       attr: { type: "button", title: this.currentFlowMode === "paginated" ? "\u5207\u6362\u4E3A\u6EDA\u52A8" : "\u5207\u6362\u4E3A\u5206\u9875" }
     });
-    (0, import_obsidian13.setIcon)(flowBtn, this.currentFlowMode === "paginated" ? "lines-of-text" : "sheets");
+    (0, import_obsidian13.setIcon)(flowBtn, this.currentFlowMode === "paginated" ? "lines-of-text" : "sheets-in-box");
     flowBtn.addEventListener("click", () => this.toggleFlowMode());
     const prevBtn = this.toolbarControlsRowEl.createEl("button", {
       cls: "yh-epub-toolbar-btn",

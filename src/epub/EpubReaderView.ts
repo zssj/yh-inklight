@@ -480,7 +480,7 @@ export class EpubReaderView extends FileView {
 			cls: "yh-epub-toolbar-btn",
 			attr: { type: "button", title: this.currentFlowMode === "paginated" ? "切换为滚动" : "切换为分页" },
 		});
-		setIcon(flowBtn, this.currentFlowMode === "paginated" ? "lines-of-text" : "sheets");
+		setIcon(flowBtn, this.currentFlowMode === "paginated" ? "lines-of-text" : "sheets-in-box");
 		flowBtn.addEventListener("click", () => this.toggleFlowMode());
 
 		const prevBtn = this.toolbarControlsRowEl.createEl("button", {

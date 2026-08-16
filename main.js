@@ -12469,6 +12469,8 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       this.containerEl.style.setProperty("--yh-safe-bottom", "16px");
     }
     this.toolbarEl = this.containerEl.createDiv({ cls: "yh-epub-toolbar" });
+    this.toolbarTitleRowEl = this.toolbarEl.createDiv({ cls: "yh-epub-toolbar-row" });
+    this.toolbarControlsRowEl = this.toolbarEl.createDiv({ cls: "yh-epub-toolbar-row" });
     const body = this.containerEl.createDiv({ cls: "yh-epub-body" });
     this.sidebarContainerEl = body.createDiv({ cls: "yh-epub-sidebar" });
     this.sidebarContainerEl.toggleClass("is-open", this.sidebarOpen);
@@ -12493,31 +12495,32 @@ var EpubReaderView = class extends import_obsidian13.FileView {
    * 渲染工具栏：侧边栏切换、书名、字号、主题、翻页模式、导航按钮。
    */
   renderToolbar() {
-    this.toolbarEl.empty();
-    const toggleBtn = this.toolbarEl.createEl("button", {
+    this.toolbarTitleRowEl.empty();
+    this.toolbarControlsRowEl.empty();
+    const toggleBtn = this.toolbarTitleRowEl.createEl("button", {
       cls: "yh-epub-toolbar-btn",
       attr: { type: "button", title: "\u5207\u6362\u4FA7\u8FB9\u680F", "aria-label": "\u5207\u6362\u4FA7\u8FB9\u680F" }
     });
     (0, import_obsidian13.setIcon)(toggleBtn, "menu");
     toggleBtn.addEventListener("click", () => this.toggleSidebar());
-    this.toolbarEl.createDiv({
+    this.toolbarTitleRowEl.createDiv({
       cls: "yh-epub-toolbar-title",
       text: this.file?.basename ?? ""
     });
-    const fontSizeDec = this.toolbarEl.createEl("button", {
+    const fontSizeDec = this.toolbarControlsRowEl.createEl("button", {
       cls: "yh-epub-toolbar-btn",
       attr: { type: "button", title: "\u7F29\u5C0F\u5B57\u53F7", "aria-label": "\u7F29\u5C0F\u5B57\u53F7" },
       text: "A-"
     });
     fontSizeDec.addEventListener("click", () => this.changeFontSize(-1));
-    const fontSizeInc = this.toolbarEl.createEl("button", {
+    const fontSizeInc = this.toolbarControlsRowEl.createEl("button", {
       cls: "yh-epub-toolbar-btn",
       attr: { type: "button", title: "\u653E\u5927\u5B57\u53F7", "aria-label": "\u653E\u5927\u5B57\u53F7" },
       text: "A+"
     });
     fontSizeInc.addEventListener("click", () => this.changeFontSize(1));
     this.renderThemeSwatches();
-    const bookmarkBtn = this.toolbarEl.createEl("button", {
+    const bookmarkBtn = this.toolbarControlsRowEl.createEl("button", {
       cls: "yh-epub-toolbar-btn yh-epub-bookmark-btn",
       attr: { type: "button", title: "\u6DFB\u52A0\u4E66\u7B7E", "aria-label": "\u6DFB\u52A0\u4E66\u7B7E" }
     });
@@ -12532,25 +12535,25 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       updateBookmarkIcon();
       this.renderSidebar();
     });
-    const searchBtn = this.toolbarEl.createEl("button", {
+    const searchBtn = this.toolbarControlsRowEl.createEl("button", {
       cls: "yh-epub-toolbar-btn",
       attr: { type: "button", title: "\u641C\u7D22\u5168\u6587", "aria-label": "\u641C\u7D22\u5168\u6587" }
     });
     (0, import_obsidian13.setIcon)(searchBtn, "search");
     searchBtn.addEventListener("click", () => this.toggleToolbarSearch());
-    const flowBtn = this.toolbarEl.createEl("button", {
+    const flowBtn = this.toolbarControlsRowEl.createEl("button", {
       cls: "yh-epub-toolbar-btn",
       attr: { type: "button", title: this.currentFlowMode === "paginated" ? "\u5207\u6362\u4E3A\u6EDA\u52A8" : "\u5207\u6362\u4E3A\u5206\u9875" }
     });
     (0, import_obsidian13.setIcon)(flowBtn, this.currentFlowMode === "paginated" ? "lines-of-text" : "sheets");
     flowBtn.addEventListener("click", () => this.toggleFlowMode());
-    const prevBtn = this.toolbarEl.createEl("button", {
+    const prevBtn = this.toolbarControlsRowEl.createEl("button", {
       cls: "yh-epub-toolbar-btn",
       attr: { type: "button", title: "\u4E0A\u4E00\u9875", "aria-label": "\u4E0A\u4E00\u9875" }
     });
     (0, import_obsidian13.setIcon)(prevBtn, "chevron-left");
     prevBtn.addEventListener("click", () => this.prevPage());
-    const nextBtn = this.toolbarEl.createEl("button", {
+    const nextBtn = this.toolbarControlsRowEl.createEl("button", {
       cls: "yh-epub-toolbar-btn",
       attr: { type: "button", title: "\u4E0B\u4E00\u9875", "aria-label": "\u4E0B\u4E00\u9875" }
     });
@@ -12561,7 +12564,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
    * 在工具栏中渲染主题色块选择器，点击切换阅读主题。
    */
   renderThemeSwatches() {
-    const container = this.toolbarEl.createDiv({ cls: "yh-epub-theme-swatches" });
+    const container = this.toolbarControlsRowEl.createDiv({ cls: "yh-epub-theme-swatches" });
     for (const theme of EPUB_READING_THEMES) {
       const swatch = container.createEl("button", {
         cls: "yh-epub-theme-swatch",

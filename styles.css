@@ -1212,12 +1212,18 @@ span.yh-ov-expand-btn:hover {
   flex-shrink: 0;
   position: relative;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 4px;
   padding: 6px 10px;
   border-bottom: 1px solid var(--yh-border);
   background: var(--background-secondary);
-  flex-wrap: wrap;
+}
+
+.yh-epub-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
 }
 
 .yh-epub-toolbar-title {
@@ -1226,7 +1232,7 @@ span.yh-ov-expand-btn:hover {
   color: var(--text-normal);
   margin-right: auto;
   padding: 0 6px;
-  max-width: 40%;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

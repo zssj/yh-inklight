@@ -248,6 +248,8 @@ export class EpubReaderView extends FileView {
 	// ---- DOM 容器引用 ----
 
 	private toolbarEl!: HTMLElement;
+	private toolbarTitleRowEl!: HTMLElement;
+	private toolbarControlsRowEl!: HTMLElement;
 	private sidebarContainerEl!: HTMLElement;
 	private sidebarContentEl!: HTMLElement;
 	private readerContainerEl!: HTMLElement;
@@ -380,6 +382,10 @@ export class EpubReaderView extends FileView {
 
 		this.toolbarEl = this.containerEl.createDiv({ cls: "yh-epub-toolbar" });
 
+		// 固定两行：第一行 ☰+书名，第二行 控件（字号/主题/书签/搜索/翻页/导航）
+		this.toolbarTitleRowEl = this.toolbarEl.createDiv({ cls: "yh-epub-toolbar-row" });
+		this.toolbarControlsRowEl = this.toolbarEl.createDiv({ cls: "yh-epub-toolbar-row" });
+
 		const body = this.containerEl.createDiv({ cls: "yh-epub-body" });
 
 		this.sidebarContainerEl = body.createDiv({ cls: "yh-epub-sidebar" });
@@ -413,28 +419,29 @@ export class EpubReaderView extends FileView {
 	 * 渲染工具栏：侧边栏切换、书名、字号、主题、翻页模式、导航按钮。
 	 */
 	private renderToolbar(): void {
-		this.toolbarEl.empty();
+		this.toolbarTitleRowEl.empty();
+		this.toolbarControlsRowEl.empty();
 
-		const toggleBtn = this.toolbarEl.createEl("button", {
+		const toggleBtn = this.toolbarTitleRowEl.createEl("button", {
 			cls: "yh-epub-toolbar-btn",
 			attr: { type: "button", title: "切换侧边栏", "aria-label": "切换侧边栏" },
 		});
 		setIcon(toggleBtn, "menu");
 		toggleBtn.addEventListener("click", () => this.toggleSidebar());
 
-		this.toolbarEl.createDiv({
+		this.toolbarTitleRowEl.createDiv({
 			cls: "yh-epub-toolbar-title",
 			text: this.file?.basename ?? "",
 		});
 
-		const fontSizeDec = this.toolbarEl.createEl("button", {
+		const fontSizeDec = this.toolbarControlsRowEl.createEl("button", {
 			cls: "yh-epub-toolbar-btn",
 			attr: { type: "button", title: "缩小字号", "aria-label": "缩小字号" },
 			text: "A-",
 		});
 		fontSizeDec.addEventListener("click", () => this.changeFontSize(-1));
 
-		const fontSizeInc = this.toolbarEl.createEl("button", {
+		const fontSizeInc = this.toolbarControlsRowEl.createEl("button", {
 			cls: "yh-epub-toolbar-btn",
 			attr: { type: "button", title: "放大字号", "aria-label": "放大字号" },
 			text: "A+",
@@ -444,7 +451,7 @@ export class EpubReaderView extends FileView {
 		this.renderThemeSwatches();
 
 		// 书签按钮（Phase 4-B P2）
-		const bookmarkBtn = this.toolbarEl.createEl("button", {
+		const bookmarkBtn = this.toolbarControlsRowEl.createEl("button", {
 			cls: "yh-epub-toolbar-btn yh-epub-bookmark-btn",
 			attr: { type: "button", title: "添加书签", "aria-label": "添加书签" },
 		});
@@ -461,7 +468,7 @@ export class EpubReaderView extends FileView {
 		});
 
 			// 搜索按钮（Phase 4-B P4 - 移到工具栏）
-			const searchBtn = this.toolbarEl.createEl("button", {
+			const searchBtn = this.toolbarControlsRowEl.createEl("button", {
 				cls: "yh-epub-toolbar-btn",
 				attr: { type: "button", title: "搜索全文", "aria-label": "搜索全文" },
 			});
@@ -469,21 +476,21 @@ export class EpubReaderView extends FileView {
 			searchBtn.addEventListener("click", () => this.toggleToolbarSearch());
 
 			
-		const flowBtn = this.toolbarEl.createEl("button", {
+		const flowBtn = this.toolbarControlsRowEl.createEl("button", {
 			cls: "yh-epub-toolbar-btn",
 			attr: { type: "button", title: this.currentFlowMode === "paginated" ? "切换为滚动" : "切换为分页" },
 		});
 		setIcon(flowBtn, this.currentFlowMode === "paginated" ? "lines-of-text" : "sheets");
 		flowBtn.addEventListener("click", () => this.toggleFlowMode());
 
-		const prevBtn = this.toolbarEl.createEl("button", {
+		const prevBtn = this.toolbarControlsRowEl.createEl("button", {
 			cls: "yh-epub-toolbar-btn",
 			attr: { type: "button", title: "上一页", "aria-label": "上一页" },
 		});
 		setIcon(prevBtn, "chevron-left");
 		prevBtn.addEventListener("click", () => this.prevPage());
 
-		const nextBtn = this.toolbarEl.createEl("button", {
+		const nextBtn = this.toolbarControlsRowEl.createEl("button", {
 			cls: "yh-epub-toolbar-btn",
 			attr: { type: "button", title: "下一页", "aria-label": "下一页" },
 		});
@@ -495,7 +502,7 @@ export class EpubReaderView extends FileView {
 	 * 在工具栏中渲染主题色块选择器，点击切换阅读主题。
 	 */
 	private renderThemeSwatches(): void {
-		const container = this.toolbarEl.createDiv({ cls: "yh-epub-theme-swatches" });
+		const container = this.toolbarControlsRowEl.createDiv({ cls: "yh-epub-theme-swatches" });
 
 		for (const theme of EPUB_READING_THEMES) {
 			const swatch = container.createEl("button", {

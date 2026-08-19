@@ -350,6 +350,7 @@ export class EpubReaderView extends FileView {
 			this.applyFoliateAppearance();
 
 			await this.restoreProgress();
+			this.baselineReaderScroll();
 
 			this.renderToolbar();
 			this.renderSidebar();
@@ -777,6 +778,16 @@ export class EpubReaderView extends FileView {
 		this.lastScrollFlipTime = now;
 		this.setNavHidden(delta > 0);
 	};
+
+	/** 基线化滚动位置：恢复进度/加载完成后调用，避免程序化滚动误触发隐藏导航栏。 */
+	private baselineReaderScroll(): void {
+		const renderer = this.scrollHideRenderer as unknown as { start?: unknown } | null;
+		const start = Number(renderer?.start ?? 0);
+		if (Number.isFinite(start)) {
+			this.lastScrollPos = start;
+		}
+		this.lastScrollFlipTime = 0;
+	}
 
 	private setNavHidden(hidden: boolean): void {
 		if (this.navHidden === hidden) {
@@ -1814,6 +1825,8 @@ export class EpubReaderView extends FileView {
 			this.scrollHideRenderer = null;
 		}
 		this.setNavHidden(false);
+		this.lastScrollPos = 0;
+		this.lastScrollFlipTime = 0;
 		this.annotationCardEl?.dismiss();
 		this.annotationCardEl = null;
 		this.renderedAnnotationMeta.clear();

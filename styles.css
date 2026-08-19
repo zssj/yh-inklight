@@ -1208,15 +1208,16 @@ span.yh-ov-expand-btn:hover {
   padding-bottom: var(--yh-safe-bottom);
 }
 
-/* 手机端沉浸式：隐藏 Obsidian 底部导航栏（由 EpubReaderView 滚动监听触发） */
-.is-mobile body.yh-epub-nav-hidden .mobile-navbar {
-  transform: translateY(105%);
-  opacity: 0;
-  pointer-events: none;
-  transition: transform 0.25s ease, opacity 0.25s ease;
+/* 手机端沉浸式：隐藏 Obsidian 底部导航栏（由 EpubReaderView 滚动监听触发）
+   注意：body 是根节点，选择器不能带 .is-mobile 祖先前缀（.is-mobile 不可能在 body 外层） */
+body.yh-epub-nav-hidden .mobile-navbar {
+  transform: translateY(105%) !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: transform 0.25s ease, opacity 0.25s ease !important;
 }
 
-.is-mobile body.yh-epub-nav-hidden .yh-epub-reader {
+body.yh-epub-nav-hidden .yh-epub-reader {
   padding-bottom: 6px;
 }
 

@@ -12497,6 +12497,7 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
       this.tocEntries = this.buildFoliateTocEntries(this.foliateView.book?.toc ?? []);
       this.applyFoliateAppearance();
       await this.restoreProgress();
+      this.baselineReaderScroll();
       this.renderToolbar();
       this.renderSidebar();
     } catch (error) {
@@ -12834,6 +12835,15 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
     }
     this.scrollHideRenderer = renderer;
     renderer.addEventListener("scroll", this.handleReaderScroll);
+  }
+  /** 基线化滚动位置：恢复进度/加载完成后调用，避免程序化滚动误触发隐藏导航栏。 */
+  baselineReaderScroll() {
+    const renderer = this.scrollHideRenderer;
+    const start = Number(renderer?.start ?? 0);
+    if (Number.isFinite(start)) {
+      this.lastScrollPos = start;
+    }
+    this.lastScrollFlipTime = 0;
   }
   setNavHidden(hidden) {
     if (this.navHidden === hidden) {
@@ -13731,6 +13741,8 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
       this.scrollHideRenderer = null;
     }
     this.setNavHidden(false);
+    this.lastScrollPos = 0;
+    this.lastScrollFlipTime = 0;
     this.annotationCardEl?.dismiss();
     this.annotationCardEl = null;
     this.renderedAnnotationMeta.clear();

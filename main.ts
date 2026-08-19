@@ -30,6 +30,7 @@ import { StickyNoteLane } from "./src/views/stickyNoteLane";
 import { EpubReaderView, EPUB_READER_VIEW_TYPE } from "./src/epub/EpubReaderView";
 import { EpubBookshelfView, EPUB_BOOKSHELF_VIEW_TYPE } from "./src/epub/EpubBookshelfView";
 import { registerEpubGotoHandler } from "./src/epub/EpubGotoHandler";
+import { MarkdownStatsView, MARKDOWN_STATS_VIEW_TYPE } from "./src/views/markdownStatsView";
 
 interface CommentModalValue {
   title: string;
@@ -66,6 +67,9 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   private stickyLane!: StickyNoteLane;
   private lastSelection: SelectionSnapshot | null = null;
   private renameMigrationTimer: number | null = null;
+  private settingsSaveTimer: number | null = null;
+  private lastCountedPath = "";
+  private lastCountedAt = 0;
 
   async onload(): Promise<void> {
     addIcon("yh-inklight-icon", YH_INKLIGHT_ICON);
@@ -88,6 +92,10 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     this.registerView(
       EPUB_BOOKSHELF_VIEW_TYPE,
       (leaf) => new EpubBookshelfView(leaf, this.store, this.settings, () => this.saveSettings(), (file) => this.openEpubBook(file)),
+    );
+    this.registerView(
+      MARKDOWN_STATS_VIEW_TYPE,
+      (leaf) => new MarkdownStatsView(leaf, this.settings, () => this.saveSettings(), (file) => this.openMarkdownNote(file)),
     );
     this.registerEditorExtension([
       createHighlightExtension({
@@ -187,11 +195,15 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     if (this.renameMigrationTimer !== null) {
       window.clearTimeout(this.renameMigrationTimer);
     }
+    if (this.settingsSaveTimer !== null) {
+      window.clearTimeout(this.settingsSaveTimer);
+    }
     this.toolbar?.destroy();
     this.popover?.destroy();
     this.stickyLane?.destroy();
     this.app.workspace.detachLeavesOfType(ANNOTATION_SIDEBAR_VIEW);
     this.app.workspace.detachLeavesOfType(EPUB_BOOKSHELF_VIEW_TYPE);
+    this.app.workspace.detachLeavesOfType(MARKDOWN_STATS_VIEW_TYPE);
   }
 
   async loadSettings(): Promise<void> {
@@ -288,6 +300,12 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       callback: () => this.activateBookshelf(),
     });
 
+    this.addCommand({
+      id: "open-markdown-stats",
+      name: "打开笔记使用统计",
+      callback: () => this.activateMarkdownStats(),
+    });
+
     // Phase 5 P3：PDF 目录
     this.addCommand({
       id: "show-pdf-outline",
@@ -376,6 +394,15 @@ export default class OverlayAnnotationsPlugin extends Plugin {
 
         this.renameMigrationTimer = window.setTimeout(async () => {
           await this.store.migrateFilePath(oldPath, file);
+          // 迁移 Markdown 打开次数统计：key 跟随路径
+          if (isMarkdown) {
+            const stats = this.settings.mdOpenStats;
+            if (stats && stats[oldPath] && file.path !== oldPath) {
+              stats[file.path] = stats[oldPath];
+              delete stats[oldPath];
+              this.debouncedSaveSettings();
+            }
+          }
           await this.refreshAnnotations();
           this.renameMigrationTimer = null;
         }, 100);
@@ -391,6 +418,70 @@ export default class OverlayAnnotationsPlugin extends Plugin {
         }
       }),
     );
+
+    // Markdown 打开次数统计：60s 冷却去重，只写 data.json，不触碰 md 原文
+    this.registerEvent(
+      this.app.workspace.on("file-open", (file) => {
+        this.countMarkdownOpen(file);
+      }),
+    );
+
+    this.registerEvent(
+      this.app.vault.on("delete", (file) => {
+        if (file instanceof TFile && file.extension.toLowerCase() === "md") {
+          const stats = this.settings.mdOpenStats;
+          if (stats && stats[file.path]) {
+            delete stats[file.path];
+            this.debouncedSaveSettings();
+          }
+        }
+      }),
+    );
+  }
+
+  /** 记录一次 Markdown 打开（开启开关、.md 文件、60s 冷却内不重复计）。 */
+  private countMarkdownOpen(file: TFile | null): void {
+    if (!this.settings.mdOpenTracking || !(file instanceof TFile) || file.extension.toLowerCase() !== "md") {
+      return;
+    }
+    const now = Date.now();
+    if (file.path === this.lastCountedPath && now - this.lastCountedAt < 60_000) {
+      return;
+    }
+    const stats = this.settings.mdOpenStats ?? (this.settings.mdOpenStats = {});
+    const existing = stats[file.path];
+    if (existing && now - (Date.parse(existing.lastOpenedAt) || 0) < 60_000) {
+      return;
+    }
+    this.lastCountedPath = file.path;
+    this.lastCountedAt = now;
+    stats[file.path] = {
+      openCount: (existing?.openCount ?? 0) + 1,
+      lastOpenedAt: new Date(now).toISOString(),
+    };
+    this.debouncedSaveSettings();
+    this.refreshMarkdownStatsViews();
+  }
+
+  /** 防抖保存设置：合并频繁的打开计数写盘。 */
+  private debouncedSaveSettings(): void {
+    if (this.settingsSaveTimer !== null) {
+      window.clearTimeout(this.settingsSaveTimer);
+    }
+    this.settingsSaveTimer = window.setTimeout(() => {
+      this.settingsSaveTimer = null;
+      void this.saveSettings();
+    }, 1500);
+  }
+
+  /** 刷新所有已打开的「笔记使用统计」视图。 */
+  refreshMarkdownStatsViews(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(MARKDOWN_STATS_VIEW_TYPE)) {
+      const view = leaf.view;
+      if (view instanceof MarkdownStatsView) {
+        view.refresh();
+      }
+    }
   }
 
 
@@ -599,6 +690,29 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   }
 
   async openEpubBook(file: TFile): Promise<void> {
+    const leaf = this.app.workspace.getLeaf("tab");
+    await leaf.openFile(file);
+    this.app.workspace.revealLeaf(leaf);
+  }
+
+  async activateMarkdownStats(): Promise<void> {
+    let leaf = this.app.workspace.getLeavesOfType(MARKDOWN_STATS_VIEW_TYPE)[0];
+    if (!leaf) {
+      const nextLeaf = this.app.workspace.getRightLeaf(false);
+      if (!nextLeaf) {
+        return;
+      }
+      leaf = nextLeaf;
+      await leaf.setViewState({ type: MARKDOWN_STATS_VIEW_TYPE, active: true });
+    }
+    this.app.workspace.revealLeaf(leaf);
+    const view = leaf.view;
+    if (view instanceof MarkdownStatsView) {
+      view.refresh();
+    }
+  }
+
+  async openMarkdownNote(file: TFile): Promise<void> {
     const leaf = this.app.workspace.getLeaf("tab");
     await leaf.openFile(file);
     this.app.workspace.revealLeaf(leaf);

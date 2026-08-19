@@ -113,6 +113,7 @@ export class AnnotationSettingsTab extends PluginSettingTab {
       });
 
     this.renderEpubSettings();
+    this.renderMarkdownStatsSettings();
   }
 
   /** EPUB 阅读相关设置：字号 / 主题 / 翻页 / 高亮样式 / 摘录目录 / 段落模式 / 脚注 / 回显 */
@@ -195,6 +196,33 @@ export class AnnotationSettingsTab extends PluginSettingTab {
         dropdown.setValue(this.plugin.settings.epubHighlightStyle).onChange(async (value) => {
           this.plugin.settings.epubHighlightStyle = value as EpubHighlightStyle;
           await this.plugin.saveSettings();
+        });
+      });
+  }
+
+  /** Markdown 打开次数统计设置：开关 + 清空 */
+  private renderMarkdownStatsSettings(): void {
+    const { containerEl } = this;
+    containerEl.createEl("h3", { text: "Markdown 统计" });
+
+    new Setting(containerEl)
+      .setName("统计 Markdown 打开次数")
+      .setDesc("记录每个 Markdown 笔记被打开的次数，用于「笔记使用统计」视图。只记录启用后的打开行为。")
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.mdOpenTracking).onChange(async (value) => {
+          this.plugin.settings.mdOpenTracking = value;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("清空打开次数统计")
+      .setDesc("将全部 Markdown 笔记的打开次数清零（不影响批注数据）。")
+      .addButton((button) => {
+        button.setButtonText("清空统计").setWarning().onClick(async () => {
+          this.plugin.settings.mdOpenStats = {};
+          await this.plugin.saveSettings();
+          this.plugin.refreshMarkdownStatsViews();
         });
       });
   }

@@ -2508,5 +2508,142 @@ a.yh-epub-goto-link:hover {
   background: rgba(255, 255, 255, 0.3);
 }
 
+/* ============================================================
+   Markdown 笔记使用统计视图
+   ============================================================ */
+
+.yh-md-stats-view {
+  padding: 12px;
+}
+
+.yh-md-stats-view .md-stats-heading {
+  margin: 0 0 10px;
+  font-size: var(--yh-font-md);
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.yh-md-stats-view .md-stats-empty {
+  padding: 32px 8px;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: var(--yh-font-sm);
+}
+
+.yh-md-stats-view .md-stats-controls {
+  margin-bottom: 10px;
+}
+
+.yh-md-stats-view .md-stats-sort-toggle {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--yh-border);
+  border-radius: var(--yh-radius-sm);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--yh-font-sm);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.yh-md-stats-view .md-stats-sort-toggle:hover {
+  border-color: var(--yh-yellow);
+  background: var(--background-secondary);
+}
+
+.md-stats-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.md-stats-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--yh-border);
+  border-radius: var(--yh-radius-sm);
+  background: var(--background-primary);
+  cursor: pointer;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.md-stats-item:hover {
+  border-color: var(--yh-yellow);
+  box-shadow: var(--yh-shadow-sm);
+}
+
+.md-stats-item.md-stats-unopened {
+  border-style: dashed;
+  opacity: 0.85;
+}
+
+.md-stats-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.md-stats-title {
+  font-size: var(--yh-font-md);
+  font-weight: 600;
+  color: var(--text-normal);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.md-stats-path {
+  margin-top: 2px;
+  font-size: var(--yh-font-xs);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.md-stats-badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: var(--yh-font-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--background-modifier-border);
+  white-space: nowrap;
+}
+
+.md-stats-badge.md-stats-badge-hot {
+  color: #fff;
+  background: var(--yh-yellow, #f5c518);
+}
+
+.md-stats-delete {
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--yh-border);
+  border-radius: var(--yh-radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--yh-font-xs);
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
+}
+
+.md-stats-delete:hover {
+  border-color: var(--color-red, #e53935);
+  color: var(--color-red, #e53935);
+}
+
+.yh-md-stats-modal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  justify-content: flex-end;
+}
+
 
 

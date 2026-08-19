@@ -171,6 +171,9 @@ export interface AnnotationPluginSettings {
   epubBookshelfSort: EpubBookshelfSortMode;
   // --- PDF 增强 ---
   pdfProgressTracking: boolean;
+  // --- Markdown 打开统计 ---
+  mdOpenTracking: boolean;
+  mdOpenStats: Record<string, MdOpenStat>;
 }
 
 export interface SelectionSnapshot {
@@ -178,6 +181,12 @@ export interface SelectionSnapshot {
   startOffset: number;
   endOffset: number;
   selectedText: string;
+}
+
+/** Markdown 打开次数统计（key = vault 路径，存于插件 data.json） */
+export interface MdOpenStat {
+  openCount: number;
+  lastOpenedAt: string;
 }
 
 export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
@@ -199,6 +208,9 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   epubBookshelfSort: "name",
   // PDF 增强
   pdfProgressTracking: true,
+  // Markdown 打开统计
+  mdOpenTracking: true,
+  mdOpenStats: {},
 };
 
 export const EMPTY_INDEX: AnnotationIndex = {

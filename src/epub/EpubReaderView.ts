@@ -255,6 +255,13 @@ export class EpubReaderView extends FileView {
 	private readerContainerEl!: HTMLElement;
 	private progressEl!: HTMLElement;
 
+	// ---- 手机端沉浸式导航栏（隐藏 Obsidian 底部 .mobile-navbar）----
+
+	private navHidden = false;
+	private lastScrollPos = 0;
+	private lastScrollFlipTime = 0;
+	private scrollHideRenderer: HTMLElement | null = null;
+
 	// ================================================================
 	// 构造 & 生命周期
 	// ================================================================
@@ -337,6 +344,7 @@ export class EpubReaderView extends FileView {
 			this.configureFoliateView(this.foliateView);
 			this.registerFoliateEvents(this.foliateView);
 			await openBookFromBuffer(this.foliateView, arrayBuffer, file.name);
+			this.attachReaderScrollHide();
 			this.applyFoliateLayout();
 			this.tocEntries = this.buildFoliateTocEntries(this.foliateView.book?.toc ?? []);
 			this.applyFoliateAppearance();
@@ -718,6 +726,64 @@ export class EpubReaderView extends FileView {
 		view.addEventListener("relocate", this.handleFoliateRelocate as EventListener);
 		view.addEventListener("draw-annotation", this.handleFoliateDrawAnnotation as EventListener);
 		view.addEventListener("show-annotation", this.handleFoliateShowAnnotation as EventListener);
+	}
+
+	// ================================================================
+	// 手机端沉浸式导航栏（复刻核心 Full screen 行为，仅对本视图生效）
+	// ================================================================
+
+	/**
+	 * 监听 foliate 渲染器的滚动事件：foliate-view 内部的 foliate-paginator
+	 * 在容器滚动时派发 scroll，并暴露 start（当前滚动偏移）getter。
+	 * 须在书打开、renderer 创建之后调用。
+	 */
+	private attachReaderScrollHide(): void {
+		if (!this.foliateView) {
+			return;
+		}
+		const renderer = this.foliateView.renderer as unknown as HTMLElement | undefined;
+		if (!renderer || renderer === this.scrollHideRenderer) {
+			return;
+		}
+		if (this.scrollHideRenderer) {
+			this.scrollHideRenderer.removeEventListener("scroll", this.handleReaderScroll);
+		}
+		this.scrollHideRenderer = renderer;
+		renderer.addEventListener("scroll", this.handleReaderScroll);
+	}
+
+	private handleReaderScroll = (): void => {
+		if (!this.pluginSettings.epubHideMobileNavbar || !Platform.isMobile) {
+			return;
+		}
+		if (this.app.workspace.getActiveViewOfType(EpubReaderView) !== this) {
+			return;
+		}
+		const renderer = this.scrollHideRenderer as unknown as { start?: unknown } | null;
+		const start = Number(renderer?.start ?? 0);
+		if (!Number.isFinite(start)) {
+			return;
+		}
+		const delta = start - this.lastScrollPos;
+		this.lastScrollPos = start;
+		if (delta === 0) {
+			return;
+		}
+		// 200ms 触发门限：避免翻页回弹/惯性滚动导致的闪烁
+		const now = Date.now();
+		if (now - this.lastScrollFlipTime < 200) {
+			return;
+		}
+		this.lastScrollFlipTime = now;
+		this.setNavHidden(delta > 0);
+	};
+
+	private setNavHidden(hidden: boolean): void {
+		if (this.navHidden === hidden) {
+			return;
+		}
+		this.navHidden = hidden;
+		document.body.toggleClass("yh-epub-nav-hidden", hidden);
 	}
 
 	// ================================================================
@@ -1743,6 +1809,11 @@ export class EpubReaderView extends FileView {
 			}
 			this.foliateView = null;
 		}
+		if (this.scrollHideRenderer) {
+			this.scrollHideRenderer.removeEventListener("scroll", this.handleReaderScroll);
+			this.scrollHideRenderer = null;
+		}
+		this.setNavHidden(false);
 		this.annotationCardEl?.dismiss();
 		this.annotationCardEl = null;
 		this.renderedAnnotationMeta.clear();

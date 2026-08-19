@@ -8433,7 +8433,9 @@ var DEFAULT_SETTINGS = {
   pdfProgressTracking: true,
   // Markdown 打开统计
   mdOpenTracking: true,
-  mdOpenStats: {}
+  mdOpenStats: {},
+  // EPUB 手机端沉浸式导航栏
+  epubHideMobileNavbar: true
 };
 var EMPTY_INDEX = {
   version: 1,
@@ -9358,6 +9360,12 @@ var AnnotationSettingsTab = class extends import_obsidian5.PluginSettingTab {
       dropdown.addOption("scrolled", "\u6EDA\u52A8");
       dropdown.setValue(this.plugin.settings.epubDefaultFlow).onChange(async (value) => {
         this.plugin.settings.epubDefaultFlow = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    new import_obsidian5.Setting(containerEl).setName("\u624B\u673A\u7AEF\u6C89\u6D78\u5F0F\u5BFC\u822A\u680F").setDesc("\u624B\u673A\u4E0A\u9605\u8BFB EPUB \u65F6\uFF0C\u5411\u4E0B\u6EDA\u52A8\u81EA\u52A8\u9690\u85CF Obsidian \u5E95\u90E8\u5BFC\u822A\u680F\uFF0C\u5411\u4E0A\u6EDA\u52A8\u6062\u590D\u3002").addToggle((toggle) => {
+      toggle.setValue(this.plugin.settings.epubHideMobileNavbar).onChange(async (value) => {
+        this.plugin.settings.epubHideMobileNavbar = value;
         await this.plugin.saveSettings();
       });
     });
@@ -12285,7 +12293,7 @@ var READ_CHECKPOINTS = [
 var READ_CHECKPOINTS_ALL_MASK = (1 << READ_CHECKPOINTS.length) - 1;
 var READ_CHECKPOINTS_END_BIT = 1 << READ_CHECKPOINTS.length - 1;
 var READ_CHECKPOINTS_JUMP_DELTA = 0.6;
-var EpubReaderView = class extends import_obsidian13.FileView {
+var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
   // ================================================================
   // 构造 & 生命周期
   // ================================================================
@@ -12355,6 +12363,35 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     this.blurHandler = null;
     this.focusHandler = null;
     this.lastFlushTimestamp = 0;
+    // ---- 手机端沉浸式导航栏（隐藏 Obsidian 底部 .mobile-navbar）----
+    this.navHidden = false;
+    this.lastScrollPos = 0;
+    this.lastScrollFlipTime = 0;
+    this.scrollHideRenderer = null;
+    this.handleReaderScroll = () => {
+      if (!this.pluginSettings.epubHideMobileNavbar || !import_obsidian13.Platform.isMobile) {
+        return;
+      }
+      if (this.app.workspace.getActiveViewOfType(_EpubReaderView) !== this) {
+        return;
+      }
+      const renderer = this.scrollHideRenderer;
+      const start = Number(renderer?.start ?? 0);
+      if (!Number.isFinite(start)) {
+        return;
+      }
+      const delta = start - this.lastScrollPos;
+      this.lastScrollPos = start;
+      if (delta === 0) {
+        return;
+      }
+      const now = Date.now();
+      if (now - this.lastScrollFlipTime < 200) {
+        return;
+      }
+      this.lastScrollFlipTime = now;
+      this.setNavHidden(delta > 0);
+    };
     /**
      * 销毁当前浮动上下文菜单。
      */
@@ -12455,6 +12492,7 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       this.configureFoliateView(this.foliateView);
       this.registerFoliateEvents(this.foliateView);
       await openBookFromBuffer(this.foliateView, arrayBuffer, file.name);
+      this.attachReaderScrollHide();
       this.applyFoliateLayout();
       this.tocEntries = this.buildFoliateTocEntries(this.foliateView.book?.toc ?? []);
       this.applyFoliateAppearance();
@@ -12774,6 +12812,35 @@ var EpubReaderView = class extends import_obsidian13.FileView {
     view.addEventListener("relocate", this.handleFoliateRelocate);
     view.addEventListener("draw-annotation", this.handleFoliateDrawAnnotation);
     view.addEventListener("show-annotation", this.handleFoliateShowAnnotation);
+  }
+  // ================================================================
+  // 手机端沉浸式导航栏（复刻核心 Full screen 行为，仅对本视图生效）
+  // ================================================================
+  /**
+   * 监听 foliate 渲染器的滚动事件：foliate-view 内部的 foliate-paginator
+   * 在容器滚动时派发 scroll，并暴露 start（当前滚动偏移）getter。
+   * 须在书打开、renderer 创建之后调用。
+   */
+  attachReaderScrollHide() {
+    if (!this.foliateView) {
+      return;
+    }
+    const renderer = this.foliateView.renderer;
+    if (!renderer || renderer === this.scrollHideRenderer) {
+      return;
+    }
+    if (this.scrollHideRenderer) {
+      this.scrollHideRenderer.removeEventListener("scroll", this.handleReaderScroll);
+    }
+    this.scrollHideRenderer = renderer;
+    renderer.addEventListener("scroll", this.handleReaderScroll);
+  }
+  setNavHidden(hidden) {
+    if (this.navHidden === hidden) {
+      return;
+    }
+    this.navHidden = hidden;
+    document.body.toggleClass("yh-epub-nav-hidden", hidden);
   }
   // ================================================================
   // 安全处理
@@ -13659,6 +13726,11 @@ var EpubReaderView = class extends import_obsidian13.FileView {
       }
       this.foliateView = null;
     }
+    if (this.scrollHideRenderer) {
+      this.scrollHideRenderer.removeEventListener("scroll", this.handleReaderScroll);
+      this.scrollHideRenderer = null;
+    }
+    this.setNavHidden(false);
     this.annotationCardEl?.dismiss();
     this.annotationCardEl = null;
     this.renderedAnnotationMeta.clear();

@@ -187,6 +187,16 @@ export class AnnotationSettingsTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName("手机端沉浸式导航栏")
+      .setDesc("手机上阅读 EPUB 时，向下滚动自动隐藏 Obsidian 底部导航栏，向上滚动恢复。")
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.epubHideMobileNavbar).onChange(async (value) => {
+          this.plugin.settings.epubHideMobileNavbar = value;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
       .setName("高亮样式")
       .setDesc("EPUB 文本标注的默认呈现样式。")
       .addDropdown((dropdown) => {

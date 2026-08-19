@@ -174,6 +174,8 @@ export interface AnnotationPluginSettings {
   // --- Markdown 打开统计 ---
   mdOpenTracking: boolean;
   mdOpenStats: Record<string, MdOpenStat>;
+  // --- EPUB 手机端沉浸式导航栏 ---
+  epubHideMobileNavbar: boolean;
 }
 
 export interface SelectionSnapshot {
@@ -211,6 +213,8 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   // Markdown 打开统计
   mdOpenTracking: true,
   mdOpenStats: {},
+  // EPUB 手机端沉浸式导航栏
+  epubHideMobileNavbar: true,
 };
 
 export const EMPTY_INDEX: AnnotationIndex = {

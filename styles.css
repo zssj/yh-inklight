@@ -1208,6 +1208,18 @@ span.yh-ov-expand-btn:hover {
   padding-bottom: var(--yh-safe-bottom);
 }
 
+/* 手机端沉浸式：隐藏 Obsidian 底部导航栏（由 EpubReaderView 滚动监听触发） */
+.is-mobile body.yh-epub-nav-hidden .mobile-navbar {
+  transform: translateY(105%);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.25s ease, opacity 0.25s ease;
+}
+
+.is-mobile body.yh-epub-nav-hidden .yh-epub-reader {
+  padding-bottom: 6px;
+}
+
 .yh-epub-toolbar {
   flex-shrink: 0;
   position: relative;

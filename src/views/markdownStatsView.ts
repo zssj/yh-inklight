@@ -5,7 +5,7 @@
  */
 
 import { App, ItemView, Modal, Notice, TFile, WorkspaceLeaf } from "obsidian";
-import { AnnotationPluginSettings, MdOpenStat } from "../storage/types";
+import { MdOpenStat } from "../storage/types";
 
 export const MARKDOWN_STATS_VIEW_TYPE = "inklight-md-stats";
 
@@ -44,7 +44,7 @@ class ConfirmDeleteModal extends Modal {
 }
 
 export class MarkdownStatsView extends ItemView {
-  private settings: AnnotationPluginSettings;
+  private stats: Record<string, MdOpenStat>;
   private saveSettings: () => Promise<void>;
   private openCallback: (file: TFile) => void;
   private entries: StatsEntry[] = [];
@@ -53,12 +53,12 @@ export class MarkdownStatsView extends ItemView {
 
   constructor(
     leaf: WorkspaceLeaf,
-    settings: AnnotationPluginSettings,
+    stats: Record<string, MdOpenStat>,
     saveSettings: () => Promise<void>,
     onOpen: (file: TFile) => void,
   ) {
     super(leaf);
-    this.settings = settings;
+    this.stats = stats;
     this.saveSettings = saveSettings;
     this.openCallback = onOpen;
   }
@@ -104,9 +104,8 @@ export class MarkdownStatsView extends ItemView {
     this.buildControls(container);
     this.listEl = container.createDiv({ cls: "md-stats-list" });
 
-    const stats = this.settings.mdOpenStats ?? {};
     this.entries = files.map((file) => {
-      const stat: MdOpenStat | undefined = stats[file.path];
+      const stat: MdOpenStat | undefined = this.stats[file.path];
       return {
         file,
         openCount: stat?.openCount ?? 0,

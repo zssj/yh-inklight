@@ -8433,7 +8433,6 @@ var DEFAULT_SETTINGS = {
   pdfProgressTracking: true,
   // Markdown 打开统计
   mdOpenTracking: true,
-  mdOpenStats: {},
   // EPUB 手机端沉浸式导航栏
   epubHideMobileNavbar: true
 };
@@ -9391,8 +9390,8 @@ var AnnotationSettingsTab = class extends import_obsidian5.PluginSettingTab {
     });
     new import_obsidian5.Setting(containerEl).setName("\u6E05\u7A7A\u6253\u5F00\u6B21\u6570\u7EDF\u8BA1").setDesc("\u5C06\u5168\u90E8 Markdown \u7B14\u8BB0\u7684\u6253\u5F00\u6B21\u6570\u6E05\u96F6\uFF08\u4E0D\u5F71\u54CD\u6279\u6CE8\u6570\u636E\uFF09\u3002").addButton((button) => {
       button.setButtonText("\u6E05\u7A7A\u7EDF\u8BA1").setWarning().onClick(async () => {
-        this.plugin.settings.mdOpenStats = {};
-        await this.plugin.saveSettings();
+        this.plugin.mdOpenStats = {};
+        await this.plugin.saveMdOpenStats();
         this.plugin.refreshMarkdownStatsViews();
       });
     });
@@ -14760,11 +14759,11 @@ var ConfirmDeleteModal = class extends import_obsidian16.Modal {
   }
 };
 var MarkdownStatsView = class extends import_obsidian16.ItemView {
-  constructor(leaf, settings, saveSettings, onOpen) {
+  constructor(leaf, stats, saveSettings, onOpen) {
     super(leaf);
     this.entries = [];
     this.ascending = true;
-    this.settings = settings;
+    this.stats = stats;
     this.saveSettings = saveSettings;
     this.openCallback = onOpen;
   }
@@ -14799,9 +14798,8 @@ var MarkdownStatsView = class extends import_obsidian16.ItemView {
     }
     this.buildControls(container);
     this.listEl = container.createDiv({ cls: "md-stats-list" });
-    const stats = this.settings.mdOpenStats ?? {};
     this.entries = files.map((file) => {
-      const stat = stats[file.path];
+      const stat = this.stats[file.path];
       return {
         file,
         openCount: stat?.openCount ?? 0,
@@ -14890,6 +14888,7 @@ var NOTE_TITLE_OPTIONS = [
   { value: "Question", label: "\u2753 \u7591\u95EE" },
   { value: "Reminder", label: "\u{1F514} \u63D0\u9192" }
 ];
+var MD_OPEN_STATS_PATH = ".obsidian-annotations/md-open-stats.json";
 var YH_INKLIGHT_ICON = `
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
     <rect x="5" y="5" width="90" height="90" rx="20" ry="20" fill="#F5C518"/>
@@ -14909,8 +14908,11 @@ var OverlayAnnotationsPlugin = class extends import_obsidian17.Plugin {
     this.lastSelection = null;
     this.renameMigrationTimer = null;
     this.settingsSaveTimer = null;
+    this.statsSaveTimer = null;
     this.lastCountedPath = "";
     this.lastCountedAt = 0;
+    /** Markdown 打开次数统计（存于独立 sidecar，插件重装不丢失） */
+    this.mdOpenStats = {};
   }
   async onload() {
     (0, import_obsidian17.addIcon)("yh-inklight-icon", YH_INKLIGHT_ICON);
@@ -14918,6 +14920,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian17.Plugin {
     console.info(`yh-inklight loaded v${this.manifest.version}`);
     this.store = new AnnotationStore(this.app);
     await this.store.initialize();
+    await this.loadMdOpenStats();
     this.registerView(ANNOTATION_SIDEBAR_VIEW, (leaf) => new AnnotationSidebarView(leaf, this));
     this.registerView(EPUB_READER_VIEW_TYPE, (leaf) => new EpubReaderView(leaf, this.store, this.settings, () => this.refreshAnnotations(), () => this.saveSettings()));
     try {
@@ -14931,7 +14934,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian17.Plugin {
     );
     this.registerView(
       MARKDOWN_STATS_VIEW_TYPE,
-      (leaf) => new MarkdownStatsView(leaf, this.settings, () => this.saveSettings(), (file) => this.openMarkdownNote(file))
+      (leaf) => new MarkdownStatsView(leaf, this.mdOpenStats, () => this.saveSettings(), (file) => this.openMarkdownNote(file))
     );
     this.registerEditorExtension([
       createHighlightExtension({
@@ -15026,6 +15029,9 @@ var OverlayAnnotationsPlugin = class extends import_obsidian17.Plugin {
     }
     if (this.settingsSaveTimer !== null) {
       window.clearTimeout(this.settingsSaveTimer);
+    }
+    if (this.statsSaveTimer !== null) {
+      window.clearTimeout(this.statsSaveTimer);
     }
     this.toolbar?.destroy();
     this.popover?.destroy();
@@ -15198,11 +15204,11 @@ ${lines.slice(0, 8).join("\n")}`);
         this.renameMigrationTimer = window.setTimeout(async () => {
           await this.store.migrateFilePath(oldPath, file);
           if (isMarkdown) {
-            const stats = this.settings.mdOpenStats;
-            if (stats && stats[oldPath] && file.path !== oldPath) {
+            const stats = this.mdOpenStats;
+            if (stats[oldPath] && file.path !== oldPath) {
               stats[file.path] = stats[oldPath];
               delete stats[oldPath];
-              this.debouncedSaveSettings();
+              this.debouncedSaveMdOpenStats();
             }
           }
           await this.refreshAnnotations();
@@ -15227,14 +15233,54 @@ ${lines.slice(0, 8).join("\n")}`);
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
         if (file instanceof import_obsidian17.TFile && file.extension.toLowerCase() === "md") {
-          const stats = this.settings.mdOpenStats;
-          if (stats && stats[file.path]) {
+          const stats = this.mdOpenStats;
+          if (stats[file.path]) {
             delete stats[file.path];
-            this.debouncedSaveSettings();
+            this.debouncedSaveMdOpenStats();
           }
         }
       })
     );
+  }
+  /** 加载 Markdown 打开次数统计（独立 sidecar），并迁移 data.json 中的旧数据。 */
+  async loadMdOpenStats() {
+    let loaded = {};
+    try {
+      const raw = await this.app.vault.adapter.read(MD_OPEN_STATS_PATH);
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        loaded = parsed;
+      }
+    } catch {
+    }
+    this.mdOpenStats = loaded;
+    const legacy = this.settings.mdOpenStats;
+    if (legacy && Object.keys(legacy).length > 0) {
+      if (Object.keys(this.mdOpenStats).length === 0) {
+        this.mdOpenStats = { ...legacy };
+      }
+      delete this.settings.mdOpenStats;
+      await this.saveSettings();
+      await this.saveMdOpenStats();
+    }
+  }
+  /** 将打开次数统计写入独立 sidecar 文件。 */
+  async saveMdOpenStats() {
+    try {
+      await this.app.vault.adapter.write(MD_OPEN_STATS_PATH, JSON.stringify(this.mdOpenStats, null, 2));
+    } catch (error) {
+      console.warn("yh-inklight: \u5199\u5165\u6253\u5F00\u6B21\u6570\u7EDF\u8BA1\u5931\u8D25", error);
+    }
+  }
+  /** 防抖保存打开次数统计。 */
+  debouncedSaveMdOpenStats() {
+    if (this.statsSaveTimer !== null) {
+      window.clearTimeout(this.statsSaveTimer);
+    }
+    this.statsSaveTimer = window.setTimeout(() => {
+      this.statsSaveTimer = null;
+      void this.saveMdOpenStats();
+    }, 1500);
   }
   /** 记录一次 Markdown 打开（开启开关、.md 文件、60s 冷却内不重复计）。 */
   countMarkdownOpen(file) {
@@ -15245,18 +15291,17 @@ ${lines.slice(0, 8).join("\n")}`);
     if (file.path === this.lastCountedPath && now - this.lastCountedAt < 6e4) {
       return;
     }
-    const stats = this.settings.mdOpenStats ?? (this.settings.mdOpenStats = {});
-    const existing = stats[file.path];
+    const existing = this.mdOpenStats[file.path];
     if (existing && now - (Date.parse(existing.lastOpenedAt) || 0) < 6e4) {
       return;
     }
     this.lastCountedPath = file.path;
     this.lastCountedAt = now;
-    stats[file.path] = {
+    this.mdOpenStats[file.path] = {
       openCount: (existing?.openCount ?? 0) + 1,
       lastOpenedAt: new Date(now).toISOString()
     };
-    this.debouncedSaveSettings();
+    this.debouncedSaveMdOpenStats();
     this.refreshMarkdownStatsViews();
   }
   /** 防抖保存设置：合并频繁的打开计数写盘。 */

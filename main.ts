@@ -21,6 +21,7 @@ import {
   CommentAnnotation,
   DEFAULT_SETTINGS,
   HighlightAnnotation,
+  MdOpenStat,
   SelectionSnapshot,
   SUPPORTED_BOOK_EXTENSIONS,
 } from "./src/storage/types";
@@ -42,6 +43,9 @@ const NOTE_TITLE_OPTIONS = [
   { value: "Question", label: "❓ 疑问" },
   { value: "Reminder", label: "🔔 提醒" },
 ] as const;
+
+/** Markdown 打开次数统计的独立 sidecar 文件（与批注同目录，卸载插件不丢失） */
+const MD_OPEN_STATS_PATH = ".obsidian-annotations/md-open-stats.json";
 
 const YH_INKLIGHT_ICON = `
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
@@ -68,8 +72,11 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   private lastSelection: SelectionSnapshot | null = null;
   private renameMigrationTimer: number | null = null;
   private settingsSaveTimer: number | null = null;
+  private statsSaveTimer: number | null = null;
   private lastCountedPath = "";
   private lastCountedAt = 0;
+  /** Markdown 打开次数统计（存于独立 sidecar，插件重装不丢失） */
+  mdOpenStats: Record<string, MdOpenStat> = {};
 
   async onload(): Promise<void> {
     addIcon("yh-inklight-icon", YH_INKLIGHT_ICON);
@@ -77,6 +84,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     console.info(`yh-inklight loaded v${this.manifest.version}`);
     this.store = new AnnotationStore(this.app);
     await this.store.initialize();
+    await this.loadMdOpenStats();
 
     this.registerView(ANNOTATION_SIDEBAR_VIEW, (leaf) => new AnnotationSidebarView(leaf, this));
     this.registerView(EPUB_READER_VIEW_TYPE, (leaf) => new EpubReaderView(leaf, this.store, this.settings, () => this.refreshAnnotations(), () => this.saveSettings()));
@@ -95,7 +103,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     );
     this.registerView(
       MARKDOWN_STATS_VIEW_TYPE,
-      (leaf) => new MarkdownStatsView(leaf, this.settings, () => this.saveSettings(), (file) => this.openMarkdownNote(file)),
+      (leaf) => new MarkdownStatsView(leaf, this.mdOpenStats, () => this.saveSettings(), (file) => this.openMarkdownNote(file)),
     );
     this.registerEditorExtension([
       createHighlightExtension({
@@ -197,6 +205,9 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     }
     if (this.settingsSaveTimer !== null) {
       window.clearTimeout(this.settingsSaveTimer);
+    }
+    if (this.statsSaveTimer !== null) {
+      window.clearTimeout(this.statsSaveTimer);
     }
     this.toolbar?.destroy();
     this.popover?.destroy();
@@ -396,11 +407,11 @@ export default class OverlayAnnotationsPlugin extends Plugin {
           await this.store.migrateFilePath(oldPath, file);
           // 迁移 Markdown 打开次数统计：key 跟随路径
           if (isMarkdown) {
-            const stats = this.settings.mdOpenStats;
-            if (stats && stats[oldPath] && file.path !== oldPath) {
+            const stats = this.mdOpenStats;
+            if (stats[oldPath] && file.path !== oldPath) {
               stats[file.path] = stats[oldPath];
               delete stats[oldPath];
-              this.debouncedSaveSettings();
+              this.debouncedSaveMdOpenStats();
             }
           }
           await this.refreshAnnotations();
@@ -429,14 +440,61 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
         if (file instanceof TFile && file.extension.toLowerCase() === "md") {
-          const stats = this.settings.mdOpenStats;
-          if (stats && stats[file.path]) {
+          const stats = this.mdOpenStats;
+          if (stats[file.path]) {
             delete stats[file.path];
-            this.debouncedSaveSettings();
+            this.debouncedSaveMdOpenStats();
           }
         }
       }),
     );
+  }
+
+  /** 加载 Markdown 打开次数统计（独立 sidecar），并迁移 data.json 中的旧数据。 */
+  private async loadMdOpenStats(): Promise<void> {
+    let loaded: Record<string, MdOpenStat> = {};
+    try {
+      const raw = await this.app.vault.adapter.read(MD_OPEN_STATS_PATH);
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        loaded = parsed;
+      }
+    } catch {
+      /* 文件不存在或损坏 → 空统计 */
+    }
+    this.mdOpenStats = loaded;
+
+    // 迁移旧版存储在 data.json settings.mdOpenStats 的数据
+    const legacy = (this.settings as AnnotationPluginSettings & { mdOpenStats?: Record<string, MdOpenStat> }).mdOpenStats;
+    if (legacy && Object.keys(legacy).length > 0) {
+      if (Object.keys(this.mdOpenStats).length === 0) {
+        this.mdOpenStats = { ...legacy };
+      }
+      // 清理旧位置，避免 data.json 继续膨胀
+      delete (this.settings as { mdOpenStats?: unknown }).mdOpenStats;
+      await this.saveSettings();
+      await this.saveMdOpenStats();
+    }
+  }
+
+  /** 将打开次数统计写入独立 sidecar 文件。 */
+  async saveMdOpenStats(): Promise<void> {
+    try {
+      await this.app.vault.adapter.write(MD_OPEN_STATS_PATH, JSON.stringify(this.mdOpenStats, null, 2));
+    } catch (error) {
+      console.warn("yh-inklight: 写入打开次数统计失败", error);
+    }
+  }
+
+  /** 防抖保存打开次数统计。 */
+  private debouncedSaveMdOpenStats(): void {
+    if (this.statsSaveTimer !== null) {
+      window.clearTimeout(this.statsSaveTimer);
+    }
+    this.statsSaveTimer = window.setTimeout(() => {
+      this.statsSaveTimer = null;
+      void this.saveMdOpenStats();
+    }, 1500);
   }
 
   /** 记录一次 Markdown 打开（开启开关、.md 文件、60s 冷却内不重复计）。 */
@@ -448,18 +506,17 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     if (file.path === this.lastCountedPath && now - this.lastCountedAt < 60_000) {
       return;
     }
-    const stats = this.settings.mdOpenStats ?? (this.settings.mdOpenStats = {});
-    const existing = stats[file.path];
+    const existing = this.mdOpenStats[file.path];
     if (existing && now - (Date.parse(existing.lastOpenedAt) || 0) < 60_000) {
       return;
     }
     this.lastCountedPath = file.path;
     this.lastCountedAt = now;
-    stats[file.path] = {
+    this.mdOpenStats[file.path] = {
       openCount: (existing?.openCount ?? 0) + 1,
       lastOpenedAt: new Date(now).toISOString(),
     };
-    this.debouncedSaveSettings();
+    this.debouncedSaveMdOpenStats();
     this.refreshMarkdownStatsViews();
   }
 

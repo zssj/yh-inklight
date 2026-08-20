@@ -171,9 +171,8 @@ export interface AnnotationPluginSettings {
   epubBookshelfSort: EpubBookshelfSortMode;
   // --- PDF 增强 ---
   pdfProgressTracking: boolean;
-  // --- Markdown 打开统计 ---
+  // --- Markdown 打开统计（数据存于独立 sidecar，见 main.ts）---
   mdOpenTracking: boolean;
-  mdOpenStats: Record<string, MdOpenStat>;
   // --- EPUB 手机端沉浸式导航栏 ---
   epubHideMobileNavbar: boolean;
 }
@@ -212,7 +211,6 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   pdfProgressTracking: true,
   // Markdown 打开统计
   mdOpenTracking: true,
-  mdOpenStats: {},
   // EPUB 手机端沉浸式导航栏
   epubHideMobileNavbar: true,
 };

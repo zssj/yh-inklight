@@ -230,8 +230,8 @@ export class AnnotationSettingsTab extends PluginSettingTab {
       .setDesc("将全部 Markdown 笔记的打开次数清零（不影响批注数据）。")
       .addButton((button) => {
         button.setButtonText("清空统计").setWarning().onClick(async () => {
-          this.plugin.settings.mdOpenStats = {};
-          await this.plugin.saveSettings();
+          this.plugin.mdOpenStats = {};
+          await this.plugin.saveMdOpenStats();
           this.plugin.refreshMarkdownStatsViews();
         });
       });

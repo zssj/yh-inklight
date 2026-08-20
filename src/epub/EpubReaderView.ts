@@ -94,7 +94,7 @@ const READ_CHECKPOINTS_END_BIT = 1 << (READ_CHECKPOINTS.length - 1);
  */
 const READ_CHECKPOINTS_JUMP_DELTA = 0.6;
 /** 上滑恢复底部导航栏所需的累计滚动距离（px），低于该值视为误触 */
-const NAV_SHOW_SCROLL_THRESHOLD = 60;
+const NAV_SHOW_SCROLL_THRESHOLD = 30;
 
 // ---- 辅助类型 ----
 

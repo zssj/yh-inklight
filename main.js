@@ -12292,7 +12292,7 @@ var READ_CHECKPOINTS = [
 var READ_CHECKPOINTS_ALL_MASK = (1 << READ_CHECKPOINTS.length) - 1;
 var READ_CHECKPOINTS_END_BIT = 1 << READ_CHECKPOINTS.length - 1;
 var READ_CHECKPOINTS_JUMP_DELTA = 0.6;
-var NAV_SHOW_SCROLL_THRESHOLD = 60;
+var NAV_SHOW_SCROLL_THRESHOLD = 30;
 var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
   // ================================================================
   // 构造 & 生命周期

@@ -262,8 +262,8 @@ export class EpubReaderView extends FileView {
 	private navHidden = false;
 	private lastScrollPos = 0;
 	private lastScrollFlipTime = 0;
-	/** 导航栏隐藏那一刻的滚动位置，用于累计上滑距离判定恢复 */
-	private navHiddenScrollPos = 0;
+	/** 隐藏后净上滑累计距离（px），达到阈值才恢复导航栏，防误触 */
+	private navUpAccum = 0;
 	private scrollHideRenderer: HTMLElement | null = null;
 
 	// ================================================================
@@ -781,13 +781,15 @@ export class EpubReaderView extends FileView {
 		}
 		this.lastScrollFlipTime = now;
 		if (this.navHidden) {
-			// 已隐藏：累计上滑距离超过阈值才恢复导航栏，防误触
-			if (start < this.navHiddenScrollPos - NAV_SHOW_SCROLL_THRESHOLD) {
+			// 已隐藏：净上滑累计超过阈值才恢复导航栏，防误触
+			this.navUpAccum = Math.max(0, this.navUpAccum - delta);
+			if (this.navUpAccum >= NAV_SHOW_SCROLL_THRESHOLD) {
+				this.navUpAccum = 0;
 				this.setNavHidden(false);
 			}
 		} else if (delta > 0) {
-			// 显示态：向下滑即隐藏，并记录隐藏时的滚动位置
-			this.navHiddenScrollPos = start;
+			// 显示态：向下滑即隐藏
+			this.navUpAccum = 0;
 			this.setNavHidden(true);
 		}
 	};
@@ -798,8 +800,8 @@ export class EpubReaderView extends FileView {
 		const start = Number(renderer?.start ?? 0);
 		if (Number.isFinite(start)) {
 			this.lastScrollPos = start;
-			this.navHiddenScrollPos = start;
 		}
+		this.navUpAccum = 0;
 		this.lastScrollFlipTime = 0;
 	}
 
@@ -1840,7 +1842,7 @@ export class EpubReaderView extends FileView {
 		}
 		this.setNavHidden(false);
 		this.lastScrollPos = 0;
-		this.navHiddenScrollPos = 0;
+		this.navUpAccum = 0;
 		this.lastScrollFlipTime = 0;
 		this.annotationCardEl?.dismiss();
 		this.annotationCardEl = null;

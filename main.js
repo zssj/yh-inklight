@@ -12367,8 +12367,8 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
     this.navHidden = false;
     this.lastScrollPos = 0;
     this.lastScrollFlipTime = 0;
-    /** 导航栏隐藏那一刻的滚动位置，用于累计上滑距离判定恢复 */
-    this.navHiddenScrollPos = 0;
+    /** 隐藏后净上滑累计距离（px），达到阈值才恢复导航栏，防误触 */
+    this.navUpAccum = 0;
     this.scrollHideRenderer = null;
     this.handleReaderScroll = () => {
       if (!this.pluginSettings.epubHideMobileNavbar || !import_obsidian13.Platform.isMobile) {
@@ -12393,11 +12393,13 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
       }
       this.lastScrollFlipTime = now;
       if (this.navHidden) {
-        if (start < this.navHiddenScrollPos - NAV_SHOW_SCROLL_THRESHOLD) {
+        this.navUpAccum = Math.max(0, this.navUpAccum - delta);
+        if (this.navUpAccum >= NAV_SHOW_SCROLL_THRESHOLD) {
+          this.navUpAccum = 0;
           this.setNavHidden(false);
         }
       } else if (delta > 0) {
-        this.navHiddenScrollPos = start;
+        this.navUpAccum = 0;
         this.setNavHidden(true);
       }
     };
@@ -12851,8 +12853,8 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
     const start = Number(renderer?.start ?? 0);
     if (Number.isFinite(start)) {
       this.lastScrollPos = start;
-      this.navHiddenScrollPos = start;
     }
+    this.navUpAccum = 0;
     this.lastScrollFlipTime = 0;
   }
   setNavHidden(hidden) {
@@ -13752,7 +13754,7 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
     }
     this.setNavHidden(false);
     this.lastScrollPos = 0;
-    this.navHiddenScrollPos = 0;
+    this.navUpAccum = 0;
     this.lastScrollFlipTime = 0;
     this.annotationCardEl?.dismiss();
     this.annotationCardEl = null;

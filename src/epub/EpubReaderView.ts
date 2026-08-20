@@ -93,6 +93,8 @@ const READ_CHECKPOINTS_END_BIT = 1 << (READ_CHECKPOINTS.length - 1);
  * 0.6 高于任何真实阅读的分节边界步进（最粗的书也只有 ~0.5），不会误伤正常阅读。
  */
 const READ_CHECKPOINTS_JUMP_DELTA = 0.6;
+/** 上滑恢复底部导航栏所需的累计滚动距离（px），低于该值视为误触 */
+const NAV_SHOW_SCROLL_THRESHOLD = 60;
 
 // ---- 辅助类型 ----
 
@@ -260,6 +262,8 @@ export class EpubReaderView extends FileView {
 	private navHidden = false;
 	private lastScrollPos = 0;
 	private lastScrollFlipTime = 0;
+	/** 导航栏隐藏那一刻的滚动位置，用于累计上滑距离判定恢复 */
+	private navHiddenScrollPos = 0;
 	private scrollHideRenderer: HTMLElement | null = null;
 
 	// ================================================================
@@ -776,7 +780,16 @@ export class EpubReaderView extends FileView {
 			return;
 		}
 		this.lastScrollFlipTime = now;
-		this.setNavHidden(delta > 0);
+		if (this.navHidden) {
+			// 已隐藏：累计上滑距离超过阈值才恢复导航栏，防误触
+			if (start < this.navHiddenScrollPos - NAV_SHOW_SCROLL_THRESHOLD) {
+				this.setNavHidden(false);
+			}
+		} else if (delta > 0) {
+			// 显示态：向下滑即隐藏，并记录隐藏时的滚动位置
+			this.navHiddenScrollPos = start;
+			this.setNavHidden(true);
+		}
 	};
 
 	/** 基线化滚动位置：恢复进度/加载完成后调用，避免程序化滚动误触发隐藏导航栏。 */
@@ -785,6 +798,7 @@ export class EpubReaderView extends FileView {
 		const start = Number(renderer?.start ?? 0);
 		if (Number.isFinite(start)) {
 			this.lastScrollPos = start;
+			this.navHiddenScrollPos = start;
 		}
 		this.lastScrollFlipTime = 0;
 	}
@@ -1826,6 +1840,7 @@ export class EpubReaderView extends FileView {
 		}
 		this.setNavHidden(false);
 		this.lastScrollPos = 0;
+		this.navHiddenScrollPos = 0;
 		this.lastScrollFlipTime = 0;
 		this.annotationCardEl?.dismiss();
 		this.annotationCardEl = null;

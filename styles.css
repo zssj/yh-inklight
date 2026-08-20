@@ -1217,9 +1217,8 @@ body.yh-epub-nav-hidden .mobile-navbar {
   transition: transform 0.25s ease, opacity 0.25s ease !important;
 }
 
-body.yh-epub-nav-hidden .yh-epub-reader {
-  padding-bottom: 6px;
-}
+/* 注意：不可在此修改 .yh-epub-reader 的 padding，否则会改变阅读区高度，
+   触发 foliate ResizeObserver 重新分页，导致阅读位置错乱/进度不准 */
 
 .yh-epub-toolbar {
   flex-shrink: 0;

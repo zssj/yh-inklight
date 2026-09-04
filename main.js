@@ -12358,7 +12358,6 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
     this.readingTimeFlushTimer = null;
     this.progressSaveTimer = null;
     this.wheelDebounceTimer = null;
-    this.contextMenuDismissTimer = null;
     this.visibilityHandler = null;
     this.blurHandler = null;
     this.focusHandler = null;
@@ -12946,15 +12945,8 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
         document.addEventListener("pointerdown", this.contextMenuOutsideHandler, true);
       }
     }, 0);
-    this.contextMenuDismissTimer = window.setTimeout(() => {
-      this.dismissContextMenu();
-    }, 8e3);
   }
   dismissContextMenu() {
-    if (this.contextMenuDismissTimer !== null) {
-      window.clearTimeout(this.contextMenuDismissTimer);
-      this.contextMenuDismissTimer = null;
-    }
     if (this.contextMenuOutsideHandler) {
       document.removeEventListener("pointerdown", this.contextMenuOutsideHandler, true);
       this.contextMenuOutsideHandler = null;
@@ -13012,6 +13004,12 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
       this.renderSidebar();
       this.refreshAnnotations();
       new import_obsidian13.Notice(`\u5DF2\u6DFB\u52A0${COLOR_LABELS[color]}\u753B\u7EBF`);
+      requestAnimationFrame(() => {
+        const docs = this.foliateView?.renderer?.getContents?.() ?? [];
+        for (const c2 of docs) {
+          c2.doc?.getSelection?.()?.removeAllRanges();
+        }
+      });
     } catch (error) {
       console.error("yh-inklight: EPUB highlight creation failed", error);
       new import_obsidian13.Notice("\u753B\u7EBF\u521B\u5EFA\u5931\u8D25");
@@ -13062,6 +13060,12 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
           this.renderSidebar();
           this.refreshAnnotations();
           new import_obsidian13.Notice("\u5DF2\u6DFB\u52A0\u6807\u6CE8");
+          requestAnimationFrame(() => {
+            const docs = this.foliateView?.renderer?.getContents?.() ?? [];
+            for (const c2 of docs) {
+              c2.doc?.getSelection?.()?.removeAllRanges();
+            }
+          });
         } catch (error) {
           console.error("yh-inklight: EPUB comment creation failed", error);
           new import_obsidian13.Notice("\u6807\u6CE8\u521B\u5EFA\u5931\u8D25");
@@ -14012,6 +14016,11 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
       }
       pendingFrame = window.requestAnimationFrame(() => {
         pendingFrame = 0;
+        const sel = doc.getSelection?.() ?? doc.defaultView?.getSelection?.();
+        if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+          this.dismissContextMenu();
+          return;
+        }
         const emitted = this.emitFoliateSelection(doc);
         if (!emitted) {
           if (pendingRetry) {

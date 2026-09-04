@@ -241,7 +241,6 @@ export class EpubReaderView extends FileView {
 	private readingTimeFlushTimer: number | null = null;
 	private progressSaveTimer: number | null = null;
 	private wheelDebounceTimer: number | null = null;
-	private contextMenuDismissTimer: number | null = null;
 	private visibilityHandler: (() => void) | null = null;
 	private blurHandler: (() => void) | null = null;
 	private focusHandler: (() => void) | null = null;
@@ -908,10 +907,6 @@ export class EpubReaderView extends FileView {
 				document.addEventListener("pointerdown", this.contextMenuOutsideHandler, true);
 			}
 		}, 0);
-
-		this.contextMenuDismissTimer = window.setTimeout(() => {
-			this.dismissContextMenu();
-		}, 8_000);
 	}
 
 	/**
@@ -920,10 +915,6 @@ export class EpubReaderView extends FileView {
 	private contextMenuOutsideHandler: ((ev: PointerEvent) => void) | null = null;
 
 	private dismissContextMenu(): void {
-		if (this.contextMenuDismissTimer !== null) {
-			window.clearTimeout(this.contextMenuDismissTimer);
-			this.contextMenuDismissTimer = null;
-		}
 		if (this.contextMenuOutsideHandler) {
 			document.removeEventListener("pointerdown", this.contextMenuOutsideHandler, true);
 			this.contextMenuOutsideHandler = null;
@@ -990,6 +981,13 @@ export class EpubReaderView extends FileView {
 			this.renderSidebar();
 			this.refreshAnnotations();
 			new Notice(`已添加${COLOR_LABELS[color]}画线`);
+			// 清除选区 → 触发 selectionchange → 关闭标注框
+			requestAnimationFrame(() => {
+				const docs = this.foliateView?.renderer?.getContents?.() ?? [];
+				for (const c of docs) {
+					c.doc?.getSelection?.()?.removeAllRanges();
+				}
+			});
 		} catch (error) {
 			console.error("yh-inklight: EPUB highlight creation failed", error);
 			new Notice("画线创建失败");
@@ -1044,6 +1042,13 @@ export class EpubReaderView extends FileView {
 					this.renderSidebar();
 					this.refreshAnnotations();
 					new Notice("已添加标注");
+					// 清除选区 → 触发 selectionchange → 关闭标注框
+					requestAnimationFrame(() => {
+						const docs = this.foliateView?.renderer?.getContents?.() ?? [];
+						for (const c of docs) {
+							c.doc?.getSelection?.()?.removeAllRanges();
+						}
+					});
 				} catch (error) {
 					console.error("yh-inklight: EPUB comment creation failed", error);
 					new Notice("标注创建失败");
@@ -2156,6 +2161,12 @@ export class EpubReaderView extends FileView {
 			}
 			pendingFrame = window.requestAnimationFrame(() => {
 				pendingFrame = 0;
+				// 选区已清空 → 关闭标注框，不再弹出
+				const sel = doc.getSelection?.() ?? doc.defaultView?.getSelection?.();
+				if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+					this.dismissContextMenu();
+					return;
+				}
 				const emitted = this.emitFoliateSelection(doc);
 				if (!emitted) {
 					if (pendingRetry) {

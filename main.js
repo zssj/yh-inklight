@@ -14061,7 +14061,12 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
     doc.addEventListener("pointerup", scheduleEmit, eventOptions);
     doc.addEventListener("touchend", scheduleEmit, eventOptions);
     doc.addEventListener("keyup", scheduleEmit, eventOptions);
-    doc.addEventListener("contextmenu", scheduleEmit, eventOptions);
+    doc.addEventListener("contextmenu", (ev) => {
+      if (this.pluginSettings.annotationLocked) {
+        ev.preventDefault();
+      }
+      scheduleEmit();
+    }, eventOptions);
     win?.addEventListener("mouseup", scheduleEmit, eventOptions);
     win?.addEventListener("pointerup", scheduleEmit, eventOptions);
     win?.addEventListener("touchend", scheduleEmit, eventOptions);

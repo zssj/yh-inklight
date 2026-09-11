@@ -8434,7 +8434,9 @@ var DEFAULT_SETTINGS = {
   // Markdown 打开统计
   mdOpenTracking: true,
   // EPUB 手机端沉浸式导航栏
-  epubHideMobileNavbar: true
+  epubHideMobileNavbar: true,
+  // EPUB 标注锁定
+  annotationLocked: false
 };
 var EMPTY_INDEX = {
   version: 1,
@@ -12591,20 +12593,21 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
     });
     fontSizeInc.addEventListener("click", () => this.changeFontSize(1));
     this.renderThemeSwatches();
-    const bookmarkBtn = this.toolbarControlsRowEl.createEl("button", {
-      cls: "yh-epub-toolbar-btn yh-epub-bookmark-btn",
-      attr: { type: "button", title: "\u6DFB\u52A0\u4E66\u7B7E", "aria-label": "\u6DFB\u52A0\u4E66\u7B7E" }
+    const lockBtn = this.toolbarControlsRowEl.createEl("button", {
+      cls: "yh-epub-toolbar-btn",
+      attr: { type: "button", "aria-label": "\u6807\u6CE8\u5F00\u5173" }
     });
-    (0, import_obsidian13.setIcon)(bookmarkBtn, "bookmark");
-    const updateBookmarkIcon = () => {
-      const hasBookmark = this.hasCurrentCfiBookmark();
-      bookmarkBtn.title = hasBookmark ? "\u79FB\u9664\u4E66\u7B7E" : "\u6DFB\u52A0\u4E66\u7B7E";
-      bookmarkBtn.toggleClass("is-active", hasBookmark);
+    const updateLockIcon = () => {
+      const locked = this.pluginSettings.annotationLocked;
+      (0, import_obsidian13.setIcon)(lockBtn, locked ? "lock" : "pen-line");
+      lockBtn.title = locked ? "\u6807\u6CE8\u5DF2\u9501\u5B9A\uFF08\u70B9\u51FB\u89E3\u9501\uFF09" : "\u6807\u6CE8\u5DF2\u5F00\u542F\uFF08\u70B9\u51FB\u9501\u5B9A\uFF09";
+      lockBtn.toggleClass("is-active", locked);
     };
-    bookmarkBtn.addEventListener("click", async () => {
-      await this.toggleBookmark();
-      updateBookmarkIcon();
-      this.renderSidebar();
+    updateLockIcon();
+    lockBtn.addEventListener("click", () => {
+      this.pluginSettings.annotationLocked = !this.pluginSettings.annotationLocked;
+      updateLockIcon();
+      void this.saveSettings();
     });
     const searchBtn = this.toolbarControlsRowEl.createEl("button", {
       cls: "yh-epub-toolbar-btn",
@@ -14011,6 +14014,9 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
     let pendingFrame = 0;
     let pendingRetry = 0;
     const scheduleEmit = () => {
+      if (this.pluginSettings.annotationLocked) {
+        return;
+      }
       if (pendingFrame) {
         window.cancelAnimationFrame(pendingFrame);
       }

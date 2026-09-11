@@ -462,32 +462,32 @@ export class EpubReaderView extends FileView {
 
 		this.renderThemeSwatches();
 
-		// 书签按钮（Phase 4-B P2）
-		const bookmarkBtn = this.toolbarControlsRowEl.createEl("button", {
-			cls: "yh-epub-toolbar-btn yh-epub-bookmark-btn",
-			attr: { type: "button", title: "添加书签", "aria-label": "添加书签" },
+		// 标注锁定按钮
+		const lockBtn = this.toolbarControlsRowEl.createEl("button", {
+			cls: "yh-epub-toolbar-btn",
+			attr: { type: "button", "aria-label": "标注开关" },
 		});
-		setIcon(bookmarkBtn, "bookmark");
-		const updateBookmarkIcon = () => {
-			const hasBookmark = this.hasCurrentCfiBookmark();
-			bookmarkBtn.title = hasBookmark ? "移除书签" : "添加书签";
-			bookmarkBtn.toggleClass("is-active", hasBookmark);
+		const updateLockIcon = () => {
+			const locked = this.pluginSettings.annotationLocked;
+			setIcon(lockBtn, locked ? "lock" : "pen-line");
+			lockBtn.title = locked ? "标注已锁定（点击解锁）" : "标注已开启（点击锁定）";
+			lockBtn.toggleClass("is-active", locked);
 		};
-		bookmarkBtn.addEventListener("click", async () => {
-			await this.toggleBookmark();
-			updateBookmarkIcon();
-			this.renderSidebar();
+		updateLockIcon();
+		lockBtn.addEventListener("click", () => {
+			this.pluginSettings.annotationLocked = !this.pluginSettings.annotationLocked;
+			updateLockIcon();
+			void this.saveSettings();
 		});
 
-			// 搜索按钮（Phase 4-B P4 - 移到工具栏）
-			const searchBtn = this.toolbarControlsRowEl.createEl("button", {
-				cls: "yh-epub-toolbar-btn",
-				attr: { type: "button", title: "搜索全文", "aria-label": "搜索全文" },
-			});
-			setIcon(searchBtn, "search");
-			searchBtn.addEventListener("click", () => this.toggleToolbarSearch());
+		// 搜索按钮
+		const searchBtn = this.toolbarControlsRowEl.createEl("button", {
+			cls: "yh-epub-toolbar-btn",
+			attr: { type: "button", title: "搜索全文", "aria-label": "搜索全文" },
+		});
+		setIcon(searchBtn, "search");
+		searchBtn.addEventListener("click", () => this.toggleToolbarSearch());
 
-			
 		const flowBtn = this.toolbarControlsRowEl.createEl("button", {
 			cls: "yh-epub-toolbar-btn",
 			attr: { type: "button", title: this.currentFlowMode === "paginated" ? "切换为滚动" : "切换为分页" },
@@ -2156,6 +2156,9 @@ export class EpubReaderView extends FileView {
 		let pendingFrame = 0;
 		let pendingRetry = 0;
 		const scheduleEmit = () => {
+			if (this.pluginSettings.annotationLocked) {
+				return;
+			}
 			if (pendingFrame) {
 				window.cancelAnimationFrame(pendingFrame);
 			}

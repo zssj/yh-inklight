@@ -175,6 +175,8 @@ export interface AnnotationPluginSettings {
   mdOpenTracking: boolean;
   // --- EPUB 手机端沉浸式导航栏 ---
   epubHideMobileNavbar: boolean;
+  // --- EPUB 标注锁定 ---
+  annotationLocked: boolean;
 }
 
 export interface SelectionSnapshot {
@@ -213,6 +215,8 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   mdOpenTracking: true,
   // EPUB 手机端沉浸式导航栏
   epubHideMobileNavbar: true,
+  // EPUB 标注锁定
+  annotationLocked: false,
 };
 
 export const EMPTY_INDEX: AnnotationIndex = {

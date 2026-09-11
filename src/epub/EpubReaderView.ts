@@ -95,6 +95,8 @@ const READ_CHECKPOINTS_END_BIT = 1 << (READ_CHECKPOINTS.length - 1);
 const READ_CHECKPOINTS_JUMP_DELTA = 0.6;
 /** 上滑恢复底部导航栏所需的累计滚动距离（px），低于该值视为误触 */
 const NAV_SHOW_SCROLL_THRESHOLD = 30;
+/** 锁定时禁止选中文字的 CSS */
+const SELECTION_LOCK_CSS = "* { user-select: none !important; -webkit-user-select: none !important; }";
 
 // ---- 辅助类型 ----
 
@@ -245,6 +247,8 @@ export class EpubReaderView extends FileView {
 	private blurHandler: (() => void) | null = null;
 	private focusHandler: (() => void) | null = null;
 	private lastFlushTimestamp = 0;
+	/** 已注入禁止选中 CSS 的 section doc 集合 */
+	private selectionLockStyleEls = new WeakSet<Document>();
 
 	// ---- DOM 容器引用 ----
 
@@ -477,6 +481,11 @@ export class EpubReaderView extends FileView {
 		lockBtn.addEventListener("click", () => {
 			this.pluginSettings.annotationLocked = !this.pluginSettings.annotationLocked;
 			updateLockIcon();
+			if (this.pluginSettings.annotationLocked) {
+				this.applySelectionLock();
+			} else {
+				this.removeSelectionLock();
+			}
 			void this.saveSettings();
 		});
 
@@ -1852,6 +1861,7 @@ export class EpubReaderView extends FileView {
 		this.annotationCardEl?.dismiss();
 		this.annotationCardEl = null;
 		this.renderedAnnotationMeta.clear();
+		this.selectionLockStyleEls = new WeakSet();
 
 		if (this.readerContainerEl) {
 			this.readerContainerEl.empty();
@@ -1899,6 +1909,14 @@ export class EpubReaderView extends FileView {
 		stripScriptsFromDocument(doc);
 		await inlineBlockedStylesheets({ document: doc });
 		this.attachSelectionListeners(doc);
+		// 锁定时新加载的 section 也要禁止选中
+		if (this.pluginSettings.annotationLocked && doc.head && !this.selectionLockStyleEls.has(doc)) {
+			const style = doc.createElement("style");
+			style.id = "yh-selection-lock";
+			style.textContent = SELECTION_LOCK_CSS;
+			doc.head.appendChild(style);
+			this.selectionLockStyleEls.add(doc);
+		}
 		this.handleRendered();
 		this.maybeMeasureBodyFontScale(doc);
 	};
@@ -2146,6 +2164,31 @@ export class EpubReaderView extends FileView {
 				}
 			},
 		).open();
+	}
+
+	/** 锁定：禁止选中文字（注入 user-select:none 到所有 section doc） */
+	private applySelectionLock(): void {
+		const contents = this.foliateView?.renderer?.getContents?.() ?? [];
+		for (const c of contents) {
+			const doc = c.doc;
+			if (!doc?.head || this.selectionLockStyleEls.has(doc)) continue;
+			const style = doc.createElement("style");
+			style.id = "yh-selection-lock";
+			style.textContent = SELECTION_LOCK_CSS;
+			doc.head.appendChild(style);
+			this.selectionLockStyleEls.add(doc);
+		}
+	}
+
+	/** 解锁：恢复选中文字（移除 user-select:none） */
+	private removeSelectionLock(): void {
+		const contents = this.foliateView?.renderer?.getContents?.() ?? [];
+		for (const c of contents) {
+			const doc = c.doc;
+			if (!doc) continue;
+			doc.getElementById("yh-selection-lock")?.remove();
+			this.selectionLockStyleEls.delete(doc);
+		}
 	}
 
 	private attachSelectionListeners(doc: Document): void {

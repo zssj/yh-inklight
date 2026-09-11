@@ -12295,6 +12295,7 @@ var READ_CHECKPOINTS_ALL_MASK = (1 << READ_CHECKPOINTS.length) - 1;
 var READ_CHECKPOINTS_END_BIT = 1 << READ_CHECKPOINTS.length - 1;
 var READ_CHECKPOINTS_JUMP_DELTA = 0.6;
 var NAV_SHOW_SCROLL_THRESHOLD = 30;
+var SELECTION_LOCK_CSS = "* { user-select: none !important; -webkit-user-select: none !important; }";
 var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
   // ================================================================
   // 构造 & 生命周期
@@ -12364,6 +12365,8 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
     this.blurHandler = null;
     this.focusHandler = null;
     this.lastFlushTimestamp = 0;
+    /** 已注入禁止选中 CSS 的 section doc 集合 */
+    this.selectionLockStyleEls = /* @__PURE__ */ new WeakSet();
     // ---- 手机端沉浸式导航栏（隐藏 Obsidian 底部 .mobile-navbar）----
     this.navHidden = false;
     this.lastScrollPos = 0;
@@ -12420,6 +12423,13 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
       stripScriptsFromDocument(doc);
       await inlineBlockedStylesheets({ document: doc });
       this.attachSelectionListeners(doc);
+      if (this.pluginSettings.annotationLocked && doc.head && !this.selectionLockStyleEls.has(doc)) {
+        const style2 = doc.createElement("style");
+        style2.id = "yh-selection-lock";
+        style2.textContent = SELECTION_LOCK_CSS;
+        doc.head.appendChild(style2);
+        this.selectionLockStyleEls.add(doc);
+      }
       this.handleRendered();
       this.maybeMeasureBodyFontScale(doc);
     };
@@ -12607,6 +12617,11 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
     lockBtn.addEventListener("click", () => {
       this.pluginSettings.annotationLocked = !this.pluginSettings.annotationLocked;
       updateLockIcon();
+      if (this.pluginSettings.annotationLocked) {
+        this.applySelectionLock();
+      } else {
+        this.removeSelectionLock();
+      }
       void this.saveSettings();
     });
     const searchBtn = this.toolbarControlsRowEl.createEl("button", {
@@ -13766,6 +13781,7 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
     this.annotationCardEl?.dismiss();
     this.annotationCardEl = null;
     this.renderedAnnotationMeta.clear();
+    this.selectionLockStyleEls = /* @__PURE__ */ new WeakSet();
     if (this.readerContainerEl) {
       this.readerContainerEl.empty();
     }
@@ -14006,6 +14022,29 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
         }
       }
     ).open();
+  }
+  /** 锁定：禁止选中文字（注入 user-select:none 到所有 section doc） */
+  applySelectionLock() {
+    const contents = this.foliateView?.renderer?.getContents?.() ?? [];
+    for (const c2 of contents) {
+      const doc = c2.doc;
+      if (!doc?.head || this.selectionLockStyleEls.has(doc)) continue;
+      const style2 = doc.createElement("style");
+      style2.id = "yh-selection-lock";
+      style2.textContent = SELECTION_LOCK_CSS;
+      doc.head.appendChild(style2);
+      this.selectionLockStyleEls.add(doc);
+    }
+  }
+  /** 解锁：恢复选中文字（移除 user-select:none） */
+  removeSelectionLock() {
+    const contents = this.foliateView?.renderer?.getContents?.() ?? [];
+    for (const c2 of contents) {
+      const doc = c2.doc;
+      if (!doc) continue;
+      doc.getElementById("yh-selection-lock")?.remove();
+      this.selectionLockStyleEls.delete(doc);
+    }
   }
   attachSelectionListeners(doc) {
     if (this.documentSelectionCleanups.has(doc)) {

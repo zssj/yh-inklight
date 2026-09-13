@@ -13021,7 +13021,6 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
       this.renderAnnotationOnRendition(annotation);
       this.renderSidebar();
       this.refreshAnnotations();
-      new import_obsidian13.Notice(`\u5DF2\u6DFB\u52A0${COLOR_LABELS[color]}\u753B\u7EBF`);
       requestAnimationFrame(() => {
         const docs = this.foliateView?.renderer?.getContents?.() ?? [];
         for (const c2 of docs) {
@@ -13077,7 +13076,6 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
           this.renderAnnotationOnRendition(annotation);
           this.renderSidebar();
           this.refreshAnnotations();
-          new import_obsidian13.Notice("\u5DF2\u6DFB\u52A0\u6807\u6CE8");
           requestAnimationFrame(() => {
             const docs = this.foliateView?.renderer?.getContents?.() ?? [];
             for (const c2 of docs) {
@@ -13148,7 +13146,6 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
       this.refreshRenditionAnnotations();
       this.renderSidebar();
       this.refreshAnnotations();
-      new import_obsidian13.Notice("\u6807\u6CE8\u5DF2\u5220\u9664");
     } catch (error) {
       console.error("yh-inklight: EPUB annotation deletion failed", error);
       new import_obsidian13.Notice("\u6807\u6CE8\u5220\u9664\u5931\u8D25");
@@ -13961,7 +13958,6 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
           this.refreshRenditionAnnotations();
           this.renderSidebar();
           this.refreshAnnotations();
-          new import_obsidian13.Notice("\u6807\u6CE8\u5DF2\u66F4\u65B0");
         } catch (error) {
           console.error("yh-inklight: EPUB comment update failed", error);
           new import_obsidian13.Notice("\u6807\u6CE8\u66F4\u65B0\u5931\u8D25");

@@ -989,7 +989,6 @@ export class EpubReaderView extends FileView {
 			this.renderAnnotationOnRendition(annotation);
 			this.renderSidebar();
 			this.refreshAnnotations();
-			new Notice(`已添加${COLOR_LABELS[color]}画线`);
 			// 清除选区 → 触发 selectionchange → 关闭标注框
 			requestAnimationFrame(() => {
 				const docs = this.foliateView?.renderer?.getContents?.() ?? [];
@@ -1050,7 +1049,6 @@ export class EpubReaderView extends FileView {
 					this.renderAnnotationOnRendition(annotation);
 					this.renderSidebar();
 					this.refreshAnnotations();
-					new Notice("已添加标注");
 					// 清除选区 → 触发 selectionchange → 关闭标注框
 					requestAnimationFrame(() => {
 						const docs = this.foliateView?.renderer?.getContents?.() ?? [];
@@ -1133,7 +1131,6 @@ export class EpubReaderView extends FileView {
 			this.refreshRenditionAnnotations();
 			this.renderSidebar();
 			this.refreshAnnotations();
-			new Notice("标注已删除");
 		} catch (error) {
 			console.error("yh-inklight: EPUB annotation deletion failed", error);
 			new Notice("标注删除失败");
@@ -2101,7 +2098,6 @@ export class EpubReaderView extends FileView {
 					this.refreshRenditionAnnotations();
 					this.renderSidebar();
 					this.refreshAnnotations();
-					new Notice("标注已更新");
 				} catch (error) {
 					console.error("yh-inklight: EPUB comment update failed", error);
 					new Notice("标注更新失败");

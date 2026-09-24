@@ -2068,10 +2068,6 @@ body.yh-epub-nav-hidden .mobile-navbar {
    EPUB — 摘录回跳链接（渲染在 Markdown 摘录中）
    ============================================================ */
 
-.yh-epub-goto-callout {
-  cursor: pointer;
-}
-
 .yh-epub-goto-link {
   cursor: pointer;
   color: var(--yh-yellow-hover);
@@ -2099,11 +2095,6 @@ body.yh-epub-nav-hidden .mobile-navbar {
 /* 隐藏摘录 Markdown 中的 CFI 注释行 */
 .yh-epub-cfi-hidden {
   display: none;
-}
-
-/* 摘录 callout 可点击跳转 */
-.yh-epub-goto-callout {
-  cursor: pointer;
 }
 
 /* ============================================================

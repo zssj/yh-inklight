@@ -32,7 +32,6 @@ export function registerEpubGotoHandler(
       }
     });
 
-    wireCalloutClickHandlers(el, ctx.sourcePath, openAtCfi, resolveAnn, plugin.app);
     wireBackLinks(el, ctx.sourcePath, openAtCfi, resolveAnn, plugin.app);
   });
 }
@@ -57,38 +56,6 @@ function wireBackLinks(
     }
     wireGotoAnchor(anchor, sourcePath, goto, resolveAnn, app);
   });
-}
-
-function wireCalloutClickHandlers(
-  el: HTMLElement,
-  sourcePath: string,
-  goto: (file: string, cfi: string) => Promise<void>,
-  resolveAnn: EpubGotoResolver | undefined,
-  app: App,
-): void {
-  for (const node of el.querySelectorAll(`[data-callout="${CALLOUT_TYPE}"]`)) {
-    const container = (node.closest(".callout") ?? node) as HTMLElement;
-    if (container.dataset.yhEpubGotoWired === "1") {
-      continue;
-    }
-
-    const target = findTargetNear(container, sourcePath, app);
-    if (!target) {
-      continue;
-    }
-
-    container.dataset.yhEpubGotoWired = "1";
-    container.addClass("yh-epub-goto-callout");
-    container.setAttr("title", "Open source annotation");
-    container.addEventListener("click", (event) => {
-      if ((event.target as HTMLElement).closest("a")) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      void goto(target.file, target.cfi);
-    });
-  }
 }
 
 function wireGotoAnchor(

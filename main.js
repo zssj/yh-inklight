@@ -14681,7 +14681,6 @@ var EpubBookshelfView = class extends import_obsidian14.ItemView {
 
 // src/epub/EpubGotoHandler.ts
 var import_obsidian15 = require("obsidian");
-var CALLOUT_TYPE = "inklight-epub";
 var CFI_COMMENT_RE = /<!--\s*yh-epub-cfi:\s*(epubcfi\([\s\S]*?\))\s*-->/;
 var SOURCE_EXTENSIONS = ["epub", "mobi", "azw3", "fb2", "fbz", "cbz", "txt"];
 function registerEpubGotoHandler(plugin, openAtCfi, resolveAnn) {
@@ -14695,7 +14694,6 @@ function registerEpubGotoHandler(plugin, openAtCfi, resolveAnn) {
         htmlEl.addClass("yh-epub-cfi-hidden");
       }
     });
-    wireCalloutClickHandlers(el, ctx.sourcePath, openAtCfi, resolveAnn, plugin.app);
     wireBackLinks(el, ctx.sourcePath, openAtCfi, resolveAnn, plugin.app);
   });
 }
@@ -14712,29 +14710,6 @@ function wireBackLinks(el, sourcePath, goto, resolveAnn, app) {
     }
     wireGotoAnchor(anchor, sourcePath, goto, resolveAnn, app);
   });
-}
-function wireCalloutClickHandlers(el, sourcePath, goto, resolveAnn, app) {
-  for (const node of el.querySelectorAll(`[data-callout="${CALLOUT_TYPE}"]`)) {
-    const container = node.closest(".callout") ?? node;
-    if (container.dataset.yhEpubGotoWired === "1") {
-      continue;
-    }
-    const target = findTargetNear(container, sourcePath, app);
-    if (!target) {
-      continue;
-    }
-    container.dataset.yhEpubGotoWired = "1";
-    container.addClass("yh-epub-goto-callout");
-    container.setAttr("title", "Open source annotation");
-    container.addEventListener("click", (event) => {
-      if (event.target.closest("a")) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      void goto(target.file, target.cfi);
-    });
-  }
 }
 function wireGotoAnchor(anchor, sourcePath, goto, resolveAnn, app) {
   if (anchor.dataset.yhEpubGotoWired === "1") {

@@ -897,8 +897,13 @@ export class EpubReaderView extends FileView {
 		});
 
 		const safeTop = parseInt(getComputedStyle(this.containerEl).getPropertyValue("--yh-safe-top")) || 0;
+		const safeBottom = parseInt(getComputedStyle(this.containerEl).getPropertyValue("--yh-safe-bottom")) || 0;
+		const menuHeight = menu.getBoundingClientRect().height || 40;
 		const clampedLeft = Math.max(8, Math.min(left, window.innerWidth - 260));
-		const clampedTop = Math.max(8 + safeTop, Math.min(top + 8, window.innerHeight - 48));
+		const spaceBelow = window.innerHeight - top - safeBottom;
+		const clampedTop = spaceBelow >= menuHeight + 20
+			? Math.max(8 + safeTop, top + 20)
+			: Math.max(8 + safeTop, top - menuHeight - 20);
 		menu.style.left = `${clampedLeft}px`;
 		menu.style.top = `${clampedTop}px`;
 

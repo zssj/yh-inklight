@@ -10522,8 +10522,7 @@ var AnnotationSidebarView = class extends import_obsidian8.ItemView {
     });
     const filterButton = searchRow.createEl("button", { cls: "yh-icon-btn", attr: { type: "button", title: "\u7B5B\u9009" } });
     (0, import_obsidian8.setIcon)(filterButton, "filter");
-    const filterRow = container.createDiv({ cls: "yh-ov-filter-row" });
-    const color = filterRow.createEl("select", { cls: "yh-filter-select" });
+    const color = searchRow.createEl("select", { cls: "yh-filter-select" });
     color.createEl("option", { text: "\u5168\u90E8\u989C\u8272", value: "all" });
     for (const item of ANNOTATION_COLORS) {
       color.createEl("option", { text: COLOR_LABELS[item], value: item });
@@ -10533,7 +10532,7 @@ var AnnotationSidebarView = class extends import_obsidian8.ItemView {
       this.color = color.value;
       await this.render();
     });
-    const type = filterRow.createEl("select", { cls: "yh-filter-select" });
+    const type = searchRow.createEl("select", { cls: "yh-filter-select" });
     type.createEl("option", { text: "\u5168\u90E8\u7C7B\u578B", value: "all" });
     type.createEl("option", { text: "\u9AD8\u4EAE", value: "highlight" });
     type.createEl("option", { text: "\u7B14\u8BB0", value: "note" });
@@ -10542,7 +10541,7 @@ var AnnotationSidebarView = class extends import_obsidian8.ItemView {
       this.type = type.value;
       await this.render();
     });
-    const sort = filterRow.createEl("select", { cls: "yh-filter-select" });
+    const sort = searchRow.createEl("select", { cls: "yh-filter-select" });
     const sortOptions = { document: "\u6587\u6863\u987A\u5E8F", newest: "\u6700\u65B0\u4F18\u5148", oldest: "\u6700\u65E9\u4F18\u5148" };
     for (const item of ["document", "newest", "oldest"]) {
       sort.createEl("option", { text: sortOptions[item], value: item });
@@ -10550,16 +10549,6 @@ var AnnotationSidebarView = class extends import_obsidian8.ItemView {
     sort.value = this.sort;
     sort.addEventListener("change", async () => {
       this.sort = sort.value;
-      await this.render();
-    });
-    const exportFormat = filterRow.createEl("select", { cls: "yh-filter-select" });
-    exportFormat.createEl("option", { text: "\u9ED8\u8BA4\u6458\u8981", value: "summary" });
-    exportFormat.createEl("option", { text: "\u6309\u989C\u8272\u5206\u7EC4", value: "by-color" });
-    exportFormat.createEl("option", { text: "\u53EA\u5BFC\u51FA\u7B14\u8BB0", value: "notes-only" });
-    exportFormat.createEl("option", { text: "\u9605\u8BFB\u7B14\u8BB0", value: "reading-notes" });
-    exportFormat.value = this.exportFormat;
-    exportFormat.addEventListener("change", async () => {
-      this.exportFormat = exportFormat.value;
       await this.render();
     });
   }
@@ -10872,16 +10861,15 @@ var AnnotationSidebarView = class extends import_obsidian8.ItemView {
       const exported = this.annotationScope === "all" ? await this.plugin.store.exportAllNotes(this.exportFormat) : await this.plugin.store.exportNotes(file, this.exportFormat);
       new import_obsidian8.Notice(`\u5DF2\u5BFC\u51FA\u7B14\u8BB0\u81F3 ${exported.path}`);
     });
-    footer.createDiv({ cls: "yh-ov-export-note", text: this.exportFormatLabel() });
-  }
-  exportFormatLabel() {
-    const labels = {
-      summary: "\u5BFC\u51FA\u4E3A Markdown \u6458\u8981",
-      "by-color": "\u6309\u989C\u8272\u5206\u7EC4\u5BFC\u51FA",
-      "notes-only": "\u53EA\u5BFC\u51FA\u5E26\u7B14\u8BB0\u7684\u6279\u6CE8",
-      "reading-notes": "\u5BFC\u51FA\u4E3A\u9605\u8BFB\u7B14\u8BB0\u683C\u5F0F"
-    };
-    return labels[this.exportFormat];
+    const exportFormat = footer.createEl("select", { cls: "yh-filter-select yh-export-format", attr: { title: "\u5BFC\u51FA\u683C\u5F0F" } });
+    exportFormat.createEl("option", { text: "\u9ED8\u8BA4\u6458\u8981", value: "summary" });
+    exportFormat.createEl("option", { text: "\u6309\u989C\u8272\u5206\u7EC4", value: "by-color" });
+    exportFormat.createEl("option", { text: "\u53EA\u5BFC\u51FA\u7B14\u8BB0", value: "notes-only" });
+    exportFormat.createEl("option", { text: "\u9605\u8BFB\u7B14\u8BB0", value: "reading-notes" });
+    exportFormat.value = this.exportFormat;
+    exportFormat.addEventListener("change", () => {
+      this.exportFormat = exportFormat.value;
+    });
   }
   async jumpTo(file, offset, pageNumber, mode = "md", cfiRange) {
     const leaf = this.app.workspace.getLeaf(false);

@@ -429,8 +429,7 @@ export class AnnotationSidebarView extends ItemView {
     const filterButton = searchRow.createEl("button", { cls: "yh-icon-btn", attr: { type: "button", title: "筛选" } });
     setIcon(filterButton, "filter");
 
-    const filterRow = container.createDiv({ cls: "yh-ov-filter-row" });
-    const color = filterRow.createEl("select", { cls: "yh-filter-select" });
+    const color = searchRow.createEl("select", { cls: "yh-filter-select" });
     color.createEl("option", { text: "全部颜色", value: "all" });
     for (const item of ANNOTATION_COLORS) {
       color.createEl("option", { text: COLOR_LABELS[item], value: item });
@@ -441,7 +440,7 @@ export class AnnotationSidebarView extends ItemView {
       await this.render();
     });
 
-    const type = filterRow.createEl("select", { cls: "yh-filter-select" });
+    const type = searchRow.createEl("select", { cls: "yh-filter-select" });
     type.createEl("option", { text: "全部类型", value: "all" });
     type.createEl("option", { text: "高亮", value: "highlight" });
     type.createEl("option", { text: "笔记", value: "note" });
@@ -451,7 +450,7 @@ export class AnnotationSidebarView extends ItemView {
       await this.render();
     });
 
-    const sort = filterRow.createEl("select", { cls: "yh-filter-select" });
+    const sort = searchRow.createEl("select", { cls: "yh-filter-select" });
     const sortOptions = { document: "文档顺序", newest: "最新优先", oldest: "最早优先" } as const;
     for (const item of ["document", "newest", "oldest"] as const) {
       sort.createEl("option", { text: sortOptions[item], value: item });
@@ -459,17 +458,6 @@ export class AnnotationSidebarView extends ItemView {
     sort.value = this.sort;
     sort.addEventListener("change", async () => {
       this.sort = sort.value as AnnotationSortMode;
-      await this.render();
-    });
-
-    const exportFormat = filterRow.createEl("select", { cls: "yh-filter-select" });
-    exportFormat.createEl("option", { text: "默认摘要", value: "summary" });
-    exportFormat.createEl("option", { text: "按颜色分组", value: "by-color" });
-    exportFormat.createEl("option", { text: "只导出笔记", value: "notes-only" });
-    exportFormat.createEl("option", { text: "阅读笔记", value: "reading-notes" });
-    exportFormat.value = this.exportFormat;
-    exportFormat.addEventListener("change", async () => {
-      this.exportFormat = exportFormat.value as AnnotationExportFormat;
       await this.render();
     });
   }
@@ -820,17 +808,15 @@ export class AnnotationSidebarView extends ItemView {
           : await this.plugin.store.exportNotes(file!, this.exportFormat);
       new Notice(`已导出笔记至 ${exported.path}`);
     });
-    footer.createDiv({ cls: "yh-ov-export-note", text: this.exportFormatLabel() });
-  }
-
-  private exportFormatLabel(): string {
-    const labels: Record<AnnotationExportFormat, string> = {
-      summary: "导出为 Markdown 摘要",
-      "by-color": "按颜色分组导出",
-      "notes-only": "只导出带笔记的批注",
-      "reading-notes": "导出为阅读笔记格式",
-    };
-    return labels[this.exportFormat];
+    const exportFormat = footer.createEl("select", { cls: "yh-filter-select yh-export-format", attr: { title: "导出格式" } });
+    exportFormat.createEl("option", { text: "默认摘要", value: "summary" });
+    exportFormat.createEl("option", { text: "按颜色分组", value: "by-color" });
+    exportFormat.createEl("option", { text: "只导出笔记", value: "notes-only" });
+    exportFormat.createEl("option", { text: "阅读笔记", value: "reading-notes" });
+    exportFormat.value = this.exportFormat;
+    exportFormat.addEventListener("change", () => {
+      this.exportFormat = exportFormat.value as AnnotationExportFormat;
+    });
   }
 
   private async jumpTo(

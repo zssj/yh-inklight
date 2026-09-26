@@ -10522,7 +10522,8 @@ var AnnotationSidebarView = class extends import_obsidian8.ItemView {
     });
     const filterButton = searchRow.createEl("button", { cls: "yh-icon-btn", attr: { type: "button", title: "\u7B5B\u9009" } });
     (0, import_obsidian8.setIcon)(filterButton, "filter");
-    const color = searchRow.createEl("select", { cls: "yh-filter-select" });
+    const filterRow = container.createDiv({ cls: "yh-ov-filter-row" });
+    const color = filterRow.createEl("select", { cls: "yh-filter-select" });
     color.createEl("option", { text: "\u5168\u90E8\u989C\u8272", value: "all" });
     for (const item of ANNOTATION_COLORS) {
       color.createEl("option", { text: COLOR_LABELS[item], value: item });
@@ -10532,7 +10533,7 @@ var AnnotationSidebarView = class extends import_obsidian8.ItemView {
       this.color = color.value;
       await this.render();
     });
-    const type = searchRow.createEl("select", { cls: "yh-filter-select" });
+    const type = filterRow.createEl("select", { cls: "yh-filter-select" });
     type.createEl("option", { text: "\u5168\u90E8\u7C7B\u578B", value: "all" });
     type.createEl("option", { text: "\u9AD8\u4EAE", value: "highlight" });
     type.createEl("option", { text: "\u7B14\u8BB0", value: "note" });
@@ -10541,7 +10542,7 @@ var AnnotationSidebarView = class extends import_obsidian8.ItemView {
       this.type = type.value;
       await this.render();
     });
-    const sort = searchRow.createEl("select", { cls: "yh-filter-select" });
+    const sort = filterRow.createEl("select", { cls: "yh-filter-select" });
     const sortOptions = { document: "\u6587\u6863\u987A\u5E8F", newest: "\u6700\u65B0\u4F18\u5148", oldest: "\u6700\u65E9\u4F18\u5148" };
     for (const item of ["document", "newest", "oldest"]) {
       sort.createEl("option", { text: sortOptions[item], value: item });

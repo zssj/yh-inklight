@@ -429,7 +429,8 @@ export class AnnotationSidebarView extends ItemView {
     const filterButton = searchRow.createEl("button", { cls: "yh-icon-btn", attr: { type: "button", title: "筛选" } });
     setIcon(filterButton, "filter");
 
-    const color = searchRow.createEl("select", { cls: "yh-filter-select" });
+    const filterRow = container.createDiv({ cls: "yh-ov-filter-row" });
+    const color = filterRow.createEl("select", { cls: "yh-filter-select" });
     color.createEl("option", { text: "全部颜色", value: "all" });
     for (const item of ANNOTATION_COLORS) {
       color.createEl("option", { text: COLOR_LABELS[item], value: item });
@@ -440,7 +441,7 @@ export class AnnotationSidebarView extends ItemView {
       await this.render();
     });
 
-    const type = searchRow.createEl("select", { cls: "yh-filter-select" });
+    const type = filterRow.createEl("select", { cls: "yh-filter-select" });
     type.createEl("option", { text: "全部类型", value: "all" });
     type.createEl("option", { text: "高亮", value: "highlight" });
     type.createEl("option", { text: "笔记", value: "note" });
@@ -450,7 +451,7 @@ export class AnnotationSidebarView extends ItemView {
       await this.render();
     });
 
-    const sort = searchRow.createEl("select", { cls: "yh-filter-select" });
+    const sort = filterRow.createEl("select", { cls: "yh-filter-select" });
     const sortOptions = { document: "文档顺序", newest: "最新优先", oldest: "最早优先" } as const;
     for (const item of ["document", "newest", "oldest"] as const) {
       sort.createEl("option", { text: sortOptions[item], value: item });

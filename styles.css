@@ -275,17 +275,17 @@
 .yh-ov-search-row {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 6px 10px;
+  flex-wrap: nowrap;
+  gap: 4px;
+  padding: 6px 8px;
   border-bottom: 1px solid var(--yh-border);
   flex-shrink: 0;
 }
 
 .yh-ov-search {
   flex: 1;
-  min-width: 0;
-  padding: 5px 10px;
+  min-width: 40px;
+  padding: 5px 8px;
   border: 1px solid var(--yh-border);
   border-radius: var(--yh-radius-sm);
   background: var(--background-secondary);
@@ -310,6 +310,12 @@
   font-size: var(--yh-font-xs);
   cursor: pointer;
   outline: none;
+}
+
+.yh-ov-search-row .yh-filter-select {
+  flex: 0 1 auto;
+  min-width: 48px;
+  padding: 4px 4px;
 }
 
 .yh-filter-select:focus {

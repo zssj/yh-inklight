@@ -1394,6 +1394,12 @@ body.yh-epub-nav-hidden .mobile-navbar {
   font-size: var(--yh-font-sm);
 }
 
+/* 左侧栏目录视图（EpubTocView）容器 */
+.yh-epub-toc-view {
+  padding: 6px 4px;
+  overflow-y: auto;
+}
+
 .yh-epub-toc-list {
   display: flex;
   flex-direction: column;
@@ -1477,6 +1483,21 @@ body.yh-epub-nav-hidden .mobile-navbar {
   position: relative;
   overflow: hidden;
   background: var(--background-primary);
+}
+
+/* 左边缘触控条：正文渲染在 iframe 里，触摸事件不会冒泡到 Obsidian 主文档，
+   滚动模式下 iframe 满宽满屏，原生「左滑打开左侧栏」因此完全失效。
+   这条透明窄带把左边缘约 24px 的触摸落点留在主文档上，使左滑与右侧批注面板行为一致。
+   该宽度在滚动模式（iframe 文档自带 padding 0 8%）与分页模式下都只覆盖空白留白。 */
+.yh-epub-reader-area::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 24px;
+  z-index: 2;
+  background: transparent;
 }
 
 .yh-epub-reader-area iframe {

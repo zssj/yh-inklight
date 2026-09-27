@@ -7758,7 +7758,7 @@ __export(main_exports, {
   default: () => OverlayAnnotationsPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian17 = require("obsidian");
+var import_obsidian18 = require("obsidian");
 
 // src/anchor/fuzzyMatch.ts
 function findBestFuzzyMatch(source, target, expectedStart) {
@@ -12289,8 +12289,8 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
   // ================================================================
   // 构造 & 生命周期
   // ================================================================
-  constructor(leaf, store, settings, refreshAnnotations, saveSettings) {
-    super(leaf);
+  constructor(options) {
+    super(options.leaf);
     // ---- foliate 实例 ----
     this.foliateView = null;
     this.loadedSectionDocs = /* @__PURE__ */ new WeakMap();
@@ -12441,14 +12441,15 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
       }
       this.showAnnotationCard(detail.value, detail.index, detail.range);
     };
-    this.store = store;
-    this.pluginSettings = settings;
-    this.refreshAnnotations = refreshAnnotations;
-    this.saveSettings = saveSettings;
+    this.store = options.store;
+    this.pluginSettings = options.settings;
+    this.refreshAnnotations = options.refreshAnnotations;
+    this.saveSettings = options.saveSettings;
+    this.onTocChanged = options.onTocChanged;
     this.themeManager = new EpubThemeManager();
-    this.currentFlowMode = settings.epubDefaultFlow;
-    this.currentFontSize = settings.epubFontSize;
-    this.currentTheme = settings.epubReadingTheme;
+    this.currentFlowMode = options.settings.epubDefaultFlow;
+    this.currentFontSize = options.settings.epubFontSize;
+    this.currentTheme = options.settings.epubReadingTheme;
   }
   /** 视图类型标识，供 Obsidian workspace 路由 */
   getViewType() {
@@ -12496,6 +12497,11 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
     this.lastRelocatedFraction = 0;
     this.bodyFontScaled = false;
     this.bodyScaleMeasured = false;
+    this.tocEntries = [];
+    this.currentTocHref = "";
+    this.currentSectionIndex = 0;
+    this.currentChapter = "";
+    this.onTocChanged();
     this.destroyRendition();
     try {
       const arrayBuffer = await this.app.vault.readBinary(file);
@@ -12506,6 +12512,7 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
       this.attachReaderScrollHide();
       this.applyFoliateLayout();
       this.tocEntries = this.buildFoliateTocEntries(this.foliateView.book?.toc ?? []);
+      this.onTocChanged();
       this.applyFoliateAppearance();
       await this.restoreProgress();
       this.baselineReaderScroll();
@@ -12681,6 +12688,33 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
     this.renderBookmarkList();
   }
   /**
+   * 当前应高亮的目录条目下标（-1 表示无）。
+   * 内嵌侧边栏目录与左侧栏目录视图共用此逻辑，保证两边高亮一致。
+   */
+  getActiveTocIndex() {
+    if (this.tocEntries.length === 0) {
+      return -1;
+    }
+    const hrefMatch = this.currentTocHref ? this.tocEntries.findIndex((e3) => e3.href === this.currentTocHref) : -1;
+    if (hrefMatch >= 0) {
+      return hrefMatch;
+    }
+    const isSingleSection = this.tocEntries.every((e3) => e3.spineIndex === this.tocEntries[0].spineIndex);
+    let activeIndex = -1;
+    for (let i3 = 0; i3 < this.tocEntries.length; i3++) {
+      const entry = this.tocEntries[i3];
+      const isCurrent = isSingleSection ? entry.label === (this.currentChapter || "").trim() : entry.spineIndex <= this.currentSectionIndex;
+      if (isCurrent) {
+        activeIndex = i3;
+      }
+    }
+    return activeIndex;
+  }
+  /** 目录条目快照（供左侧栏目录视图渲染）。 */
+  getTocEntries() {
+    return this.tocEntries;
+  }
+  /**
    * 渲染目录列表，点击条目跳转到对应章节。
    */
   renderTocList() {
@@ -12689,21 +12723,15 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
       return;
     }
     const list = this.sidebarContentEl.createDiv({ cls: "yh-epub-toc-list" });
-    const isSingleSection = this.tocEntries.every((e3) => e3.spineIndex === this.tocEntries[0].spineIndex);
-    const hrefMatch = this.currentTocHref ? this.tocEntries.findIndex((e3) => e3.href === this.currentTocHref) : -1;
-    let activeIndex = -1;
+    const activeIndex = this.getActiveTocIndex();
     for (let i3 = 0; i3 < this.tocEntries.length; i3++) {
       const entry = this.tocEntries[i3];
-      const isCurrent = hrefMatch >= 0 ? i3 === hrefMatch : isSingleSection ? entry.label === (this.currentChapter || "").trim() : entry.spineIndex <= this.currentSectionIndex;
       const item = list.createEl("button", {
-        cls: `yh-epub-toc-item${isCurrent ? " is-current" : ""}`,
+        cls: `yh-epub-toc-item${i3 === activeIndex ? " is-current" : ""}`,
         text: entry.label,
         attr: { type: "button" }
       });
       item.addEventListener("click", () => this.navigateToSpineIndex(entry));
-      if (isCurrent) {
-        activeIndex = i3;
-      }
     }
     if (activeIndex >= 0) {
       const activeEl = list.children[activeIndex];
@@ -13173,6 +13201,9 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
     const cfi = normalizeCfi(detail?.cfi);
     const rawPercent = normalizePercent(detail?.fraction ?? this.currentPercent);
     const spineIndex = typeof detail.section?.current === "number" ? detail.section.current : this.currentSectionIndex;
+    const prevTocHref = this.currentTocHref;
+    const prevSectionIndex = this.currentSectionIndex;
+    const prevChapter = this.currentChapter;
     if (rawPercent > this.maxSeenPercent) {
       this.maxSeenPercent = rawPercent;
       this.clampedToEnd = false;
@@ -13230,6 +13261,12 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
     this.currentPercent = percent;
     this.updateProgressBar(percent);
     this.debouncedSaveProgress(this.currentCfi, percent);
+    if (prevTocHref !== this.currentTocHref || prevSectionIndex !== this.currentSectionIndex || prevChapter !== this.currentChapter) {
+      this.onTocChanged();
+      if (this.sidebarOpen) {
+        this.renderSidebar();
+      }
+    }
   }
   /**
    * 更新底部进度条的填充和文本。
@@ -14671,8 +14708,126 @@ var EpubBookshelfView = class extends import_obsidian14.ItemView {
   }
 };
 
-// src/epub/EpubGotoHandler.ts
+// src/epub/EpubTocView.ts
 var import_obsidian15 = require("obsidian");
+var EPUB_TOC_VIEW_TYPE = "inklight-epub-toc";
+var EMPTY_HINT_NO_READER = "\u8BF7\u5148\u6253\u5F00\u7535\u5B50\u4E66";
+var EMPTY_HINT_NO_TOC = "\u672A\u627E\u5230\u76EE\u5F55\u4FE1\u606F\u3002";
+var EpubTocView = class extends import_obsidian15.ItemView {
+  constructor(leaf) {
+    super(leaf);
+    /** 上次渲染的指纹，避免 relocate/leaf 切换时无谓重建列表 */
+    this.lastFingerprint = null;
+  }
+  getViewType() {
+    return EPUB_TOC_VIEW_TYPE;
+  }
+  getDisplayText() {
+    return "\u76EE\u5F55";
+  }
+  getIcon() {
+    return "list";
+  }
+  async onOpen() {
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () => void this.renderToc())
+    );
+    await this.renderToc();
+  }
+  async onClose() {
+    this.contentEl.empty();
+  }
+  /** 供 main.ts 在目录/当前位置变化后刷新（内部按指纹去重）。 */
+  refresh() {
+    void this.renderToc();
+  }
+  /**
+   * 定位当前应显示的 EpubReaderView。
+   * 焦点可能落在左侧栏本身，故不能用 getActiveViewOfType，改用
+   * rootSplit 内最近活跃 leaf + 全量 reader leaf 兜底；延迟加载的 leaf 需先 load。
+   */
+  async reader() {
+    const workspace = this.app.workspace;
+    const pool = [];
+    const recent = workspace.getMostRecentLeaf(workspace.rootSplit);
+    if (recent) {
+      pool.push(recent);
+    }
+    pool.push(...workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE));
+    for (const leaf of pool) {
+      if (leaf.view instanceof EpubReaderView) {
+        return leaf.view;
+      }
+      if (leaf.view?.getViewType() !== EPUB_READER_VIEW_TYPE) {
+        continue;
+      }
+      try {
+        await leaf.loadIfDeferred();
+      } catch {
+        continue;
+      }
+      if (leaf.view instanceof EpubReaderView) {
+        return leaf.view;
+      }
+    }
+    return null;
+  }
+  /** 渲染指纹：换书、目录重建、高亮条目变化时才重建 DOM。 */
+  fingerprint(reader) {
+    if (!reader) {
+      return "no-reader";
+    }
+    return [
+      reader.file?.path ?? "",
+      reader.getTocEntries().length,
+      reader.getActiveTocIndex()
+    ].join("|");
+  }
+  async renderToc() {
+    const container = this.contentEl;
+    const reader = await this.reader();
+    if (!container.isConnected) {
+      return;
+    }
+    const fingerprint = this.fingerprint(reader);
+    if (fingerprint === this.lastFingerprint) {
+      return;
+    }
+    this.lastFingerprint = fingerprint;
+    container.empty();
+    container.addClass("yh-epub-toc-view");
+    if (!reader) {
+      container.createDiv({ cls: "yh-epub-empty", text: EMPTY_HINT_NO_READER });
+      return;
+    }
+    const entries = reader.getTocEntries();
+    if (entries.length === 0) {
+      container.createDiv({ cls: "yh-epub-empty", text: EMPTY_HINT_NO_TOC });
+      return;
+    }
+    const list = container.createDiv({ cls: "yh-epub-toc-list" });
+    const activeIndex = reader.getActiveTocIndex();
+    for (let i3 = 0; i3 < entries.length; i3++) {
+      const entry = entries[i3];
+      const item = list.createEl("button", {
+        cls: `yh-epub-toc-item${i3 === activeIndex ? " is-current" : ""}`,
+        text: entry.label,
+        attr: { type: "button" }
+      });
+      item.addEventListener("click", () => {
+        reader.navigateToSpineIndex(entry);
+        this.app.workspace.leftSplit.collapse();
+      });
+    }
+    if (activeIndex >= 0) {
+      const activeEl = list.children[activeIndex];
+      setTimeout(() => activeEl?.scrollIntoView({ block: "center" }), 50);
+    }
+  }
+};
+
+// src/epub/EpubGotoHandler.ts
+var import_obsidian16 = require("obsidian");
 var CFI_COMMENT_RE = /<!--\s*yh-epub-cfi:\s*(epubcfi\([\s\S]*?\))\s*-->/;
 var SOURCE_EXTENSIONS = ["epub", "mobi", "azw3", "fb2", "fbz", "cbz", "txt"];
 function registerEpubGotoHandler(plugin, openAtCfi, resolveAnn) {
@@ -14721,7 +14876,7 @@ function wireGotoAnchor(anchor, sourcePath, goto, resolveAnn, app) {
       void goto(target.file, target.cfi);
       return;
     }
-    new import_obsidian15.Notice("Unable to resolve source annotation");
+    new import_obsidian16.Notice("Unable to resolve source annotation");
   });
 }
 function findTargetNear(container, exportPath, app) {
@@ -14770,9 +14925,9 @@ function findEpubFileFromExportPath(exportPath, app) {
 }
 
 // src/views/markdownStatsView.ts
-var import_obsidian16 = require("obsidian");
+var import_obsidian17 = require("obsidian");
 var MARKDOWN_STATS_VIEW_TYPE = "inklight-md-stats";
-var ConfirmDeleteModal = class extends import_obsidian16.Modal {
+var ConfirmDeleteModal = class extends import_obsidian17.Modal {
   constructor(app, file, onConfirm) {
     super(app);
     this.file = file;
@@ -14794,7 +14949,7 @@ var ConfirmDeleteModal = class extends import_obsidian16.Modal {
     this.contentEl.empty();
   }
 };
-var MarkdownStatsView = class extends import_obsidian16.ItemView {
+var MarkdownStatsView = class extends import_obsidian17.ItemView {
   constructor(leaf, stats, saveSettings, onOpen) {
     super(leaf);
     this.entries = [];
@@ -14909,10 +15064,10 @@ var MarkdownStatsView = class extends import_obsidian16.ItemView {
     new ConfirmDeleteModal(this.app, file, async () => {
       try {
         await this.app.vault.trash(file, false);
-        new import_obsidian16.Notice(`\u5DF2\u5220\u9664\u300C${file.basename}\u300D`);
+        new import_obsidian17.Notice(`\u5DF2\u5220\u9664\u300C${file.basename}\u300D`);
         this.refresh();
       } catch (err) {
-        new import_obsidian16.Notice(`\u5220\u9664\u5931\u8D25\uFF1A${String(err)}`);
+        new import_obsidian17.Notice(`\u5220\u9664\u5931\u8D25\uFF1A${String(err)}`);
       }
     }).open();
   }
@@ -14937,7 +15092,7 @@ var YH_INKLIGHT_ICON = `
     </g>
   </svg>
 `;
-var OverlayAnnotationsPlugin = class extends import_obsidian17.Plugin {
+var OverlayAnnotationsPlugin = class extends import_obsidian18.Plugin {
   constructor() {
     super(...arguments);
     this.settings = DEFAULT_SETTINGS;
@@ -14945,20 +15100,28 @@ var OverlayAnnotationsPlugin = class extends import_obsidian17.Plugin {
     this.renameMigrationTimer = null;
     this.settingsSaveTimer = null;
     this.statsSaveTimer = null;
+    this.epubTocSyncTimer = null;
     this.lastCountedPath = "";
     this.lastCountedAt = 0;
     /** Markdown 打开次数统计（存于独立 sidecar，插件重装不丢失） */
     this.mdOpenStats = {};
   }
   async onload() {
-    (0, import_obsidian17.addIcon)("yh-inklight-icon", YH_INKLIGHT_ICON);
+    (0, import_obsidian18.addIcon)("yh-inklight-icon", YH_INKLIGHT_ICON);
     await this.loadSettings();
     console.info(`yh-inklight loaded v${this.manifest.version}`);
     this.store = new AnnotationStore(this.app);
     await this.store.initialize();
     await this.loadMdOpenStats();
     this.registerView(ANNOTATION_SIDEBAR_VIEW, (leaf) => new AnnotationSidebarView(leaf, this));
-    this.registerView(EPUB_READER_VIEW_TYPE, (leaf) => new EpubReaderView(leaf, this.store, this.settings, () => this.refreshAnnotations(), () => this.saveSettings()));
+    this.registerView(EPUB_READER_VIEW_TYPE, (leaf) => new EpubReaderView({
+      leaf,
+      store: this.store,
+      settings: this.settings,
+      refreshAnnotations: () => this.refreshAnnotations(),
+      saveSettings: () => this.saveSettings(),
+      onTocChanged: () => this.refreshEpubToc()
+    }));
     try {
       this.registerExtensions([...SUPPORTED_BOOK_EXTENSIONS], EPUB_READER_VIEW_TYPE);
     } catch (error) {
@@ -14972,6 +15135,8 @@ var OverlayAnnotationsPlugin = class extends import_obsidian17.Plugin {
       MARKDOWN_STATS_VIEW_TYPE,
       (leaf) => new MarkdownStatsView(leaf, this.mdOpenStats, () => this.saveSettings(), (file) => this.openMarkdownNote(file))
     );
+    this.registerView(EPUB_TOC_VIEW_TYPE, (leaf) => new EpubTocView(leaf));
+    this.app.workspace.onLayoutReady(() => this.scheduleEpubTocSync());
     this.registerEditorExtension([
       createHighlightExtension({
         getDocument: (filePath) => this.store.getCachedDocument(filePath),
@@ -15069,12 +15234,16 @@ var OverlayAnnotationsPlugin = class extends import_obsidian17.Plugin {
     if (this.statsSaveTimer !== null) {
       window.clearTimeout(this.statsSaveTimer);
     }
+    if (this.epubTocSyncTimer !== null) {
+      window.clearTimeout(this.epubTocSyncTimer);
+    }
     this.toolbar?.destroy();
     this.popover?.destroy();
     this.stickyLane?.destroy();
     this.app.workspace.detachLeavesOfType(ANNOTATION_SIDEBAR_VIEW);
     this.app.workspace.detachLeavesOfType(EPUB_BOOKSHELF_VIEW_TYPE);
     this.app.workspace.detachLeavesOfType(MARKDOWN_STATS_VIEW_TYPE);
+    this.app.workspace.detachLeavesOfType(EPUB_TOC_VIEW_TYPE);
   }
   async loadSettings() {
     this.settings = {
@@ -15111,11 +15280,67 @@ var OverlayAnnotationsPlugin = class extends import_obsidian17.Plugin {
     }
     await this.stickyLane.render();
   }
+  /** 手机端防抖同步左侧栏目录视图（layout-change 可能连续触发）。 */
+  scheduleEpubTocSync() {
+    if (!import_obsidian18.Platform.isMobile) {
+      return;
+    }
+    if (this.epubTocSyncTimer !== null) {
+      window.clearTimeout(this.epubTocSyncTimer);
+    }
+    this.epubTocSyncTimer = window.setTimeout(() => {
+      this.epubTocSyncTimer = null;
+      void this.syncEpubTocLeaf();
+    }, 200);
+  }
+  /**
+   * 同步左侧栏目录视图：手机端有 EPUB 打开时确保左侧栏存在 EpubTocView
+   * （左边缘右滑即可呼出），关完最后一本则摘除，不留孤儿标签页。
+   * ensureSideLeaf 仅在该类型视图不存在时新建，不会覆盖文件管理器等已有标签。
+   */
+  async syncEpubTocLeaf() {
+    if (!import_obsidian18.Platform.isMobile) {
+      return;
+    }
+    const workspace = this.app.workspace;
+    const tocLeaves = workspace.getLeavesOfType(EPUB_TOC_VIEW_TYPE);
+    const hasEpub = workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE).length > 0;
+    if (!hasEpub) {
+      if (tocLeaves.length > 0) {
+        workspace.detachLeavesOfType(EPUB_TOC_VIEW_TYPE);
+      }
+      return;
+    }
+    if (tocLeaves.length > 0) {
+      return;
+    }
+    const drawer = workspace.leftSplit;
+    const wasOpen = !drawer.collapsed;
+    try {
+      const leaf = await workspace.ensureSideLeaf(EPUB_TOC_VIEW_TYPE, "left", { active: true, reveal: false });
+      await leaf.loadIfDeferred();
+    } catch (error) {
+      console.warn("yh-inklight: \u521B\u5EFA\u5DE6\u4FA7\u680F\u76EE\u5F55\u89C6\u56FE\u5931\u8D25", error);
+      return;
+    }
+    if (!wasOpen) {
+      drawer.collapse();
+    }
+  }
+  /** 刷新所有已打开的左侧栏目录视图（EpubReaderView 目录/高亮变化时回调）。 */
+  refreshEpubToc() {
+    for (const leaf of this.app.workspace.getLeavesOfType(EPUB_TOC_VIEW_TYPE)) {
+      const view = leaf.view;
+      if (view instanceof EpubTocView) {
+        view.refresh();
+      }
+    }
+  }
   /** 跳转到 PDF 指定页（侧栏批注卡片跳转、书签等共用）。 */
   async gotoPdfPage(pageNumber) {
     const ok = await this.pdfViewerAdapter.goToPage(pageNumber, { flash: true, block: "center" });
     if (!ok) {
-      new import_obsidian17.Notice(`\u672A\u627E\u5230\u7B2C ${pageNumber} \u9875`);
+      new import_obsidian18.Notice(`\u672A\u627E\u5230\u7B2C ${pageNumber} \u9875`);
     }
   }
   registerRibbonIcon() {
@@ -15167,12 +15392,12 @@ var OverlayAnnotationsPlugin = class extends import_obsidian17.Plugin {
       name: "\u663E\u793A PDF \u76EE\u5F55",
       callback: async () => {
         if (!this.pdfLayer.isPdfActive()) {
-          new import_obsidian17.Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A PDF \u6587\u4EF6");
+          new import_obsidian18.Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A PDF \u6587\u4EF6");
           return;
         }
         const outline = await this.pdfLayer.getOutline();
         if (outline.length === 0) {
-          new import_obsidian17.Notice("\u8BE5 PDF \u6CA1\u6709\u76EE\u5F55");
+          new import_obsidian18.Notice("\u8BE5 PDF \u6CA1\u6709\u76EE\u5F55");
           return;
         }
         const lines = outline.map((item) => {
@@ -15180,7 +15405,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian17.Plugin {
           const children = item.children.filter((c2) => c2.pageNumber > 0).map((c2) => `  \u2514 ${c2.title} \u2192 p.${c2.pageNumber}`).join("\n");
           return `${item.title}${pageInfo}${children ? "\n" + children : ""}`;
         });
-        new import_obsidian17.Notice(`PDF \u76EE\u5F55\uFF08${outline.length} \u9879\uFF09\uFF1A
+        new import_obsidian18.Notice(`PDF \u76EE\u5F55\uFF08${outline.length} \u9879\uFF09\uFF1A
 ${lines.slice(0, 8).join("\n")}`);
       }
     });
@@ -15190,9 +15415,9 @@ ${lines.slice(0, 8).join("\n")}`);
       callback: async () => {
         try {
           const path = await this.store.testWriteAccess();
-          new import_obsidian17.Notice(`\u58A8\u5149\u6279\u6CE8\u5B58\u50A8\u53EF\u5199\uFF1A${path}`);
+          new import_obsidian18.Notice(`\u58A8\u5149\u6279\u6CE8\u5B58\u50A8\u53EF\u5199\uFF1A${path}`);
         } catch {
-          new import_obsidian17.Notice("\u58A8\u5149\u6279\u6CE8\u5B58\u50A8\u4E0D\u53EF\u5199\uFF0C\u8BF7\u68C0\u67E5 .obsidian-annotations \u76EE\u5F55\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001\u3002");
+          new import_obsidian18.Notice("\u58A8\u5149\u6279\u6CE8\u5B58\u50A8\u4E0D\u53EF\u5199\uFF0C\u8BF7\u68C0\u67E5 .obsidian-annotations \u76EE\u5F55\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001\u3002");
         }
       }
     });
@@ -15209,7 +15434,7 @@ ${lines.slice(0, 8).join("\n")}`);
     });
     this.registerEvent(
       this.app.vault.on("modify", async (file) => {
-        if (!(file instanceof import_obsidian17.TFile) || file.extension !== "md") {
+        if (!(file instanceof import_obsidian18.TFile) || file.extension !== "md") {
           return;
         }
         const document2 = await this.store.getDocument(file);
@@ -15225,7 +15450,7 @@ ${lines.slice(0, 8).join("\n")}`);
     );
     this.registerEvent(
       this.app.vault.on("rename", async (file, oldPath) => {
-        if (!this.settings.migrateOnRename || !(file instanceof import_obsidian17.TFile)) {
+        if (!this.settings.migrateOnRename || !(file instanceof import_obsidian18.TFile)) {
           return;
         }
         const ext = file.extension.toLowerCase();
@@ -15254,7 +15479,7 @@ ${lines.slice(0, 8).join("\n")}`);
     );
     this.registerEvent(
       this.app.workspace.on("file-open", async (file) => {
-        if (file instanceof import_obsidian17.TFile && ["md", "pdf"].includes(file.extension.toLowerCase())) {
+        if (file instanceof import_obsidian18.TFile && ["md", "pdf"].includes(file.extension.toLowerCase())) {
           this.popover.hide();
           await this.store.getDocument(file);
           await this.refreshAnnotations();
@@ -15268,7 +15493,7 @@ ${lines.slice(0, 8).join("\n")}`);
     );
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
-        if (file instanceof import_obsidian17.TFile && file.extension.toLowerCase() === "md") {
+        if (file instanceof import_obsidian18.TFile && file.extension.toLowerCase() === "md") {
           const stats = this.mdOpenStats;
           if (stats[file.path]) {
             delete stats[file.path];
@@ -15277,6 +15502,7 @@ ${lines.slice(0, 8).join("\n")}`);
         }
       })
     );
+    this.registerEvent(this.app.workspace.on("layout-change", () => this.scheduleEpubTocSync()));
   }
   /** 加载 Markdown 打开次数统计（独立 sidecar），并迁移 data.json 中的旧数据。 */
   async loadMdOpenStats() {
@@ -15320,7 +15546,7 @@ ${lines.slice(0, 8).join("\n")}`);
   }
   /** 记录一次 Markdown 打开（开启开关、.md 文件、60s 冷却内不重复计）。 */
   countMarkdownOpen(file) {
-    if (!this.settings.mdOpenTracking || !(file instanceof import_obsidian17.TFile) || file.extension.toLowerCase() !== "md") {
+    if (!this.settings.mdOpenTracking || !(file instanceof import_obsidian18.TFile) || file.extension.toLowerCase() !== "md") {
       return;
     }
     const now = Date.now();
@@ -15367,11 +15593,11 @@ ${lines.slice(0, 8).join("\n")}`);
     }
     const snapshot = await this.resolveSelection();
     if (!snapshot) {
-      new import_obsidian17.Notice("\u8BF7\u5148\u9009\u4E2D\u6587\u672C\u3002");
+      new import_obsidian18.Notice("\u8BF7\u5148\u9009\u4E2D\u6587\u672C\u3002");
       return;
     }
     const file = this.app.vault.getAbstractFileByPath(snapshot.filePath);
-    if (!(file instanceof import_obsidian17.TFile)) {
+    if (!(file instanceof import_obsidian18.TFile)) {
       return;
     }
     const highlight = {
@@ -15401,11 +15627,11 @@ ${lines.slice(0, 8).join("\n")}`);
     }
     const snapshot = await this.resolveSelection();
     if (!snapshot) {
-      new import_obsidian17.Notice("\u8BF7\u5148\u9009\u4E2D\u6587\u672C\u3002");
+      new import_obsidian18.Notice("\u8BF7\u5148\u9009\u4E2D\u6587\u672C\u3002");
       return;
     }
     const file = this.app.vault.getAbstractFileByPath(snapshot.filePath);
-    if (!(file instanceof import_obsidian17.TFile)) {
+    if (!(file instanceof import_obsidian18.TFile)) {
       return;
     }
     const note = await new CommentModal(this.app, "", "").openAndRead();
@@ -15434,7 +15660,7 @@ ${lines.slice(0, 8).join("\n")}`);
   }
   async refreshActiveReadingViewHighlights(filePath) {
     const file = this.app.vault.getAbstractFileByPath(filePath);
-    if (!(file instanceof import_obsidian17.TFile)) {
+    if (!(file instanceof import_obsidian18.TFile)) {
       return;
     }
     const document2 = this.store.getCachedDocument(filePath) ?? await this.store.getDocument(file);
@@ -15444,7 +15670,7 @@ ${lines.slice(0, 8).join("\n")}`);
     }
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       const view = leaf.view;
-      if (!(view instanceof import_obsidian17.MarkdownView) || view.file?.path !== filePath) {
+      if (!(view instanceof import_obsidian18.MarkdownView) || view.file?.path !== filePath) {
         continue;
       }
       const previewRoot = findPreviewRoot(view);
@@ -15501,7 +15727,7 @@ ${lines.slice(0, 8).join("\n")}`);
     return null;
   }
   activeEditor() {
-    const view = this.app.workspace.getActiveViewOfType(import_obsidian17.MarkdownView);
+    const view = this.app.workspace.getActiveViewOfType(import_obsidian18.MarkdownView);
     return view ? { editor: view.editor, file: view.file } : null;
   }
   async activateSidebar() {
@@ -15568,8 +15794,8 @@ ${lines.slice(0, 8).join("\n")}`);
    */
   async openEpubAtCfi(filePath, cfi) {
     const file = this.app.vault.getAbstractFileByPath(filePath);
-    if (!(file instanceof import_obsidian17.TFile) || file.extension.toLowerCase() !== "epub") {
-      new import_obsidian17.Notice("\u65E0\u6CD5\u627E\u5230\u5BF9\u5E94\u7684\u7535\u5B50\u4E66\u6587\u4EF6");
+    if (!(file instanceof import_obsidian18.TFile) || file.extension.toLowerCase() !== "epub") {
+      new import_obsidian18.Notice("\u65E0\u6CD5\u627E\u5230\u5BF9\u5E94\u7684\u7535\u5B50\u4E66\u6587\u4EF6");
       return;
     }
     const leaf = this.app.workspace.getLeaf("tab");
@@ -15601,7 +15827,7 @@ ${lines.slice(0, 8).join("\n")}`);
     const text = window.getSelection()?.toString() || this.activeEditor()?.editor.getSelection() || "";
     if (text) {
       navigator.clipboard.writeText(text);
-      new import_obsidian17.Notice("Copied selection");
+      new import_obsidian18.Notice("Copied selection");
     }
   }
   async handleAnnotationClick(event) {
@@ -15619,7 +15845,7 @@ ${lines.slice(0, 8).join("\n")}`);
     }
     const annotationId = mark.dataset.yhId;
     const file = this.app.workspace.getActiveFile();
-    if (!annotationId || !(file instanceof import_obsidian17.TFile)) {
+    if (!annotationId || !(file instanceof import_obsidian18.TFile)) {
       return;
     }
     const document2 = this.store.getCachedDocument(file.path) ?? await this.store.getDocument(file);
@@ -15646,7 +15872,7 @@ ${lines.slice(0, 8).join("\n")}`);
     }
     await sleep(100);
     const file = this.app.vault.getAbstractFileByPath(context.sourcePath);
-    if (!(file instanceof import_obsidian17.TFile)) {
+    if (!(file instanceof import_obsidian18.TFile)) {
       return;
     }
     const document2 = await this.store.getDocument(file);
@@ -15799,7 +16025,7 @@ function nthIndexOf(source, target, occurrenceIndex) {
   }
   return -1;
 }
-var CommentModal = class extends import_obsidian17.Modal {
+var CommentModal = class extends import_obsidian18.Modal {
   constructor(app, initialTitle, initialContent) {
     super(app);
     this.initialTitle = initialTitle;

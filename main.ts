@@ -5,7 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
-import { addIcon, Editor, MarkdownPostProcessorContext, MarkdownView, Modal, Notice, Plugin, TFile } from "obsidian";
+import { addIcon, Editor, MarkdownPostProcessorContext, MarkdownView, Modal, Notice, Platform, Plugin, TFile } from "obsidian";
 
 import { createTextAnchor, relocateDocumentAnchors } from "./src/anchor/textAnchor";
 import { createHighlightExtension } from "./src/editor/highlightExtension";
@@ -30,6 +30,7 @@ import { ANNOTATION_SIDEBAR_VIEW, AnnotationSidebarView } from "./src/views/side
 import { StickyNoteLane } from "./src/views/stickyNoteLane";
 import { EpubReaderView, EPUB_READER_VIEW_TYPE } from "./src/epub/EpubReaderView";
 import { EpubBookshelfView, EPUB_BOOKSHELF_VIEW_TYPE } from "./src/epub/EpubBookshelfView";
+import { EpubTocView, EPUB_TOC_VIEW_TYPE } from "./src/epub/EpubTocView";
 import { registerEpubGotoHandler } from "./src/epub/EpubGotoHandler";
 import { MarkdownStatsView, MARKDOWN_STATS_VIEW_TYPE } from "./src/views/markdownStatsView";
 
@@ -73,6 +74,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   private renameMigrationTimer: number | null = null;
   private settingsSaveTimer: number | null = null;
   private statsSaveTimer: number | null = null;
+  private epubTocSyncTimer: number | null = null;
   private lastCountedPath = "";
   private lastCountedAt = 0;
   /** Markdown 打开次数统计（存于独立 sidecar，插件重装不丢失） */
@@ -87,7 +89,14 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     await this.loadMdOpenStats();
 
     this.registerView(ANNOTATION_SIDEBAR_VIEW, (leaf) => new AnnotationSidebarView(leaf, this));
-    this.registerView(EPUB_READER_VIEW_TYPE, (leaf) => new EpubReaderView(leaf, this.store, this.settings, () => this.refreshAnnotations(), () => this.saveSettings()));
+    this.registerView(EPUB_READER_VIEW_TYPE, (leaf) => new EpubReaderView({
+      leaf,
+      store: this.store,
+      settings: this.settings,
+      refreshAnnotations: () => this.refreshAnnotations(),
+      saveSettings: () => this.saveSettings(),
+      onTocChanged: () => this.refreshEpubToc(),
+    }));
     // 把 foliate 支持的所有电子书格式绑定到阅读器视图：registerView 只注册视图工厂，
     // 还需要 registerExtensions 告诉 Obsidian「.epub/.mobi/... 用本视图打开」。
     // 参考 ob-epub-reader 与 obsidian-weave-reader 的实现；用 try/catch 防止
@@ -105,6 +114,9 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       MARKDOWN_STATS_VIEW_TYPE,
       (leaf) => new MarkdownStatsView(leaf, this.mdOpenStats, () => this.saveSettings(), (file) => this.openMarkdownNote(file)),
     );
+    // EPUB 目录左侧栏视图：仅手机端由 syncEpubTocLeaf 挂载/摘除
+    this.registerView(EPUB_TOC_VIEW_TYPE, (leaf) => new EpubTocView(leaf));
+    this.app.workspace.onLayoutReady(() => this.scheduleEpubTocSync());
     this.registerEditorExtension([
       createHighlightExtension({
         getDocument: (filePath) => this.store.getCachedDocument(filePath),
@@ -209,12 +221,16 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     if (this.statsSaveTimer !== null) {
       window.clearTimeout(this.statsSaveTimer);
     }
+    if (this.epubTocSyncTimer !== null) {
+      window.clearTimeout(this.epubTocSyncTimer);
+    }
     this.toolbar?.destroy();
     this.popover?.destroy();
     this.stickyLane?.destroy();
     this.app.workspace.detachLeavesOfType(ANNOTATION_SIDEBAR_VIEW);
     this.app.workspace.detachLeavesOfType(EPUB_BOOKSHELF_VIEW_TYPE);
     this.app.workspace.detachLeavesOfType(MARKDOWN_STATS_VIEW_TYPE);
+    this.app.workspace.detachLeavesOfType(EPUB_TOC_VIEW_TYPE);
   }
 
   async loadSettings(): Promise<void> {
@@ -256,6 +272,68 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       await this.refreshActiveReadingViewHighlights(activeFile.path);
     }
     await this.stickyLane.render();
+  }
+
+  /** 手机端防抖同步左侧栏目录视图（layout-change 可能连续触发）。 */
+  private scheduleEpubTocSync(): void {
+    if (!Platform.isMobile) {
+      return;
+    }
+    if (this.epubTocSyncTimer !== null) {
+      window.clearTimeout(this.epubTocSyncTimer);
+    }
+    this.epubTocSyncTimer = window.setTimeout(() => {
+      this.epubTocSyncTimer = null;
+      void this.syncEpubTocLeaf();
+    }, 200);
+  }
+
+  /**
+   * 同步左侧栏目录视图：手机端有 EPUB 打开时确保左侧栏存在 EpubTocView
+   * （左边缘右滑即可呼出），关完最后一本则摘除，不留孤儿标签页。
+   * ensureSideLeaf 仅在该类型视图不存在时新建，不会覆盖文件管理器等已有标签。
+   */
+  private async syncEpubTocLeaf(): Promise<void> {
+    if (!Platform.isMobile) {
+      return;
+    }
+    const workspace = this.app.workspace;
+    const tocLeaves = workspace.getLeavesOfType(EPUB_TOC_VIEW_TYPE);
+    const hasEpub = workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE).length > 0;
+
+    if (!hasEpub) {
+      if (tocLeaves.length > 0) {
+        workspace.detachLeavesOfType(EPUB_TOC_VIEW_TYPE);
+      }
+      return;
+    }
+    if (tocLeaves.length > 0) {
+      return;
+    }
+
+    const drawer = workspace.leftSplit;
+    const wasOpen = !drawer.collapsed;
+    try {
+      // active: true 让目录成为左侧栏当前可见标签；不 reveal，避免同步过程把抽屉弹开
+      const leaf = await workspace.ensureSideLeaf(EPUB_TOC_VIEW_TYPE, "left", { active: true, reveal: false });
+      await leaf.loadIfDeferred();
+    } catch (error) {
+      console.warn("yh-inklight: 创建左侧栏目录视图失败", error);
+      return;
+    }
+    if (!wasOpen) {
+      drawer.collapse();
+    }
+  }
+
+  /** 刷新所有已打开的左侧栏目录视图（EpubReaderView 目录/高亮变化时回调）。 */
+  private refreshEpubToc(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(EPUB_TOC_VIEW_TYPE)) {
+      const view = leaf.view;
+      if (view instanceof EpubTocView) {
+        view.refresh();
+      }
+    }
   }
 
   /** 跳转到 PDF 指定页（侧栏批注卡片跳转、书签等共用）。 */
@@ -448,6 +526,9 @@ export default class OverlayAnnotationsPlugin extends Plugin {
         }
       }),
     );
+
+    // 手机端：EPUB 打开/关闭时同步左侧栏目录视图（打开 EPUB 需左滑可见，关完最后一本则摘除）
+    this.registerEvent(this.app.workspace.on("layout-change", () => this.scheduleEpubTocSync()));
   }
 
   /** 加载 Markdown 打开次数统计（独立 sidecar），并迁移 data.json 中的旧数据。 */

@@ -154,6 +154,17 @@ interface FoliateShowAnnotationDetail {
 
 // ---- EpubReaderView ----
 
+/** EpubReaderView 构造参数（与 selectionToolbar/pdfAnnotationLayer 的 Options 风格一致）。 */
+export interface EpubReaderViewOptions {
+	leaf: WorkspaceLeaf;
+	store: AnnotationStore;
+	settings: AnnotationPluginSettings;
+	refreshAnnotations: () => void;
+	saveSettings: () => Promise<void>;
+	/** 目录内容或当前高亮条目变化时通知 main.ts 刷新左侧栏目录视图 */
+	onTocChanged: () => void;
+}
+
 /**
  * yh-inklight EPUB 阅读器核心视图。
  *
@@ -175,6 +186,7 @@ export class EpubReaderView extends FileView {
 	private readonly themeManager: EpubThemeManager;
 	private readonly refreshAnnotations: () => void;
 	private readonly saveSettings: () => Promise<void>;
+	private readonly onTocChanged: () => void;
 
 	// ---- foliate 实例 ----
 
@@ -273,22 +285,17 @@ export class EpubReaderView extends FileView {
 	// 构造 & 生命周期
 	// ================================================================
 
-	constructor(
-		leaf: WorkspaceLeaf,
-		store: AnnotationStore,
-		settings: AnnotationPluginSettings,
-		refreshAnnotations: () => void,
-		saveSettings: () => Promise<void>,
-	) {
-		super(leaf);
-		this.store = store;
-		this.pluginSettings = settings;
-		this.refreshAnnotations = refreshAnnotations;
-		this.saveSettings = saveSettings;
+	constructor(options: EpubReaderViewOptions) {
+		super(options.leaf);
+		this.store = options.store;
+		this.pluginSettings = options.settings;
+		this.refreshAnnotations = options.refreshAnnotations;
+		this.saveSettings = options.saveSettings;
+		this.onTocChanged = options.onTocChanged;
 		this.themeManager = new EpubThemeManager();
-		this.currentFlowMode = settings.epubDefaultFlow;
-		this.currentFontSize = settings.epubFontSize;
-		this.currentTheme = settings.epubReadingTheme;
+		this.currentFlowMode = options.settings.epubDefaultFlow;
+		this.currentFontSize = options.settings.epubFontSize;
+		this.currentTheme = options.settings.epubReadingTheme;
 	}
 
 	/** 视图类型标识，供 Obsidian workspace 路由 */
@@ -343,6 +350,12 @@ export class EpubReaderView extends FileView {
 		this.lastRelocatedFraction = 0;
 		this.bodyFontScaled = false;
 		this.bodyScaleMeasured = false;
+		// 换书时目录状态一并清空，否则左侧栏目录视图会残留上一本书的条目
+		this.tocEntries = [];
+		this.currentTocHref = "";
+		this.currentSectionIndex = 0;
+		this.currentChapter = "";
+		this.onTocChanged();
 		this.destroyRendition();
 
 		try {
@@ -354,6 +367,7 @@ export class EpubReaderView extends FileView {
 			this.attachReaderScrollHide();
 			this.applyFoliateLayout();
 			this.tocEntries = this.buildFoliateTocEntries(this.foliateView.book?.toc ?? []);
+			this.onTocChanged();
 			this.applyFoliateAppearance();
 
 			await this.restoreProgress();
@@ -567,6 +581,41 @@ export class EpubReaderView extends FileView {
 	}
 
 	/**
+	 * 当前应高亮的目录条目下标（-1 表示无）。
+	 * 内嵌侧边栏目录与左侧栏目录视图共用此逻辑，保证两边高亮一致。
+	 */
+	getActiveTocIndex(): number {
+		if (this.tocEntries.length === 0) {
+			return -1;
+		}
+		// foliate 已给出当前读到的最深目录项（原始 href 含锚点），优先精确匹配到小节；
+		// 匹配不到时（如 tocItem 缺失）回退到按章节/标签逻辑。
+		const hrefMatch = this.currentTocHref
+			? this.tocEntries.findIndex((e) => e.href === this.currentTocHref)
+			: -1;
+		if (hrefMatch >= 0) {
+			return hrefMatch;
+		}
+		const isSingleSection = this.tocEntries.every((e) => e.spineIndex === this.tocEntries[0].spineIndex);
+		let activeIndex = -1;
+		for (let i = 0; i < this.tocEntries.length; i++) {
+			const entry = this.tocEntries[i];
+			const isCurrent = isSingleSection
+				? entry.label === (this.currentChapter || "").trim()
+				: entry.spineIndex <= this.currentSectionIndex;
+			if (isCurrent) {
+				activeIndex = i;
+			}
+		}
+		return activeIndex;
+	}
+
+	/** 目录条目快照（供左侧栏目录视图渲染）。 */
+	getTocEntries(): TocSpineEntry[] {
+		return this.tocEntries;
+	}
+
+	/**
 	 * 渲染目录列表，点击条目跳转到对应章节。
 	 */
 	private renderTocList(): void {
@@ -576,32 +625,17 @@ export class EpubReaderView extends FileView {
 		}
 
 		const list = this.sidebarContentEl.createDiv({ cls: "yh-epub-toc-list" });
-		const isSingleSection = this.tocEntries.every(e => e.spineIndex === this.tocEntries[0].spineIndex);
-		// foliate 已给出当前读到的最深目录项（原始 href 含锚点），优先精确匹配到小节；
-		// 匹配不到时（如 tocItem 缺失）回退到按章节/标签逻辑。
-		const hrefMatch = this.currentTocHref
-			? this.tocEntries.findIndex(e => e.href === this.currentTocHref)
-			: -1;
-		let activeIndex = -1;
+		const activeIndex = this.getActiveTocIndex();
 
 		for (let i = 0; i < this.tocEntries.length; i++) {
 			const entry = this.tocEntries[i];
-			const isCurrent = hrefMatch >= 0
-				? i === hrefMatch
-				: (isSingleSection
-					? entry.label === (this.currentChapter || "").trim()
-					: entry.spineIndex <= this.currentSectionIndex);
 
 			const item = list.createEl("button", {
-				cls: `yh-epub-toc-item${isCurrent ? " is-current" : ""}`,
+				cls: `yh-epub-toc-item${i === activeIndex ? " is-current" : ""}`,
 				text: entry.label,
 				attr: { type: "button" },
 			});
 			item.addEventListener("click", () => this.navigateToSpineIndex(entry));
-
-			if (isCurrent) {
-				activeIndex = i;
-			}
 		}
 
 		if (activeIndex >= 0) {
@@ -1179,6 +1213,10 @@ export class EpubReaderView extends FileView {
 		const cfi = normalizeCfi(detail?.cfi);
 		const rawPercent = normalizePercent(detail?.fraction ?? this.currentPercent);
 		const spineIndex = typeof detail.section?.current === "number" ? detail.section.current : this.currentSectionIndex;
+		// 记录 relocate 前的目录位置，用于判断高亮是否真的移动了
+		const prevTocHref = this.currentTocHref;
+		const prevSectionIndex = this.currentSectionIndex;
+		const prevChapter = this.currentChapter;
 
 		// 跟踪历史最高 fraction（滚动模式下末页 ≈0.9x 达不到 1.0）
 		if (rawPercent > this.maxSeenPercent) {
@@ -1247,6 +1285,19 @@ export class EpubReaderView extends FileView {
 
 		this.updateProgressBar(percent);
 		this.debouncedSaveProgress(this.currentCfi, percent);
+
+		// 目录高亮位置真的变了才重渲染：relocate 在滚动模式下非常频繁，
+		// 无条件 renderSidebar 会造成明显开销；同时这里也是内嵌目录高亮（#11）的刷新时机。
+		if (
+			prevTocHref !== this.currentTocHref ||
+			prevSectionIndex !== this.currentSectionIndex ||
+			prevChapter !== this.currentChapter
+		) {
+			this.onTocChanged();
+			if (this.sidebarOpen) {
+				this.renderSidebar();
+			}
+		}
 	}
 
 	/**
@@ -1532,7 +1583,7 @@ export class EpubReaderView extends FileView {
 	 *
 	 * @param entry - 目录条目
 	 */
-	private navigateToSpineIndex(entry: TocSpineEntry): void {
+	navigateToSpineIndex(entry: TocSpineEntry): void {
 		if (!this.foliateView) {
 			return;
 		}

@@ -84,7 +84,11 @@ export interface FoliateViewHandle {
   renderer?: {
     setStyles?: (styles: string | [string, string]) => void;
     render?: () => void;
-    getContents?: () => Array<{ index?: number; doc?: Document | null }>;
+    getContents?: () => Array<{
+      index?: number;
+      doc?: Document | null;
+      overlayer?: { hitTest?: (e: { x: number; y: number }) => unknown } | null;
+    }>;
   };
   book?: FoliateBookHandle;
   [key: string]: unknown;

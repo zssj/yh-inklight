@@ -2243,6 +2243,32 @@ export class EpubReaderView extends FileView {
 		}
 	}
 
+	/**
+	 * 判断点击是否落在 foliate 标注覆盖层上（是则应交由 foliate 的 show-annotation 处理）。
+	 * overlayer 元素是 pointer-events:none，点击会穿透到下层内容，只能用 hitTest 按坐标反查。
+	 *
+	 * @param ev - iframe 文档内派发的点击事件
+	 * @param doc - 该事件所在的 section document，用于精确定位其覆盖层
+	 */
+	private hitAnnotationAt(ev: Event, doc: Document): boolean {
+		const contents = this.foliateView?.renderer?.getContents?.() ?? [];
+		const content = contents.find((c) => c.doc === doc);
+		const hitTest = content?.overlayer?.hitTest;
+		if (typeof hitTest !== "function") {
+			return false;
+		}
+		try {
+			// 事件来自 iframe 文档（另一 realm），不能用 instanceof MouseEvent，直接取坐标
+			const mouse = ev as MouseEvent;
+			const hit = hitTest({ x: mouse.clientX, y: mouse.clientY });
+			return Array.isArray(hit)
+				&& typeof hit[0] === "string"
+				&& !hit[0].startsWith("foliate-search:");
+		} catch {
+			return false;
+		}
+	}
+
 	private attachSelectionListeners(doc: Document): void {
 		if (this.documentSelectionCleanups.has(doc)) {
 			return;
@@ -2285,6 +2311,17 @@ export class EpubReaderView extends FileView {
 			const target = ev.target as Element | null;
 			const img = target && typeof target.closest === "function" ? target.closest("img") : null;
 			if (!img) {
+				return;
+			}
+			// 1) 图片被包在书内链接里（如多看格式的脚注标记 note.png）→ 放行，
+			//    交给 foliate 冒泡阶段的 link 处理去 goTo(href) 跳转到注解。
+			//    判定与 foliate view.js 的 closest('a[href]') 保持一致。
+			if (typeof img.closest === "function" && img.closest("a[href]")) {
+				return;
+			}
+			// 2) 点击落在我们自己的标注覆盖层上 → 放行，
+			//    交给 foliate 的 show-annotation 弹出标注卡片。
+			if (this.hitAnnotationAt(ev, doc)) {
 				return;
 			}
 			const src = img.getAttribute("src");

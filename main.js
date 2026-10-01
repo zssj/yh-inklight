@@ -14071,6 +14071,28 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
       this.selectionLockStyleEls.delete(doc);
     }
   }
+  /**
+   * 判断点击是否落在 foliate 标注覆盖层上（是则应交由 foliate 的 show-annotation 处理）。
+   * overlayer 元素是 pointer-events:none，点击会穿透到下层内容，只能用 hitTest 按坐标反查。
+   *
+   * @param ev - iframe 文档内派发的点击事件
+   * @param doc - 该事件所在的 section document，用于精确定位其覆盖层
+   */
+  hitAnnotationAt(ev, doc) {
+    const contents = this.foliateView?.renderer?.getContents?.() ?? [];
+    const content = contents.find((c2) => c2.doc === doc);
+    const hitTest = content?.overlayer?.hitTest;
+    if (typeof hitTest !== "function") {
+      return false;
+    }
+    try {
+      const mouse = ev;
+      const hit = hitTest({ x: mouse.clientX, y: mouse.clientY });
+      return Array.isArray(hit) && typeof hit[0] === "string" && !hit[0].startsWith("foliate-search:");
+    } catch {
+      return false;
+    }
+  }
   attachSelectionListeners(doc) {
     if (this.documentSelectionCleanups.has(doc)) {
       return;
@@ -14109,6 +14131,12 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
       const target = ev.target;
       const img = target && typeof target.closest === "function" ? target.closest("img") : null;
       if (!img) {
+        return;
+      }
+      if (typeof img.closest === "function" && img.closest("a[href]")) {
+        return;
+      }
+      if (this.hitAnnotationAt(ev, doc)) {
         return;
       }
       const src = img.getAttribute("src");

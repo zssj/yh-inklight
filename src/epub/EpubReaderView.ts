@@ -773,6 +773,9 @@ export class EpubReaderView extends FileView {
 		view.addEventListener("relocate", this.handleFoliateRelocate as EventListener);
 		view.addEventListener("draw-annotation", this.handleFoliateDrawAnnotation as EventListener);
 		view.addEventListener("show-annotation", this.handleFoliateShowAnnotation as EventListener);
+		// 书内链接通道：覆盖纯文字链接（注解末尾的回跳链接等），与红圆框共用
+		// followFragmentLink 这一套修复；不 cancel，foliate 的 goTo 仍照常执行。
+		view.addEventListener("link", this.handleFoliateLink as EventListener);
 	}
 
 	// ================================================================
@@ -2269,6 +2272,104 @@ export class EpubReaderView extends FileView {
 		}
 	}
 
+	/** 同一 href 在短时间内的失败提示去重（双通道会对同一次点击各触发一次）。 */
+	private linkNoticeHref = "";
+	private linkNoticeAt = 0;
+
+	/**
+	 * 失败才提示，成功零提示（符合 AGENTS）。给不用控制台的环境留观测点。
+	 */
+	private noticeLinkFailure = (reason: string, href: string): void => {
+		const now = Date.now();
+		if (this.linkNoticeHref === href && now - this.linkNoticeAt < 2500) {
+			return;
+		}
+		this.linkNoticeHref = href;
+		this.linkNoticeAt = now;
+		new Notice(`墨光：跳转失败（${reason}）`);
+	};
+
+	/**
+	 * 自足的同文档片段跳转（href 形如 `#jz_1_1106`，多看格式脚注标记即此类）。
+	 *
+	 * 不再依赖 foliate 的 link → goTo 链路：那条链在运行期会被静默吞掉
+	 * （resolveNavigation 出错 / #canGoToIndex 不通过都无任何可见反馈）。
+	 * 这里直接 getElementById 拿元素，再调 foliate 自己的 scrollToAnchor
+	 * （view.js:574 就是这么用的，滚动/分页两种模式均支持）。
+	 *
+	 * 只接管 `#` 片段；非片段 href 返回 false 仍交 foliate 处理。
+	 * 调用方不 preventDefault/stopPropagation，让 foliate 也跑一遍互为备份
+	 * （重复滚动到同一元素是幂等 no-op）。
+	 *
+	 * 事件来自 iframe 文档（另一 realm），故全程不用 instanceof，只用
+	 * ownerDocument / duck-typing。
+	 *
+	 * @returns 是否已接管本次跳转
+	 */
+	private followFragmentLink = (a: Element, doc: Document): boolean => {
+		const raw = a.getAttribute("href") ?? "";
+		if (!raw.startsWith("#")) {
+			return false;
+		}
+		try {
+			const fragment = raw.slice(1);
+			let id = fragment;
+			try {
+				id = decodeURIComponent(fragment);
+			} catch {
+				/* 片段未编码或编码畸形 → 用原样继续查 */
+			}
+			const el =
+				doc.getElementById(id) ??
+				doc.querySelector(`[name="${CSS.escape(id)}"]`);
+			if (!el) {
+				this.noticeLinkFailure(`未找到锚点 #${id}`, raw);
+				return true;
+			}
+			if (el.getClientRects().length === 0) {
+				this.noticeLinkFailure(`锚点 #${id} 不在布局中`, raw);
+				return true;
+			}
+			const renderer = this.foliateView?.renderer;
+			const index = renderer?.getContents
+				?.().find((c) => c.doc === doc)?.index;
+			if (typeof renderer?.scrollToAnchor === "function") {
+				void renderer.scrollToAnchor(el);
+				return true;
+			}
+			if (typeof renderer?.goTo === "function" && typeof index === "number") {
+				void renderer.goTo({ index, anchor: () => el });
+				return true;
+			}
+			this.noticeLinkFailure("渲染器不支持 scrollToAnchor", raw);
+		} catch (error) {
+			this.noticeLinkFailure(
+				error instanceof Error ? error.message : String(error),
+				raw,
+			);
+		}
+		return true;
+	};
+
+	/**
+	 * foliate 的 link 事件通道：覆盖纯文字链接（如注解末尾的回跳链接），
+	 * 与红圆框走同一套修复。不 cancel 事件，foliate 自己的 goTo 照常执行。
+	 */
+	private handleFoliateLink = (event: Event): void => {
+		try {
+			const detail = (event as CustomEvent).detail as
+				| { a?: Element }
+				| undefined;
+			const anchor = detail?.a;
+			const doc = anchor?.ownerDocument;
+			if (anchor && doc) {
+				this.followFragmentLink(anchor, doc);
+			}
+		} catch {
+			/* 不影响 foliate 的链接处理 */
+		}
+	};
+
 	private attachSelectionListeners(doc: Document): void {
 		if (this.documentSelectionCleanups.has(doc)) {
 			return;
@@ -2313,11 +2414,17 @@ export class EpubReaderView extends FileView {
 			if (!img) {
 				return;
 			}
-			// 1) 图片被包在书内链接里（如多看格式的脚注标记 note.png）→ 放行，
-			//    交给 foliate 冒泡阶段的 link 处理去 goTo(href) 跳转到注解。
+			// 1) 图片被包在书内链接里（如多看格式的脚注标记 note.png）→ 交给自足的
+			//    片段跳转去滚到注解；非 `#` 片段的 href 则原样放行给 foliate。
+			//    这里刻意不 preventDefault/stopPropagation，让 foliate 的 #handleLinks
+			//    也执行一遍互为备份（重复滚到同一元素是幂等 no-op）。
 			//    判定与 foliate view.js 的 closest('a[href]') 保持一致。
-			if (typeof img.closest === "function" && img.closest("a[href]")) {
-				return;
+			if (typeof img.closest === "function") {
+				const link = img.closest("a[href]");
+				if (link) {
+					this.followFragmentLink(link, doc);
+					return;
+				}
 			}
 			// 2) 点击落在我们自己的标注覆盖层上 → 放行，
 			//    交给 foliate 的 show-annotation 弹出标注卡片。

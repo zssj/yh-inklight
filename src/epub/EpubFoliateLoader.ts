@@ -89,6 +89,8 @@ export interface FoliateViewHandle {
       doc?: Document | null;
       overlayer?: { hitTest?: (e: { x: number; y: number }) => unknown } | null;
     }>;
+    goTo?: (target: unknown) => Promise<unknown> | unknown;
+    scrollToAnchor?: (anchor: unknown, select?: boolean) => Promise<unknown> | unknown;
   };
   book?: FoliateBookHandle;
   [key: string]: unknown;

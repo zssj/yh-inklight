@@ -12441,6 +12441,93 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
       }
       this.showAnnotationCard(detail.value, detail.index, detail.range);
     };
+    /** 同一 href 在短时间内的失败提示去重（双通道会对同一次点击各触发一次）。 */
+    this.linkNoticeHref = "";
+    this.linkNoticeAt = 0;
+    /**
+     * 失败才提示，成功零提示（符合 AGENTS）。给不用控制台的环境留观测点。
+     */
+    this.noticeLinkFailure = (reason, href) => {
+      const now = Date.now();
+      if (this.linkNoticeHref === href && now - this.linkNoticeAt < 2500) {
+        return;
+      }
+      this.linkNoticeHref = href;
+      this.linkNoticeAt = now;
+      new import_obsidian13.Notice(`\u58A8\u5149\uFF1A\u8DF3\u8F6C\u5931\u8D25\uFF08${reason}\uFF09`);
+    };
+    /**
+     * 自足的同文档片段跳转（href 形如 `#jz_1_1106`，多看格式脚注标记即此类）。
+     *
+     * 不再依赖 foliate 的 link → goTo 链路：那条链在运行期会被静默吞掉
+     * （resolveNavigation 出错 / #canGoToIndex 不通过都无任何可见反馈）。
+     * 这里直接 getElementById 拿元素，再调 foliate 自己的 scrollToAnchor
+     * （view.js:574 就是这么用的，滚动/分页两种模式均支持）。
+     *
+     * 只接管 `#` 片段；非片段 href 返回 false 仍交 foliate 处理。
+     * 调用方不 preventDefault/stopPropagation，让 foliate 也跑一遍互为备份
+     * （重复滚动到同一元素是幂等 no-op）。
+     *
+     * 事件来自 iframe 文档（另一 realm），故全程不用 instanceof，只用
+     * ownerDocument / duck-typing。
+     *
+     * @returns 是否已接管本次跳转
+     */
+    this.followFragmentLink = (a3, doc) => {
+      const raw = a3.getAttribute("href") ?? "";
+      if (!raw.startsWith("#")) {
+        return false;
+      }
+      try {
+        const fragment = raw.slice(1);
+        let id = fragment;
+        try {
+          id = decodeURIComponent(fragment);
+        } catch {
+        }
+        const el = doc.getElementById(id) ?? doc.querySelector(`[name="${CSS.escape(id)}"]`);
+        if (!el) {
+          this.noticeLinkFailure(`\u672A\u627E\u5230\u951A\u70B9 #${id}`, raw);
+          return true;
+        }
+        if (el.getClientRects().length === 0) {
+          this.noticeLinkFailure(`\u951A\u70B9 #${id} \u4E0D\u5728\u5E03\u5C40\u4E2D`, raw);
+          return true;
+        }
+        const renderer = this.foliateView?.renderer;
+        const index = renderer?.getContents?.().find((c2) => c2.doc === doc)?.index;
+        if (typeof renderer?.scrollToAnchor === "function") {
+          void renderer.scrollToAnchor(el);
+          return true;
+        }
+        if (typeof renderer?.goTo === "function" && typeof index === "number") {
+          void renderer.goTo({ index, anchor: () => el });
+          return true;
+        }
+        this.noticeLinkFailure("\u6E32\u67D3\u5668\u4E0D\u652F\u6301 scrollToAnchor", raw);
+      } catch (error) {
+        this.noticeLinkFailure(
+          error instanceof Error ? error.message : String(error),
+          raw
+        );
+      }
+      return true;
+    };
+    /**
+     * foliate 的 link 事件通道：覆盖纯文字链接（如注解末尾的回跳链接），
+     * 与红圆框走同一套修复。不 cancel 事件，foliate 自己的 goTo 照常执行。
+     */
+    this.handleFoliateLink = (event) => {
+      try {
+        const detail = event.detail;
+        const anchor = detail?.a;
+        const doc = anchor?.ownerDocument;
+        if (anchor && doc) {
+          this.followFragmentLink(anchor, doc);
+        }
+      } catch {
+      }
+    };
     this.store = options.store;
     this.pluginSettings = options.settings;
     this.refreshAnnotations = options.refreshAnnotations;
@@ -12858,6 +12945,7 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
     view.addEventListener("relocate", this.handleFoliateRelocate);
     view.addEventListener("draw-annotation", this.handleFoliateDrawAnnotation);
     view.addEventListener("show-annotation", this.handleFoliateShowAnnotation);
+    view.addEventListener("link", this.handleFoliateLink);
   }
   // ================================================================
   // 手机端沉浸式导航栏（复刻核心 Full screen 行为，仅对本视图生效）
@@ -14133,8 +14221,12 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
       if (!img) {
         return;
       }
-      if (typeof img.closest === "function" && img.closest("a[href]")) {
-        return;
+      if (typeof img.closest === "function") {
+        const link = img.closest("a[href]");
+        if (link) {
+          this.followFragmentLink(link, doc);
+          return;
+        }
       }
       if (this.hitAnnotationAt(ev, doc)) {
         return;

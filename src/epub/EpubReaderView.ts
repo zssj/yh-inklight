@@ -36,6 +36,7 @@ import {
 	TocSpineEntry,
 } from "./EpubChapterResolver";
 import { inlineBlockedStylesheets, stripScriptsFromDocument } from "./EpubStylesheetInliner";
+import { resolveFontFamily } from "./EpubFontCatalog";
 import { EpubThemeManager } from "./EpubThemeManager";
 import {
 	createFoliateView,
@@ -2613,11 +2614,29 @@ export class EpubReaderView extends FileView {
 		this.renderedAnnotationMeta.delete(annotation.id);
 	}
 
+	/**
+	 * 把设置页的外观改动立即应用到当前打开的书（字号 / 行距 / 字体 / 统一正文）。
+	 * 设置页与 main.ts 通过本方法联动，无需重开电子书。
+	 * @param remeasureFontScale - 统一正文字号开关变化时置 true，重置测量标志以便重新判定
+	 */
+	public refreshAppearance(remeasureFontScale = false): void {
+		this.currentFontSize = this.pluginSettings.epubFontSize;
+		if (remeasureFontScale) {
+			this.bodyScaleMeasured = false;
+			this.bodyFontScaled = false;
+		}
+		this.applyFoliateAppearance();
+	}
+
 	private applyFoliateAppearance(size = this.currentFontSize): void {
 		if (!this.foliateView) {
 			return;
 		}
 		const colors = this.themeManager.resolveThemeColors(this.currentTheme);
+		const fontStack = resolveFontFamily(
+			this.pluginSettings.epubFontFamily,
+			this.pluginSettings.epubFontFamilyCustom,
+		);
 		const css = [
 			":root { color-scheme: light dark; }",
 			"body {",
@@ -2631,6 +2650,14 @@ export class EpubReaderView extends FileView {
 			`  color: ${colors.textColor} !important;`,
 			`  line-height: ${this.pluginSettings.epubLineHeight} !important;`,
 			"}",
+			// 只约束正文类元素，标题/引文/代码自带字体保留；书未指定时随正文继承
+			...(fontStack
+				? [
+						"body, p, div, li, ul, ol, td, th, dt, dd, section, article {",
+						`  font-family: ${fontStack} !important;`,
+						"}",
+					]
+				: []),
 			...(this.pluginSettings.epubUnifyBodyFontSize && this.bodyFontScaled
 				? ["p, li, td, th, dd, dt { font-size: 1em !important; }"]
 				: []),

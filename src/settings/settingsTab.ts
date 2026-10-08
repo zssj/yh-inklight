@@ -8,6 +8,7 @@
 import { PluginSettingTab, Setting } from "obsidian";
 
 import type OverlayAnnotationsPlugin from "../../main";
+import { detectAvailableFonts, FIXED_FONT_OPTIONS, resolveFontFamily } from "../epub/EpubFontCatalog";
 import {
   ANNOTATION_COLORS,
   AnnotationColor,
@@ -116,14 +117,14 @@ export class AnnotationSettingsTab extends PluginSettingTab {
     this.renderMarkdownStatsSettings();
   }
 
-  /** EPUB 阅读相关设置：字号 / 主题 / 翻页 / 高亮样式 / 摘录目录 / 段落模式 / 脚注 / 回显 */
+  /** EPUB 阅读相关设置：字号 / 正文字体 / 主题 / 翻页 / 高亮样式 / 摘录目录 / 段落模式 / 脚注 / 回显 */
   private renderEpubSettings(): void {
     const { containerEl } = this;
     containerEl.createEl("h3", { text: "EPUB 阅读" });
 
     new Setting(containerEl)
       .setName("阅读字号")
-      .setDesc("EPUB 正文基础字号（px）。修改后重新打开电子书生效。")
+      .setDesc("EPUB 正文基础字号（px）。改完立即生效。")
       .addSlider((slider) => {
         slider
           .setLimits(12, 28, 1)
@@ -132,12 +133,65 @@ export class AnnotationSettingsTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.epubFontSize = value;
             await this.plugin.saveSettings();
+            this.plugin.refreshEpubReaderAppearance();
           });
       });
 
+    let fontSampleEl: HTMLElement | null = null;
+    const refreshFontPreview = (): void => {
+      if (!fontSampleEl) {
+        return;
+      }
+      fontSampleEl.style.fontFamily =
+        resolveFontFamily(this.plugin.settings.epubFontFamily, this.plugin.settings.epubFontFamilyCustom) ||
+        "inherit";
+    };
+
+    const fontSetting = new Setting(containerEl)
+      .setName("正文字体")
+      .setDesc(
+        "控制 EPUB 正文段落使用的字体。下拉只列出本机已安装的常见字体；列表里没有的可在下方手填，手填优先。书自带的标题、引文、代码字体不受影响。改完立即生效。",
+      )
+      .addDropdown((dropdown) => {
+        for (const option of FIXED_FONT_OPTIONS) {
+          dropdown.addOption(option.value, option.label);
+        }
+        for (const font of detectAvailableFonts()) {
+          dropdown.addOption(font.name, font.label);
+        }
+        dropdown.setValue(this.plugin.settings.epubFontFamily).onChange(async (value) => {
+          this.plugin.settings.epubFontFamily = value;
+          await this.plugin.saveSettings();
+          refreshFontPreview();
+          this.plugin.refreshEpubReaderAppearance();
+        });
+      })
+      .addText((text) => {
+        text.setPlaceholder("手填字体名（可选，覆盖上方下拉）");
+        text.setValue(this.plugin.settings.epubFontFamilyCustom);
+        text.onChange(async (value) => {
+          this.plugin.settings.epubFontFamilyCustom = value;
+          await this.plugin.saveSettings();
+          refreshFontPreview();
+          this.plugin.refreshEpubReaderAppearance();
+        });
+      });
+
+    const previewEl = fontSetting.settingEl.createDiv();
+    previewEl.style.cssText =
+      "flex-basis:100%;margin-top:8px;padding:8px 10px;border:1px solid var(--background-modifier-border);border-radius:6px;background:var(--background-secondary);";
+    const previewLabel = previewEl.createDiv({ text: "预览" });
+    previewLabel.style.cssText = "font-size:11px;color:var(--text-muted);margin-bottom:4px;";
+    fontSampleEl = previewEl.createDiv({
+      text: "永和九年，岁在癸丑，暮春之初，会于会稽山阴之兰亭 AaBbCc 0123456789",
+    });
+    fontSampleEl.style.cssText =
+      "font-size:15px;line-height:1.7;color:var(--text-normal);word-break:break-word;";
+    refreshFontPreview();
+
     new Setting(containerEl)
       .setName("阅读行距")
-      .setDesc("EPUB 正文行距（倍）。修改后重新打开电子书生效。")
+      .setDesc("EPUB 正文行距（倍）。改完立即生效。")
       .addSlider((slider) => {
         slider
           .setLimits(1.0, 2.5, 0.05)
@@ -146,18 +200,20 @@ export class AnnotationSettingsTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.epubLineHeight = value;
             await this.plugin.saveSettings();
+            this.plugin.refreshEpubReaderAppearance();
           });
       });
 
     new Setting(containerEl)
       .setName("统一正文字号")
-      .setDesc("忽略电子书自带的正文缩放倍数，所有书正文按「阅读字号」显示；仅对正文确实被书内 CSS 缩放的书生效，脚注/图注不受影响。修改后重新打开电子书生效。")
+      .setDesc("忽略电子书自带的正文缩放倍数，所有书正文按「阅读字号」显示；仅对正文确实被书内 CSS 缩放的书生效，脚注/图注不受影响。改完立即生效。")
       .addToggle((toggle) => {
         toggle
           .setValue(this.plugin.settings.epubUnifyBodyFontSize)
           .onChange(async (value) => {
             this.plugin.settings.epubUnifyBodyFontSize = value;
             await this.plugin.saveSettings();
+            this.plugin.refreshEpubReaderAppearance(true);
           });
       });
 

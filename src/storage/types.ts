@@ -166,6 +166,10 @@ export interface AnnotationPluginSettings {
   epubFontSize: number;
   epubLineHeight: number;
   epubUnifyBodyFontSize: boolean;
+  /** EPUB 正文字体："" | "obsidian" | 通用族关键字 | 字体名（见 EpubFontCatalog） */
+  epubFontFamily: string;
+  /** 手填的 EPUB 正文字体名，非空时覆盖 epubFontFamily */
+  epubFontFamilyCustom: string;
   epubReadingTheme: EpubReadingTheme;
   epubHighlightStyle: EpubHighlightStyle;
   epubBookshelfSort: EpubBookshelfSortMode;
@@ -206,6 +210,8 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   epubFontSize: 16,
   epubLineHeight: 1.72,
   epubUnifyBodyFontSize: false,
+  epubFontFamily: "",
+  epubFontFamilyCustom: "",
   epubReadingTheme: "obsidian",
   epubHighlightStyle: "fill",
   epubBookshelfSort: "name",

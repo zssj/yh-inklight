@@ -274,6 +274,19 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     await this.stickyLane.render();
   }
 
+  /**
+   * 把 EPUB 外观设置（字号 / 行距 / 正文字体 / 统一正文）立即刷到所有已打开的电子书视图。
+   * 设置页 onChange 调用，改完无需重开电子书。
+   */
+  refreshEpubReaderAppearance(remeasureFontScale = false): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE)) {
+      const view = leaf.view;
+      if (view instanceof EpubReaderView) {
+        view.refreshAppearance(remeasureFontScale);
+      }
+    }
+  }
+
   /** 手机端防抖同步左侧栏目录视图（layout-change 可能连续触发）。 */
   private scheduleEpubTocSync(): void {
     if (!Platform.isMobile) {

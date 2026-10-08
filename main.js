@@ -8426,6 +8426,8 @@ var DEFAULT_SETTINGS = {
   epubFontSize: 16,
   epubLineHeight: 1.72,
   epubUnifyBodyFontSize: false,
+  epubFontFamily: "",
+  epubFontFamilyCustom: "",
   epubReadingTheme: "obsidian",
   epubHighlightStyle: "fill",
   epubBookshelfSort: "name",
@@ -9262,6 +9264,155 @@ var PdfViewerAdapter = class {
 
 // src/settings/settingsTab.ts
 var import_obsidian5 = require("obsidian");
+
+// src/epub/EpubFontCatalog.ts
+var FONT_VALUE_OBSIDIAN = "obsidian";
+var FIXED_FONT_OPTIONS = [
+  { value: "", label: "\u8DDF\u968F\u7535\u5B50\u4E66" },
+  { value: FONT_VALUE_OBSIDIAN, label: "\u8DDF\u968F Obsidian" },
+  { value: "serif", label: "\u7CFB\u7EDF\u886C\u7EBF serif" },
+  { value: "sans-serif", label: "\u7CFB\u7EDF\u65E0\u886C\u7EBF sans-serif" },
+  { value: "monospace", label: "\u7B49\u5BBD monospace" }
+];
+var GENERIC_KEYWORDS = /* @__PURE__ */ new Set([
+  "serif",
+  "sans-serif",
+  "monospace",
+  "cursive",
+  "fantasy",
+  "system-ui",
+  "ui-serif",
+  "ui-sans-serif",
+  "ui-monospace"
+]);
+var FONT_CANDIDATES = [
+  // —— 开源中文字体（含霞鹜文楷各版本与名称变体）——
+  { label: "\u971E\u9E5C\u6587\u6977", names: ["LXGW WenKai", "\u971E\u9E5C\u6587\u6977", "LXGW WenKai TC", "\u971E\u9E5C\u6587\u6977\u7E41"] },
+  { label: "\u971E\u9E5C\u6587\u6977 GB \u5C4F\u5E55\u7248", names: ["LXGW WenKai GB Screen", "\u971E\u9E5C\u6587\u6977 GB \u5C4F\u5E55\u7248", "LXGW WenKai GB"] },
+  { label: "\u971E\u9E5C\u6587\u6977 Bright", names: ["LXGW Bright", "\u971E\u9E5C\u6587\u6977 Bright"] },
+  { label: "\u971E\u9E5C\u65B0\u6670\u9ED1", names: ["LXGW Neo XiHei", "\u971E\u9E5C\u65B0\u6670\u9ED1"] },
+  { label: "\u601D\u6E90\u5B8B\u4F53", names: ["Source Han Serif SC", "Noto Serif CJK SC", "Source Han Serif CN", "Noto Serif SC", "\u601D\u6E90\u5B8B\u4F53"] },
+  { label: "\u601D\u6E90\u9ED1\u4F53", names: ["Source Han Sans SC", "Noto Sans CJK SC", "Source Han Sans CN", "Noto Sans SC", "\u601D\u6E90\u9ED1\u4F53"] },
+  { label: "\u66F4\u7EB1\u9ED1\u4F53", names: ["Sarasa Gothic SC", "Sarasa UI SC", "\u66F4\u7EB1\u9ED1\u4F53"] },
+  { label: "\u963F\u91CC\u5DF4\u5DF4\u666E\u60E0\u4F53", names: ["Alibaba PuHuiTi 3.0", "Alibaba PuHuiTi", "\u963F\u91CC\u5DF4\u5DF4\u666E\u60E0\u4F53"] },
+  { label: "\u7AD9\u9177\u5FEB\u4E50\u4F53", names: ["ZCOOL KuaiLe", "\u7AD9\u9177\u5FEB\u4E50\u4F53"] },
+  // —— 系统 / 平台中文字体 ——
+  { label: "\u5B8B\u4F53", names: ["SimSun", "\u5B8B\u4F53", "NSimSun", "Songti SC", "Songti"] },
+  { label: "\u9ED1\u4F53", names: ["SimHei", "\u9ED1\u4F53", "Heiti SC", "STHeiti"] },
+  { label: "\u6977\u4F53", names: ["KaiTi", "\u6977\u4F53", "Kaiti SC", "STKaiti", "Kaiti_GB2312"] },
+  { label: "\u4EFF\u5B8B", names: ["FangSong", "\u4EFF\u5B8B", "FangSong_GB2312", "STFangsong"] },
+  { label: "\u5FAE\u8F6F\u96C5\u9ED1", names: ["Microsoft YaHei", "\u5FAE\u8F6F\u96C5\u9ED1", "Microsoft YaHei UI"] },
+  { label: "\u7B49\u7EBF", names: ["DengXian", "\u7B49\u7EBF"] },
+  { label: "\u82F9\u65B9", names: ["PingFang SC", "\u82F9\u65B9"] },
+  { label: "MiSans", names: ["MiSans", "\u5C0F\u7C73\u5B57\u4F53"] },
+  { label: "HarmonyOS Sans", names: ["HarmonyOS Sans SC", "HarmonyOS Sans"] },
+  { label: "OPPO Sans", names: ["OPPO Sans"] },
+  { label: "vivo Sans", names: ["vivo Sans"] },
+  { label: "HONOR Sans", names: ["HONOR Sans"] },
+  { label: "\u65B9\u6B63\u4E66\u5B8B", names: ["FZShuSong-Z01", "\u65B9\u6B63\u4E66\u5B8B"] },
+  { label: "\u65B9\u6B63\u6977\u4F53", names: ["FZKai-Z03", "\u65B9\u6B63\u6977\u4F53"] },
+  { label: "\u65B9\u6B63\u4EFF\u5B8B", names: ["FZFangSong-Z02", "\u65B9\u6B63\u4EFF\u5B8B"] },
+  // —— 西文 ——
+  { label: "Georgia", names: ["Georgia"] },
+  { label: "Times New Roman", names: ["Times New Roman"] },
+  { label: "Cambria", names: ["Cambria"] },
+  { label: "Garamond", names: ["EB Garamond", "Garamond", "Garamond Premier Pro"] },
+  { label: "Palatino", names: ["Palatino Linotype", "Palatino", "Book Antiqua"] },
+  { label: "Charter", names: ["Charter", "Bitstream Charter"] },
+  { label: "Constantia", names: ["Constantia"] },
+  { label: "Literata", names: ["Literata"] },
+  { label: "Merriweather", names: ["Merriweather"] },
+  { label: "Lora", names: ["Lora"] },
+  { label: "Inter", names: ["Inter"] },
+  { label: "Roboto", names: ["Roboto"] },
+  { label: "Open Sans", names: ["Open Sans"] },
+  { label: "Lato", names: ["Lato"] },
+  { label: "Segoe UI", names: ["Segoe UI"] },
+  { label: "Helvetica", names: ["Helvetica Neue", "Helvetica"] },
+  { label: "Verdana", names: ["Verdana"] },
+  { label: "Tahoma", names: ["Tahoma"] }
+];
+var PROBE_TEXT = "mmmmmmmmmmlli \u6C38\u5B57\u4F53\u6D4B\u8BD5 0123456789";
+var PROBE_BASELINES = ["monospace", "sans-serif", "serif"];
+function sanitizeFamily(raw) {
+  return raw.replace(/[\u0000-\u001f\u007f;{}"'\\]/g, "").trim();
+}
+function isSafeStack(value) {
+  return !!value && !/[;{}]/.test(value);
+}
+function probeFontFamily(name) {
+  const clean = sanitizeFamily(name);
+  if (!clean || GENERIC_KEYWORDS.has(clean)) {
+    return false;
+  }
+  try {
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      return false;
+    }
+    const measure = (stack) => {
+      ctx.font = `72px ${stack}`;
+      return ctx.measureText(PROBE_TEXT).width;
+    };
+    for (const base of PROBE_BASELINES) {
+      if (measure(`"${clean}", ${base}`) !== measure(base)) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+var detectedCache = null;
+function detectAvailableFonts() {
+  if (detectedCache) {
+    return detectedCache;
+  }
+  const options = [];
+  for (const candidate of FONT_CANDIDATES) {
+    const hit = candidate.names.find((n3) => probeFontFamily(n3));
+    if (hit) {
+      options.push({ label: candidate.label, name: sanitizeFamily(hit) });
+    }
+  }
+  detectedCache = options;
+  return options;
+}
+function resolveObsidianTextFontStack() {
+  try {
+    const rawVar = getComputedStyle(document.body).getPropertyValue("--font-text").trim();
+    if (!rawVar) {
+      return "";
+    }
+    const probe = document.createElement("span");
+    probe.style.cssText = "position:absolute;left:-9999px;top:0;visibility:hidden;font-family:var(--font-text)";
+    probe.textContent = "x";
+    document.body.appendChild(probe);
+    const stack = getComputedStyle(probe).fontFamily.trim();
+    probe.remove();
+    return stack;
+  } catch {
+    return "";
+  }
+}
+function resolveFontFamily(fontFamily, custom) {
+  const raw = sanitizeFamily(custom ?? "") || sanitizeFamily(fontFamily ?? "");
+  if (!raw) {
+    return "";
+  }
+  if (raw === FONT_VALUE_OBSIDIAN) {
+    const stack = resolveObsidianTextFontStack();
+    return isSafeStack(stack) ? stack : "";
+  }
+  if (GENERIC_KEYWORDS.has(raw)) {
+    return raw;
+  }
+  return `"${raw}", serif, sans-serif`;
+}
+
+// src/settings/settingsTab.ts
 var AnnotationSettingsTab = class extends import_obsidian5.PluginSettingTab {
   constructor(plugin) {
     super(plugin.app, plugin);
@@ -9325,26 +9476,70 @@ var AnnotationSettingsTab = class extends import_obsidian5.PluginSettingTab {
     this.renderEpubSettings();
     this.renderMarkdownStatsSettings();
   }
-  /** EPUB 阅读相关设置：字号 / 主题 / 翻页 / 高亮样式 / 摘录目录 / 段落模式 / 脚注 / 回显 */
+  /** EPUB 阅读相关设置：字号 / 正文字体 / 主题 / 翻页 / 高亮样式 / 摘录目录 / 段落模式 / 脚注 / 回显 */
   renderEpubSettings() {
     const { containerEl } = this;
     containerEl.createEl("h3", { text: "EPUB \u9605\u8BFB" });
-    new import_obsidian5.Setting(containerEl).setName("\u9605\u8BFB\u5B57\u53F7").setDesc("EPUB \u6B63\u6587\u57FA\u7840\u5B57\u53F7\uFF08px\uFF09\u3002\u4FEE\u6539\u540E\u91CD\u65B0\u6253\u5F00\u7535\u5B50\u4E66\u751F\u6548\u3002").addSlider((slider) => {
+    new import_obsidian5.Setting(containerEl).setName("\u9605\u8BFB\u5B57\u53F7").setDesc("EPUB \u6B63\u6587\u57FA\u7840\u5B57\u53F7\uFF08px\uFF09\u3002\u6539\u5B8C\u7ACB\u5373\u751F\u6548\u3002").addSlider((slider) => {
       slider.setLimits(12, 28, 1).setValue(this.plugin.settings.epubFontSize).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.epubFontSize = value;
         await this.plugin.saveSettings();
+        this.plugin.refreshEpubReaderAppearance();
       });
     });
-    new import_obsidian5.Setting(containerEl).setName("\u9605\u8BFB\u884C\u8DDD").setDesc("EPUB \u6B63\u6587\u884C\u8DDD\uFF08\u500D\uFF09\u3002\u4FEE\u6539\u540E\u91CD\u65B0\u6253\u5F00\u7535\u5B50\u4E66\u751F\u6548\u3002").addSlider((slider) => {
+    let fontSampleEl = null;
+    const refreshFontPreview = () => {
+      if (!fontSampleEl) {
+        return;
+      }
+      fontSampleEl.style.fontFamily = resolveFontFamily(this.plugin.settings.epubFontFamily, this.plugin.settings.epubFontFamilyCustom) || "inherit";
+    };
+    const fontSetting = new import_obsidian5.Setting(containerEl).setName("\u6B63\u6587\u5B57\u4F53").setDesc(
+      "\u63A7\u5236 EPUB \u6B63\u6587\u6BB5\u843D\u4F7F\u7528\u7684\u5B57\u4F53\u3002\u4E0B\u62C9\u53EA\u5217\u51FA\u672C\u673A\u5DF2\u5B89\u88C5\u7684\u5E38\u89C1\u5B57\u4F53\uFF1B\u5217\u8868\u91CC\u6CA1\u6709\u7684\u53EF\u5728\u4E0B\u65B9\u624B\u586B\uFF0C\u624B\u586B\u4F18\u5148\u3002\u4E66\u81EA\u5E26\u7684\u6807\u9898\u3001\u5F15\u6587\u3001\u4EE3\u7801\u5B57\u4F53\u4E0D\u53D7\u5F71\u54CD\u3002\u6539\u5B8C\u7ACB\u5373\u751F\u6548\u3002"
+    ).addDropdown((dropdown) => {
+      for (const option of FIXED_FONT_OPTIONS) {
+        dropdown.addOption(option.value, option.label);
+      }
+      for (const font of detectAvailableFonts()) {
+        dropdown.addOption(font.name, font.label);
+      }
+      dropdown.setValue(this.plugin.settings.epubFontFamily).onChange(async (value) => {
+        this.plugin.settings.epubFontFamily = value;
+        await this.plugin.saveSettings();
+        refreshFontPreview();
+        this.plugin.refreshEpubReaderAppearance();
+      });
+    }).addText((text) => {
+      text.setPlaceholder("\u624B\u586B\u5B57\u4F53\u540D\uFF08\u53EF\u9009\uFF0C\u8986\u76D6\u4E0A\u65B9\u4E0B\u62C9\uFF09");
+      text.setValue(this.plugin.settings.epubFontFamilyCustom);
+      text.onChange(async (value) => {
+        this.plugin.settings.epubFontFamilyCustom = value;
+        await this.plugin.saveSettings();
+        refreshFontPreview();
+        this.plugin.refreshEpubReaderAppearance();
+      });
+    });
+    const previewEl = fontSetting.settingEl.createDiv();
+    previewEl.style.cssText = "flex-basis:100%;margin-top:8px;padding:8px 10px;border:1px solid var(--background-modifier-border);border-radius:6px;background:var(--background-secondary);";
+    const previewLabel = previewEl.createDiv({ text: "\u9884\u89C8" });
+    previewLabel.style.cssText = "font-size:11px;color:var(--text-muted);margin-bottom:4px;";
+    fontSampleEl = previewEl.createDiv({
+      text: "\u6C38\u548C\u4E5D\u5E74\uFF0C\u5C81\u5728\u7678\u4E11\uFF0C\u66AE\u6625\u4E4B\u521D\uFF0C\u4F1A\u4E8E\u4F1A\u7A3D\u5C71\u9634\u4E4B\u5170\u4EAD AaBbCc 0123456789"
+    });
+    fontSampleEl.style.cssText = "font-size:15px;line-height:1.7;color:var(--text-normal);word-break:break-word;";
+    refreshFontPreview();
+    new import_obsidian5.Setting(containerEl).setName("\u9605\u8BFB\u884C\u8DDD").setDesc("EPUB \u6B63\u6587\u884C\u8DDD\uFF08\u500D\uFF09\u3002\u6539\u5B8C\u7ACB\u5373\u751F\u6548\u3002").addSlider((slider) => {
       slider.setLimits(1, 2.5, 0.05).setValue(this.plugin.settings.epubLineHeight).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.epubLineHeight = value;
         await this.plugin.saveSettings();
+        this.plugin.refreshEpubReaderAppearance();
       });
     });
-    new import_obsidian5.Setting(containerEl).setName("\u7EDF\u4E00\u6B63\u6587\u5B57\u53F7").setDesc("\u5FFD\u7565\u7535\u5B50\u4E66\u81EA\u5E26\u7684\u6B63\u6587\u7F29\u653E\u500D\u6570\uFF0C\u6240\u6709\u4E66\u6B63\u6587\u6309\u300C\u9605\u8BFB\u5B57\u53F7\u300D\u663E\u793A\uFF1B\u4EC5\u5BF9\u6B63\u6587\u786E\u5B9E\u88AB\u4E66\u5185 CSS \u7F29\u653E\u7684\u4E66\u751F\u6548\uFF0C\u811A\u6CE8/\u56FE\u6CE8\u4E0D\u53D7\u5F71\u54CD\u3002\u4FEE\u6539\u540E\u91CD\u65B0\u6253\u5F00\u7535\u5B50\u4E66\u751F\u6548\u3002").addToggle((toggle) => {
+    new import_obsidian5.Setting(containerEl).setName("\u7EDF\u4E00\u6B63\u6587\u5B57\u53F7").setDesc("\u5FFD\u7565\u7535\u5B50\u4E66\u81EA\u5E26\u7684\u6B63\u6587\u7F29\u653E\u500D\u6570\uFF0C\u6240\u6709\u4E66\u6B63\u6587\u6309\u300C\u9605\u8BFB\u5B57\u53F7\u300D\u663E\u793A\uFF1B\u4EC5\u5BF9\u6B63\u6587\u786E\u5B9E\u88AB\u4E66\u5185 CSS \u7F29\u653E\u7684\u4E66\u751F\u6548\uFF0C\u811A\u6CE8/\u56FE\u6CE8\u4E0D\u53D7\u5F71\u54CD\u3002\u6539\u5B8C\u7ACB\u5373\u751F\u6548\u3002").addToggle((toggle) => {
       toggle.setValue(this.plugin.settings.epubUnifyBodyFontSize).onChange(async (value) => {
         this.plugin.settings.epubUnifyBodyFontSize = value;
         await this.plugin.saveSettings();
+        this.plugin.refreshEpubReaderAppearance(true);
       });
     });
     new import_obsidian5.Setting(containerEl).setName("\u9605\u8BFB\u4E3B\u9898").setDesc("EPUB \u9605\u8BFB\u533A\u80CC\u666F\u4E0E\u6587\u5B57\u914D\u8272\u3002").addDropdown((dropdown) => {
@@ -14390,11 +14585,28 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
     }
     this.renderedAnnotationMeta.delete(annotation.id);
   }
+  /**
+   * 把设置页的外观改动立即应用到当前打开的书（字号 / 行距 / 字体 / 统一正文）。
+   * 设置页与 main.ts 通过本方法联动，无需重开电子书。
+   * @param remeasureFontScale - 统一正文字号开关变化时置 true，重置测量标志以便重新判定
+   */
+  refreshAppearance(remeasureFontScale = false) {
+    this.currentFontSize = this.pluginSettings.epubFontSize;
+    if (remeasureFontScale) {
+      this.bodyScaleMeasured = false;
+      this.bodyFontScaled = false;
+    }
+    this.applyFoliateAppearance();
+  }
   applyFoliateAppearance(size = this.currentFontSize) {
     if (!this.foliateView) {
       return;
     }
     const colors = this.themeManager.resolveThemeColors(this.currentTheme);
+    const fontStack = resolveFontFamily(
+      this.pluginSettings.epubFontFamily,
+      this.pluginSettings.epubFontFamilyCustom
+    );
     const css = [
       ":root { color-scheme: light dark; }",
       "body {",
@@ -14408,6 +14620,12 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
       `  color: ${colors.textColor} !important;`,
       `  line-height: ${this.pluginSettings.epubLineHeight} !important;`,
       "}",
+      // 只约束正文类元素，标题/引文/代码自带字体保留；书未指定时随正文继承
+      ...fontStack ? [
+        "body, p, div, li, ul, ol, td, th, dt, dd, section, article {",
+        `  font-family: ${fontStack} !important;`,
+        "}"
+      ] : [],
       ...this.pluginSettings.epubUnifyBodyFontSize && this.bodyFontScaled ? ["p, li, td, th, dd, dt { font-size: 1em !important; }"] : [],
       `a, a:link, a:visited { color: ${colors.linkColor} !important; }`,
       `::selection { background: ${colors.selectionBg} !important; }`,
@@ -15399,6 +15617,18 @@ var OverlayAnnotationsPlugin = class extends import_obsidian18.Plugin {
       await this.refreshActiveReadingViewHighlights(activeFile.path);
     }
     await this.stickyLane.render();
+  }
+  /**
+   * 把 EPUB 外观设置（字号 / 行距 / 正文字体 / 统一正文）立即刷到所有已打开的电子书视图。
+   * 设置页 onChange 调用，改完无需重开电子书。
+   */
+  refreshEpubReaderAppearance(remeasureFontScale = false) {
+    for (const leaf of this.app.workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE)) {
+      const view = leaf.view;
+      if (view instanceof EpubReaderView) {
+        view.refreshAppearance(remeasureFontScale);
+      }
+    }
   }
   /** 手机端防抖同步左侧栏目录视图（layout-change 可能连续触发）。 */
   scheduleEpubTocSync() {

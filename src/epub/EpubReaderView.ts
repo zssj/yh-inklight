@@ -399,6 +399,19 @@ export class EpubReaderView extends FileView {
 	// ================================================================
 
 	/**
+	 * 安卓 WebView 处于 edge-to-edge，系统导航条会压在视图底部，
+	 * 且 env(safe-area-inset-bottom) 因缺少 viewport-fit=cover 恒返回 0，
+	 * 故用设置值撑开底部留白，把进度条托离系统导航条。
+	 */
+	private applyContainerInset(): void {
+		if (!Platform.isAndroidApp) {
+			return;
+		}
+		const inset = Math.max(0, this.pluginSettings.epubMobileBottomInset);
+		this.containerEl.style.setProperty("--yh-safe-bottom", `${inset}px`);
+	}
+
+	/**
 	 * 构建完整的 DOM 布局骨架：
 	 * 工具栏 → [侧边栏 | 阅读区] → 进度条
 	 */
@@ -408,8 +421,8 @@ export class EpubReaderView extends FileView {
 		if (Platform.isAndroidApp) {
 			// Android 状态栏在 CSS 像素中通常 ~24px（env(safe-area-inset-top) 非刘海屏返回 0）
 			this.containerEl.style.setProperty("--yh-safe-top", "24px");
-			this.containerEl.style.setProperty("--yh-safe-bottom", "16px");
 		}
+		this.applyContainerInset();
 
 		this.toolbarEl = this.containerEl.createDiv({ cls: "yh-epub-toolbar" });
 
@@ -2615,7 +2628,7 @@ export class EpubReaderView extends FileView {
 	}
 
 	/**
-	 * 把设置页的外观改动立即应用到当前打开的书（字号 / 行距 / 字体 / 统一正文）。
+	 * 把设置页的外观改动立即应用到当前打开的书（字号 / 行距 / 字体 / 统一正文 / 底部安全间距）。
 	 * 设置页与 main.ts 通过本方法联动，无需重开电子书。
 	 * @param remeasureFontScale - 统一正文字号开关变化时置 true，重置测量标志以便重新判定
 	 */
@@ -2625,6 +2638,7 @@ export class EpubReaderView extends FileView {
 			this.bodyScaleMeasured = false;
 			this.bodyFontScaled = false;
 		}
+		this.applyContainerInset();
 		this.applyFoliateAppearance();
 	}
 

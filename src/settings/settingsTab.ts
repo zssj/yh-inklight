@@ -5,7 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
-import { PluginSettingTab, Setting } from "obsidian";
+import { Platform, PluginSettingTab, Setting } from "obsidian";
 
 import type OverlayAnnotationsPlugin from "../../main";
 import { detectAvailableFonts, FIXED_FONT_OPTIONS, resolveFontFamily } from "../epub/EpubFontCatalog";
@@ -251,6 +251,23 @@ export class AnnotationSettingsTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         });
       });
+
+    if (Platform.isAndroidApp) {
+      new Setting(containerEl)
+        .setName("底部安全间距")
+        .setDesc("EPUB 进度条与手机系统导航条之间的距离（px）。进度条被系统导航条挡住时调大，调到进度条完整露出为止。")
+        .addSlider((slider) => {
+          slider
+            .setLimits(0, 64, 2)
+            .setValue(this.plugin.settings.epubMobileBottomInset)
+            .setDynamicTooltip()
+            .onChange(async (value) => {
+              this.plugin.settings.epubMobileBottomInset = value;
+              await this.plugin.saveSettings();
+              this.plugin.refreshEpubReaderAppearance();
+            });
+        });
+    }
 
     new Setting(containerEl)
       .setName("高亮样式")

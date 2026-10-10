@@ -179,6 +179,8 @@ export interface AnnotationPluginSettings {
   mdOpenTracking: boolean;
   // --- EPUB 手机端沉浸式导航栏 ---
   epubHideMobileNavbar: boolean;
+  /** EPUB 底部进度条与安卓系统导航条的间距（px），遮挡时调大 */
+  epubMobileBottomInset: number;
   // --- EPUB 标注锁定 ---
   annotationLocked: boolean;
 }
@@ -221,6 +223,7 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   mdOpenTracking: true,
   // EPUB 手机端沉浸式导航栏
   epubHideMobileNavbar: true,
+  epubMobileBottomInset: 32,
   // EPUB 标注锁定
   annotationLocked: false,
 };

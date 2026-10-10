@@ -8437,6 +8437,7 @@ var DEFAULT_SETTINGS = {
   mdOpenTracking: true,
   // EPUB 手机端沉浸式导航栏
   epubHideMobileNavbar: true,
+  epubMobileBottomInset: 32,
   // EPUB 标注锁定
   annotationLocked: false
 };
@@ -9565,6 +9566,15 @@ var AnnotationSettingsTab = class extends import_obsidian5.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
+    if (import_obsidian5.Platform.isAndroidApp) {
+      new import_obsidian5.Setting(containerEl).setName("\u5E95\u90E8\u5B89\u5168\u95F4\u8DDD").setDesc("EPUB \u8FDB\u5EA6\u6761\u4E0E\u624B\u673A\u7CFB\u7EDF\u5BFC\u822A\u6761\u4E4B\u95F4\u7684\u8DDD\u79BB\uFF08px\uFF09\u3002\u8FDB\u5EA6\u6761\u88AB\u7CFB\u7EDF\u5BFC\u822A\u6761\u6321\u4F4F\u65F6\u8C03\u5927\uFF0C\u8C03\u5230\u8FDB\u5EA6\u6761\u5B8C\u6574\u9732\u51FA\u4E3A\u6B62\u3002").addSlider((slider) => {
+        slider.setLimits(0, 64, 2).setValue(this.plugin.settings.epubMobileBottomInset).setDynamicTooltip().onChange(async (value) => {
+          this.plugin.settings.epubMobileBottomInset = value;
+          await this.plugin.saveSettings();
+          this.plugin.refreshEpubReaderAppearance();
+        });
+      });
+    }
     new import_obsidian5.Setting(containerEl).setName("\u9AD8\u4EAE\u6837\u5F0F").setDesc("EPUB \u6587\u672C\u6807\u6CE8\u7684\u9ED8\u8BA4\u5448\u73B0\u6837\u5F0F\u3002").addDropdown((dropdown) => {
       for (const style2 of EPUB_HIGHLIGHT_STYLES) {
         dropdown.addOption(style2.id, style2.label);
@@ -12820,6 +12830,18 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
   // 布局构建
   // ================================================================
   /**
+   * 安卓 WebView 处于 edge-to-edge，系统导航条会压在视图底部，
+   * 且 env(safe-area-inset-bottom) 因缺少 viewport-fit=cover 恒返回 0，
+   * 故用设置值撑开底部留白，把进度条托离系统导航条。
+   */
+  applyContainerInset() {
+    if (!import_obsidian13.Platform.isAndroidApp) {
+      return;
+    }
+    const inset = Math.max(0, this.pluginSettings.epubMobileBottomInset);
+    this.containerEl.style.setProperty("--yh-safe-bottom", `${inset}px`);
+  }
+  /**
    * 构建完整的 DOM 布局骨架：
    * 工具栏 → [侧边栏 | 阅读区] → 进度条
    */
@@ -12827,8 +12849,8 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
     this.containerEl.empty();
     if (import_obsidian13.Platform.isAndroidApp) {
       this.containerEl.style.setProperty("--yh-safe-top", "24px");
-      this.containerEl.style.setProperty("--yh-safe-bottom", "16px");
     }
+    this.applyContainerInset();
     this.toolbarEl = this.containerEl.createDiv({ cls: "yh-epub-toolbar" });
     this.toolbarTitleRowEl = this.toolbarEl.createDiv({ cls: "yh-epub-toolbar-row" });
     this.toolbarControlsRowEl = this.toolbarEl.createDiv({ cls: "yh-epub-toolbar-row" });
@@ -14586,7 +14608,7 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
     this.renderedAnnotationMeta.delete(annotation.id);
   }
   /**
-   * 把设置页的外观改动立即应用到当前打开的书（字号 / 行距 / 字体 / 统一正文）。
+   * 把设置页的外观改动立即应用到当前打开的书（字号 / 行距 / 字体 / 统一正文 / 底部安全间距）。
    * 设置页与 main.ts 通过本方法联动，无需重开电子书。
    * @param remeasureFontScale - 统一正文字号开关变化时置 true，重置测量标志以便重新判定
    */
@@ -14596,6 +14618,7 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian13.FileView {
       this.bodyScaleMeasured = false;
       this.bodyFontScaled = false;
     }
+    this.applyContainerInset();
     this.applyFoliateAppearance();
   }
   applyFoliateAppearance(size = this.currentFontSize) {

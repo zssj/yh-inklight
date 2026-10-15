@@ -9,7 +9,6 @@ import { App, Modal, Notice, Platform } from "obsidian";
 
 import {
   AI_ACTION_PRESETS,
-  AiRequestError,
   chatWithAi,
   composeSystemPrompt,
   isAiConfigured,
@@ -108,7 +107,6 @@ export class EpubAiModal extends Modal {
     // 结果区
     body.createEl("span", { cls: "yh-epub-note-label", text: "结果" });
     this.resultEl = body.createDiv({ cls: "yh-epub-ai-result" });
-    this.renderResult();
 
     // 按钮行
     const actions = body.createDiv({ cls: "yh-epub-note-actions" });
@@ -148,21 +146,28 @@ export class EpubAiModal extends Modal {
     }
 
     this.busy = true;
-    this.result = "思考中…";
-    this.renderResult();
-
     try {
+      this.result = "思考中…";
+      this.renderResult();
+
       const reply = await chatWithAi(
         cfg,
         composeSystemPrompt(action, this.settings.aiSystemPrompt),
         action.buildUserText(truncateSelectedText(this.selectedText), this.customInputEl.value),
       );
-      this.result = reply.truncated ? `${reply.content}\n\n（回复被截断，可调大「最大 Token」）` : reply.content;
+      this.result = reply.truncated
+        ? `${reply.content}\n\n（回复被截断，可调大「最大 Token」）`
+        : reply.content;
     } catch (error) {
-      this.result = `失败：${error instanceof AiRequestError || error instanceof Error ? error.message : String(error)}`;
+      this.result = `失败：${error instanceof Error ? error.message : String(error)}`;
     } finally {
       this.busy = false;
-      this.renderResult();
+      // 渲染本身再出异常也不能吞掉已拿到的结果，故单独兜一层
+      try {
+        this.renderResult();
+      } catch {
+        /* ignore secondary render failure */
+      }
     }
   }
 
@@ -185,6 +190,10 @@ export class EpubAiModal extends Modal {
   }
 
   private syncActionButtons(): void {
+    // 按钮元素可能尚未创建（onOpen 中途异常），判空避免把整个流程卡死
+    if (!this.saveBtnEl || !this.copyBtnEl) {
+      return;
+    }
     const hasResult = !!this.result.trim() && !this.busy;
     this.saveBtnEl.disabled = !hasResult;
     this.copyBtnEl.disabled = !hasResult;

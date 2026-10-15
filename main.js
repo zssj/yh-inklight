@@ -12658,7 +12658,6 @@ var EpubAiModal = class extends import_obsidian14.Modal {
     });
     body.createEl("span", { cls: "yh-epub-note-label", text: "\u7ED3\u679C" });
     this.resultEl = body.createDiv({ cls: "yh-epub-ai-result" });
-    this.renderResult();
     const actions = body.createDiv({ cls: "yh-epub-note-actions" });
     const cancelBtn = actions.createEl("button", { text: "\u5173\u95ED", cls: "yh-epub-note-cancel" });
     this.copyBtnEl = actions.createEl("button", { text: "\u590D\u5236", cls: "yh-epub-note-cancel" });
@@ -12692,9 +12691,9 @@ var EpubAiModal = class extends import_obsidian14.Modal {
       return;
     }
     this.busy = true;
-    this.result = "\u601D\u8003\u4E2D\u2026";
-    this.renderResult();
     try {
+      this.result = "\u601D\u8003\u4E2D\u2026";
+      this.renderResult();
       const reply = await chatWithAi(
         cfg,
         composeSystemPrompt(action, this.settings.aiSystemPrompt),
@@ -12704,10 +12703,13 @@ var EpubAiModal = class extends import_obsidian14.Modal {
 
 \uFF08\u56DE\u590D\u88AB\u622A\u65AD\uFF0C\u53EF\u8C03\u5927\u300C\u6700\u5927 Token\u300D\uFF09` : reply.content;
     } catch (error) {
-      this.result = `\u5931\u8D25\uFF1A${error instanceof AiRequestError || error instanceof Error ? error.message : String(error)}`;
+      this.result = `\u5931\u8D25\uFF1A${error instanceof Error ? error.message : String(error)}`;
     } finally {
       this.busy = false;
-      this.renderResult();
+      try {
+        this.renderResult();
+      } catch {
+      }
     }
   }
   async copyResult() {
@@ -12727,6 +12729,9 @@ var EpubAiModal = class extends import_obsidian14.Modal {
     this.syncActionButtons();
   }
   syncActionButtons() {
+    if (!this.saveBtnEl || !this.copyBtnEl) {
+      return;
+    }
     const hasResult = !!this.result.trim() && !this.busy;
     this.saveBtnEl.disabled = !hasResult;
     this.copyBtnEl.disabled = !hasResult;

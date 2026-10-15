@@ -1965,6 +1965,56 @@ body.yh-epub-nav-hidden .mobile-navbar {
 }
 
 /* ============================================================
+   EPUB 阅读器 — AI 助手弹窗
+   ============================================================ */
+
+.yh-epub-ai-custom-row {
+  display: flex;
+  flex-direction: column;
+}
+
+.yh-epub-ai-custom-input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--yh-border);
+  border-radius: var(--yh-radius-sm);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: var(--yh-font-sm);
+}
+
+.yh-epub-ai-custom-input:focus {
+  border-color: var(--interactive-accent);
+}
+
+.yh-epub-ai-result {
+  min-height: 64px;
+  max-height: 42vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 8px 10px;
+  border: 1px solid var(--yh-border);
+  border-radius: var(--yh-radius-sm);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: var(--yh-font-sm);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.yh-epub-ai-modal .yh-epub-note-actions .is-disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+@media (max-width: 800px) {
+  .yh-epub-ai-result {
+    max-height: 32vh;
+  }
+}
+
+/* ============================================================
    EPUB 书架侧栏视图
    ============================================================ */
 

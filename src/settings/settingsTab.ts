@@ -5,9 +5,15 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
-import { Platform, PluginSettingTab, Setting } from "obsidian";
+import { Notice, Platform, PluginSettingTab, Setting } from "obsidian";
 
 import type OverlayAnnotationsPlugin from "../../main";
+import {
+  AI_PROVIDER_PRESETS,
+  isAiConfigured,
+  resolveAiConfig,
+  testAiConnection,
+} from "../ai/EpubAiClient";
 import { detectAvailableFonts, FIXED_FONT_OPTIONS, resolveFontFamily } from "../epub/EpubFontCatalog";
 import {
   ANNOTATION_COLORS,
@@ -114,6 +120,7 @@ export class AnnotationSettingsTab extends PluginSettingTab {
       });
 
     this.renderEpubSettings();
+    this.renderAiSettings();
     this.renderMarkdownStatsSettings();
   }
 
@@ -279,6 +286,112 @@ export class AnnotationSettingsTab extends PluginSettingTab {
         dropdown.setValue(this.plugin.settings.epubHighlightStyle).onChange(async (value) => {
           this.plugin.settings.epubHighlightStyle = value as EpubHighlightStyle;
           await this.plugin.saveSettings();
+        });
+      });
+  }
+
+  /** AI 助手设置：服务商预设 / 接口地址 / Key / 模型 / 上限 / 附加提示词 / 连接测试 */
+  private renderAiSettings(): void {
+    const { containerEl } = this;
+    containerEl.createEl("h3", { text: "AI 助手" });
+
+    new Setting(containerEl)
+      .setName("服务商")
+      .setDesc("选中后自动填入接口地址与推荐模型名，你只需填 API Key。选「自定义」则三项都自己填。")
+      .addDropdown((dropdown) => {
+        for (const preset of AI_PROVIDER_PRESETS) {
+          dropdown.addOption(preset.id, preset.label);
+        }
+        dropdown.setValue(this.plugin.settings.aiProvider).onChange(async (value) => {
+          const preset = AI_PROVIDER_PRESETS.find((p) => p.id === value);
+          this.plugin.settings.aiProvider = value;
+          if (preset && preset.id !== "custom") {
+            this.plugin.settings.aiBaseUrl = preset.baseUrl;
+            this.plugin.settings.aiModel = preset.model;
+          }
+          await this.plugin.saveSettings();
+          this.display();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("接口地址")
+      .setDesc("OpenAI 兼容的 Base URL，通常以 /v1 结尾。")
+      .addText((text) => {
+        text.setValue(this.plugin.settings.aiBaseUrl).onChange(async (value) => {
+          this.plugin.settings.aiBaseUrl = value.trim();
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("API Key")
+      .setDesc("明文保存在本机插件 data.json，请勿把库目录外传。填完建议点下方「测试连接」。")
+      .addText((text) => {
+        text.inputEl.type = "password";
+        text.setValue(this.plugin.settings.aiApiKey).onChange(async (value) => {
+          this.plugin.settings.aiApiKey = value.trim();
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("模型名")
+      .setDesc("例如 mimo-v2.6-flash、deepseek-chat。")
+      .addText((text) => {
+        text.setValue(this.plugin.settings.aiModel).onChange(async (value) => {
+          this.plugin.settings.aiModel = value.trim();
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("最大 Token")
+      .setDesc("单次回复的输出上限。默认 512 够解释/改写；翻译长段可调大。回复被截断时会在末尾提示。")
+      .addSlider((slider) => {
+        slider
+          .setLimits(256, 4096, 256)
+          .setValue(this.plugin.settings.aiMaxTokens)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.aiMaxTokens = value;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("附加系统提示词")
+      .setDesc("可留空。填了会追加在内置提示词之后，用来调整风格，例如「回答要像给高中生讲课」。")
+      .addTextArea((area) => {
+        area.setValue(this.plugin.settings.aiSystemPrompt).onChange(async (value) => {
+          this.plugin.settings.aiSystemPrompt = value.trim();
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("连接测试")
+      .setDesc("用当前配置发一条极小请求，验证地址、Key 与模型是否可用。")
+      .addButton((button) => {
+        button.setButtonText("测试连接").setCta().onClick(async () => {
+          const cfg = resolveAiConfig(this.plugin.settings);
+          if (!isAiConfigured(cfg)) {
+            new Notice("AI 助手：请先把接口地址、API Key、模型名都填上");
+            return;
+          }
+          const originalLabel = button.buttonEl.textContent ?? "测试连接";
+          button.setDisabled(true);
+          button.setButtonText("测试中…");
+          try {
+            const reply = await testAiConnection(cfg);
+            new Notice(`AI 助手连接成功：${reply.slice(0, 80)}`, 8000);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            new Notice(`AI 助手测试失败：${message}`, 12000);
+          } finally {
+            button.setDisabled(false);
+            button.setButtonText(originalLabel);
+          }
         });
       });
   }

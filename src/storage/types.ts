@@ -183,6 +183,18 @@ export interface AnnotationPluginSettings {
   epubMobileBottomInset: number;
   // --- EPUB 标注锁定 ---
   annotationLocked: boolean;
+  // --- AI 助手（OpenAI 兼容接口，见 ai/EpubAiClient）---
+  /** 服务商预设 id，仅用于回填下拉；实际请求只看下面的 baseUrl/model */
+  aiProvider: string;
+  aiBaseUrl: string;
+  /** API Key 明文存于本机 data.json */
+  aiApiKey: string;
+  aiModel: string;
+  /** 单次回复的输出 token 上限 */
+  aiMaxTokens: number;
+  aiTemperature: number;
+  /** 附加系统提示词，追加在内置动作提示词之后；留空则只用内置 */
+  aiSystemPrompt: string;
 }
 
 export interface SelectionSnapshot {
@@ -226,6 +238,14 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   epubMobileBottomInset: 32,
   // EPUB 标注锁定
   annotationLocked: false,
+  // AI 助手
+  aiProvider: "mimo",
+  aiBaseUrl: "https://api.xiaomimimo.com/v1",
+  aiApiKey: "",
+  aiModel: "mimo-v2.6-flash",
+  aiMaxTokens: 512,
+  aiTemperature: 0.4,
+  aiSystemPrompt: "",
 };
 
 export const EMPTY_INDEX: AnnotationIndex = {

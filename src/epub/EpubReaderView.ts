@@ -45,6 +45,7 @@ import {
 	showFoliateStart,
 } from "./EpubFoliateLoader";
 import { EpubNoteModal, EpubNoteResult } from "./EpubNoteModal";
+import { EpubAiModal } from "./EpubAiModal";
 import { EpubAnnotationCard } from "./EpubAnnotationCard";
 import { EpubImageViewer } from "./EpubImageViewer";
 
@@ -947,6 +948,17 @@ export class EpubReaderView extends FileView {
 			this.dismissContextMenu();
 		});
 
+		// AI 助手入口：未配置 Key 时弹窗内会给出「去设置」指引，故始终显示
+		const aiBtn = menu.createEl("button", {
+			cls: "yh-epub-context-ai-btn",
+			attr: { type: "button", title: "AI 助手", "aria-label": "AI 助手" },
+			text: "\u{2728}",
+		});
+		aiBtn.addEventListener("click", () => {
+			this.dismissContextMenu();
+			this.openAiModal(cfiRange, text);
+		});
+
 		const safeTop = parseInt(getComputedStyle(this.containerEl).getPropertyValue("--yh-safe-top")) || 0;
 		const safeBottom = parseInt(getComputedStyle(this.containerEl).getPropertyValue("--yh-safe-bottom")) || 0;
 		const menuHeight = menu.getBoundingClientRect().height || 40;
@@ -1059,12 +1071,28 @@ export class EpubReaderView extends FileView {
 	}
 
 	/**
-	 * 打开标注弹窗，让用户输入笔记内容后保存为 EpubCommentAnnotation。
+	 * 打开 AI 助手弹窗。回复不落盘，用户点「存为便签」时才转入既有标注流程。
 	 *
 	 * @param cfiRange - CFI 范围
 	 * @param text - 选中的文本
 	 */
-	private openNoteModal(cfiRange: string, text: string): void {
+	private openAiModal(cfiRange: string, text: string): void {
+		if (!this.file || !this.foliateView) {
+			return;
+		}
+		new EpubAiModal(this.app, text, this.pluginSettings, (note) => {
+			void this.openNoteModal(cfiRange, text, note);
+		}).open();
+	}
+
+	/**
+	 * 打开标注弹窗，让用户输入笔记内容后保存为 EpubCommentAnnotation。
+	 *
+	 * @param cfiRange - CFI 范围
+	 * @param text - 选中的文本
+	 * @param initialNote - 预填内容（AI 回复等），用户仍可编辑后再保存
+	 */
+	private openNoteModal(cfiRange: string, text: string, initialNote?: string): void {
 		if (!this.file || !this.foliateView) {
 			return;
 		}
@@ -1075,6 +1103,7 @@ export class EpubReaderView extends FileView {
 			this.app,
 			text,
 			{
+				note: initialNote ?? "",
 				color: this.pluginSettings.defaultHighlightColor,
 				style: this.pluginSettings.epubHighlightStyle,
 			},

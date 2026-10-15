@@ -15,6 +15,7 @@ views/sidebarView.ts: 右侧总览面板，使用彩色卡片合并 highlight �
 views/stickyNoteView.ts: 兼容型便利贴卡片组件，保留 Markdown 渲染、折叠与编辑。
 settings/settingsTab.ts: 插件设置页，管理默认颜色、便签栏、窄屏折叠、连接线、作者和迁移策略。
 utils/positioning.ts: 便签避让布局纯函数，保留给后续便签栏实验复用。
+ai/EpubAiClient.ts: OpenAI 兼容聊天客户端，用 requestUrl 绕过安卓 CORS，内置服务商/动作预设与中文错误映射；推理模型固定关闭 thinking。
 
 法则: 类型单一真相·业务不懂存储·渲染只做投影·UI 只做交互·总览优先于常驻叠层
 

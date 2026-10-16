@@ -103,7 +103,7 @@ export const AI_ACTION_PRESETS: readonly AiActionPreset[] = [
     id: "ask",
     label: "自定义",
     systemPrompt:
-      "你是中文读书助手。只依据下面这段文字回答，不要编造。用简体中文，最多 5 句话。文字里没有的答案就直接说“这段文字里没有提到”。",
+      "你是中文读书助手。用简体中文，最多 6 句话。字词释义、读音、用法、常识或背景知识直接回答，并说明是你补充的；问读音时多音字要一并列出。关于这段文字的问题只依据原文，原文没写到就直说没写到。",
     buildUserText: (text, question) => `我的问题：${(question ?? "").trim()}\n\n---\n\n${text}`,
   },
 ];

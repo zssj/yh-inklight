@@ -12635,9 +12635,13 @@ var EpubAiModal = class extends import_obsidian14.Modal {
         this.currentAction = action;
         Object.values(this.actionChipEls).forEach((c2) => c2.removeClass("is-active"));
         chip.addClass("is-active");
-        this.customRowEl.style.display = action.id === "ask" ? "" : "none";
-        if (action.id === "ask") {
+        const isAsk = action.id === "ask";
+        this.customRowEl.style.display = isAsk ? "" : "none";
+        if (isAsk) {
+          this.result = "";
+          this.renderResult();
           window.setTimeout(() => this.customInputEl.focus(), 30);
+          return;
         }
         void this.run(action);
       });
@@ -12650,10 +12654,20 @@ var EpubAiModal = class extends import_obsidian14.Modal {
       cls: "yh-epub-ai-custom-input",
       attr: { type: "text", placeholder: "\u4F8B\u5982\uFF1A\u8FD9\u53E5\u8BDD\u5728\u8BF4\u4EC0\u4E48\uFF1F" }
     });
+    this.askBtnEl = this.customRowEl.createEl("button", {
+      text: "\u63D0\u95EE",
+      cls: "yh-epub-ai-ask-btn"
+    });
+    this.askBtnEl.addClass("mod-cta");
+    this.askBtnEl.addEventListener("click", () => this.submitCustom());
+    this.customInputEl.addEventListener("input", () => this.syncActionButtons());
     this.customInputEl.addEventListener("keydown", (e3) => {
+      if (e3.isComposing) {
+        return;
+      }
       if (e3.key === "Enter" && this.currentAction) {
         e3.preventDefault();
-        void this.run(this.currentAction);
+        this.submitCustom();
       }
     });
     body.createEl("span", { cls: "yh-epub-note-label", text: "\u7ED3\u679C" });
@@ -12712,6 +12726,16 @@ var EpubAiModal = class extends import_obsidian14.Modal {
       }
     }
   }
+  /** 提交自定义提问（「提问」按钮与回车共用） */
+  submitCustom() {
+    if (this.busy || !this.currentAction || this.currentAction.id !== "ask") {
+      return;
+    }
+    if (!this.customInputEl.value.trim()) {
+      return;
+    }
+    void this.run(this.currentAction);
+  }
   async copyResult() {
     const text = this.result.trim();
     if (!text || this.busy) {
@@ -12737,6 +12761,11 @@ var EpubAiModal = class extends import_obsidian14.Modal {
     this.copyBtnEl.disabled = !hasResult;
     this.saveBtnEl.toggleClass("is-disabled", !hasResult);
     this.copyBtnEl.toggleClass("is-disabled", !hasResult);
+    if (this.askBtnEl) {
+      const canAsk = !!(this.customInputEl?.value ?? "").trim() && !this.busy;
+      this.askBtnEl.disabled = !canAsk;
+      this.askBtnEl.toggleClass("is-disabled", !canAsk);
+    }
   }
   /**
    * 移动端软键盘感知（与 EpubNoteModal 同一套思路的精简版）。

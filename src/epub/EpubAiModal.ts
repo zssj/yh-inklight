@@ -37,6 +37,7 @@ export class EpubAiModal extends Modal {
   private actionChipEls: Record<string, HTMLElement> = {};
   private customRowEl!: HTMLElement;
   private customInputEl!: HTMLInputElement;
+  private askBtnEl!: HTMLButtonElement;
   private resultEl!: HTMLElement;
   private saveBtnEl!: HTMLButtonElement;
   private copyBtnEl!: HTMLButtonElement;
@@ -80,9 +81,15 @@ export class EpubAiModal extends Modal {
         this.currentAction = action;
         Object.values(this.actionChipEls).forEach((c) => c.removeClass("is-active"));
         chip.addClass("is-active");
-        this.customRowEl.style.display = action.id === "ask" ? "" : "none";
-        if (action.id === "ask") {
+        const isAsk = action.id === "ask";
+        this.customRowEl.style.display = isAsk ? "" : "none";
+        if (isAsk) {
+          // 自定义提问不在点击时发请求：此时输入框是空的，会把空问题发出去，
+          // 然后在用户打字途中把答非所问的结果弹回结果区。
+          this.result = "";
+          this.renderResult();
           window.setTimeout(() => this.customInputEl.focus(), 30);
+          return;
         }
         void this.run(action);
       });
@@ -97,10 +104,21 @@ export class EpubAiModal extends Modal {
       cls: "yh-epub-ai-custom-input",
       attr: { type: "text", placeholder: "例如：这句话在说什么？" },
     });
+    this.askBtnEl = this.customRowEl.createEl("button", {
+      text: "提问",
+      cls: "yh-epub-ai-ask-btn",
+    });
+    this.askBtnEl.addClass("mod-cta");
+    this.askBtnEl.addEventListener("click", () => this.submitCustom());
+    this.customInputEl.addEventListener("input", () => this.syncActionButtons());
     this.customInputEl.addEventListener("keydown", (e) => {
+      // 中文输入法组词中按 Enter 只是上屏，不能当成提交
+      if (e.isComposing) {
+        return;
+      }
       if (e.key === "Enter" && this.currentAction) {
         e.preventDefault();
-        void this.run(this.currentAction);
+        this.submitCustom();
       }
     });
 
@@ -171,6 +189,17 @@ export class EpubAiModal extends Modal {
     }
   }
 
+  /** 提交自定义提问（「提问」按钮与回车共用） */
+  private submitCustom(): void {
+    if (this.busy || !this.currentAction || this.currentAction.id !== "ask") {
+      return;
+    }
+    if (!this.customInputEl.value.trim()) {
+      return;
+    }
+    void this.run(this.currentAction);
+  }
+
   private async copyResult(): Promise<void> {
     const text = this.result.trim();
     if (!text || this.busy) {
@@ -199,6 +228,11 @@ export class EpubAiModal extends Modal {
     this.copyBtnEl.disabled = !hasResult;
     this.saveBtnEl.toggleClass("is-disabled", !hasResult);
     this.copyBtnEl.toggleClass("is-disabled", !hasResult);
+    if (this.askBtnEl) {
+      const canAsk = !!(this.customInputEl?.value ?? "").trim() && !this.busy;
+      this.askBtnEl.disabled = !canAsk;
+      this.askBtnEl.toggleClass("is-disabled", !canAsk);
+    }
   }
 
   /**

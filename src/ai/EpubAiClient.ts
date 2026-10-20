@@ -67,7 +67,7 @@ export type AiActionId = "explain" | "translate" | "rewrite" | "ask";
 export interface AiActionPreset {
   id: AiActionId;
   label: string;
-  /** 内置系统提示词，写死字数上限以控制输出成本 */
+  /** 内置系统提示词。内置动作写死篇幅上限以控制成本；「自定义」按字数区间而非硬上限组织 */
   systemPrompt: string;
   /** 组装 user 消息正文 */
   buildUserText: (selectedText: string, question?: string) => string;
@@ -75,7 +75,7 @@ export interface AiActionPreset {
 
 /**
  * 内置动作预设。系统提示词刻意写得很短——它随每次请求发送，越短越省。
- * 省 token 三件套：关闭思考 + 卡死字数上限 + 不附带章节上下文。
+ * 省 token 三件套：关闭思考 + 内置动作卡死篇幅 + 不附带章节上下文。
  */
 export const AI_ACTION_PRESETS: readonly AiActionPreset[] = [
   {
@@ -103,7 +103,7 @@ export const AI_ACTION_PRESETS: readonly AiActionPreset[] = [
     id: "ask",
     label: "自定义",
     systemPrompt:
-      "你是中文读书助手。用简体中文，最多 6 句话。字词释义、读音、用法、常识或背景知识直接回答，并说明是你补充的；问读音时多音字要一并列出。关于这段文字的问题只依据原文，原文没写到就直说没写到。",
+      "你是中文读书助手。用简体中文，像耐心的朋友那样把问题讲清楚。先直接给出结论，再展开说明，控制在 200-300 字左右；内容多时用 1. 2. 3. 序号或短段落组织，不要使用 markdown 符号（如 #、-、**）。字词释义、读音、用法、常识或背景知识要讲透，问读音时多音字要一并列出。问题涉及所给原文时，结合原文字句具体分析；需要超出原文才能回答的部分，明确说明这是你的补充知识，不要编造。",
     buildUserText: (text, question) => `我的问题：${(question ?? "").trim()}\n\n---\n\n${text}`,
   },
 ];

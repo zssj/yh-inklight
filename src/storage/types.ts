@@ -243,7 +243,7 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   aiBaseUrl: "https://api.xiaomimimo.com/v1",
   aiApiKey: "",
   aiModel: "mimo-v2.6-flash",
-  aiMaxTokens: 512,
+    aiMaxTokens: 1024,
   aiTemperature: 0.4,
   aiSystemPrompt: "",
 };

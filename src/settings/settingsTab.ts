@@ -347,7 +347,7 @@ export class AnnotationSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("最大 Token")
-      .setDesc("单次回复的输出上限。默认 512 够解释/改写；翻译长段可调大。回复被截断时会在末尾提示。")
+      .setDesc("单次回复的输出上限。默认 1024；「自定义」提问要 200-300 字，调小容易被截断。回复被截断时会在末尾提示。")
       .addSlider((slider) => {
         slider
           .setLimits(256, 4096, 256)

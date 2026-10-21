@@ -8423,6 +8423,7 @@ var DEFAULT_SETTINGS = {
   stickyNotesVisible: true,
   // EPUB
   epubDefaultFlow: "scrolled",
+  epubPageAnimation: true,
   epubFontSize: 16,
   epubLineHeight: 1.72,
   epubUnifyBodyFontSize: false,
@@ -9793,6 +9794,12 @@ var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
       dropdown.addOption("scrolled", "\u6EDA\u52A8");
       dropdown.setValue(this.plugin.settings.epubDefaultFlow).onChange(async (value) => {
         this.plugin.settings.epubDefaultFlow = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    new import_obsidian6.Setting(containerEl).setName("\u7FFB\u9875\u52A8\u753B").setDesc("\u7FFB\u9875\u6A21\u5F0F\u4E0B\u5207\u6362\u9875\u9762\u65F6\u7684 300ms \u6ED1\u52A8\u8FC7\u6E21\u3002\u8FDE\u6309\u65B9\u5411\u952E\u7FFB\u9875\u4F1A\u53D8\u6162\uFF0C\u5ACC\u949D\u53EF\u5173\u95ED\u3002\u6EDA\u52A8\u6A21\u5F0F\u4E0D\u53D7\u5F71\u54CD\uFF1B\u6539\u8BBE\u7F6E\u540E\u91CD\u5F00\u4E66\u751F\u6548\u3002").addToggle((toggle) => {
+      toggle.setValue(this.plugin.settings.epubPageAnimation).onChange(async (value) => {
+        this.plugin.settings.epubPageAnimation = value;
         await this.plugin.saveSettings();
       });
     });
@@ -15224,6 +15231,14 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
     for (const [name, value] of Object.entries(attrs)) {
       host.setAttribute(name, value);
       renderer?.setAttribute?.(name, value);
+    }
+    if (renderer) {
+      const animated = this.currentFlowMode === "paginated" && this.pluginSettings.epubPageAnimation;
+      if (animated) {
+        renderer.setAttribute("animated", "");
+      } else {
+        renderer.removeAttribute("animated");
+      }
     }
     this.foliateView.renderer?.render?.();
   }

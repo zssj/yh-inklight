@@ -163,6 +163,8 @@ export interface AnnotationPluginSettings {
   stickyNotesVisible: boolean;
   // --- EPUB 阅读 ---
   epubDefaultFlow: EpubFlowMode;
+  /** 翻页模式下的 300ms 滑动过渡（foliate 的 animated 属性），滚动模式不受影响 */
+  epubPageAnimation: boolean;
   epubFontSize: number;
   epubLineHeight: number;
   epubUnifyBodyFontSize: boolean;
@@ -221,6 +223,7 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   stickyNotesVisible: true,
   // EPUB
   epubDefaultFlow: "scrolled",
+  epubPageAnimation: true,
   epubFontSize: 16,
   epubLineHeight: 1.72,
   epubUnifyBodyFontSize: false,

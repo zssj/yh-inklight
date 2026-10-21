@@ -2733,6 +2733,16 @@ export class EpubReaderView extends FileView {
 			host.setAttribute(name, value);
 			renderer?.setAttribute?.(name, value);
 		}
+		// foliate 的 animated 不在 observedAttributes 里，setAttribute 即时生效、无需重渲染。
+		// 只在翻页模式下启用，避免滚动模式的方向键跳屏也被带上 300ms 过渡。
+		if (renderer) {
+			const animated = this.currentFlowMode === "paginated" && this.pluginSettings.epubPageAnimation;
+			if (animated) {
+				renderer.setAttribute("animated", "");
+			} else {
+				renderer.removeAttribute("animated");
+			}
+		}
 		this.foliateView.renderer?.render?.();
 	}
 

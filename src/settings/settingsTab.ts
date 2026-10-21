@@ -250,6 +250,16 @@ export class AnnotationSettingsTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName("翻页动画")
+      .setDesc("翻页模式下切换页面时的 300ms 滑动过渡。连按方向键翻页会变慢，嫌钝可关闭。滚动模式不受影响；改设置后重开书生效。")
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.epubPageAnimation).onChange(async (value) => {
+          this.plugin.settings.epubPageAnimation = value;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
       .setName("手机端沉浸式导航栏")
       .setDesc("手机上阅读 EPUB 时，向下滚动自动隐藏 Obsidian 底部导航栏，向上滚动恢复。")
       .addToggle((toggle) => {

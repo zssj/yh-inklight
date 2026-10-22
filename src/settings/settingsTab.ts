@@ -260,6 +260,16 @@ export class AnnotationSettingsTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName("双击翻页")
+      .setDesc("手机上双击页面任意位置往后翻一页，仅翻页模式生效。正在选词、点到链接或图片时不会触发；该开关同时控制系统自带的双击缩放。改设置后重开书生效。")
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.epubDoubleTapToPage).onChange(async (value) => {
+          this.plugin.settings.epubDoubleTapToPage = value;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
       .setName("手机端沉浸式导航栏")
       .setDesc("手机上阅读 EPUB 时，向下滚动自动隐藏 Obsidian 底部导航栏，向上滚动恢复。")
       .addToggle((toggle) => {

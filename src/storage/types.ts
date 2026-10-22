@@ -165,6 +165,8 @@ export interface AnnotationPluginSettings {
   epubDefaultFlow: EpubFlowMode;
   /** 翻页模式下的 300ms 滑动过渡（foliate 的 animated 属性），滚动模式不受影响 */
   epubPageAnimation: boolean;
+  /** 手机端双击翻到下一页，仅翻页模式生效 */
+  epubDoubleTapToPage: boolean;
   epubFontSize: number;
   epubLineHeight: number;
   epubUnifyBodyFontSize: boolean;
@@ -224,6 +226,7 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   // EPUB
   epubDefaultFlow: "scrolled",
   epubPageAnimation: true,
+  epubDoubleTapToPage: true,
   epubFontSize: 16,
   epubLineHeight: 1.72,
   epubUnifyBodyFontSize: false,

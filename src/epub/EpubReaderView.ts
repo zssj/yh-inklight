@@ -60,6 +60,16 @@ const READING_TIME_FLUSH_INTERVAL_MS = 60_000;
 /** 鼠标滚轮翻页防抖延迟（毫秒） */
 const WHEEL_DEBOUNCE_MS = 400;
 
+/** 双击翻页：两次 touchend 的最大间隔（毫秒） */
+const DOUBLE_TAP_INTERVAL_MS = 300;
+
+/**
+ * 双击翻页：判定成功后延后多久才真正翻页。
+ * foliate 在自己的 touchend 里跑 snap()，且包在 requestAnimationFrame 中，
+ * 不延后会让两个动画同时写 containerPosition 互相打架。
+ */
+const DOUBLE_TAP_PAGE_DELAY_MS = 60;
+
 /** 进度保存防抖延迟（毫秒） */
 const PROGRESS_SAVE_DEBOUNCE_MS = 2_000;
 
@@ -217,6 +227,12 @@ export class EpubReaderView extends FileView {
 	/** 连续 relocate 事件中 fraction 未增长的次数（末页检测） */
 	private stableCountAtEnd = 0;
 	private currentFlowMode: EpubFlowMode;
+	/** 双击翻页：上一次 tap 的时间戳，用于判定双击 */
+	private lastTapTime = 0;
+	/** 双击翻页：延后翻页的定时器 */
+	private doubleTapTimer: number | null = null;
+	/** 已挂过双击监听的章节 doc（WeakSet 避免持有 iframe 引用） */
+	private doubleTapPagingDocs = new WeakSet<Document>();
 	private currentFontSize: number;
 	private currentTheme: EpubReadingTheme;
 	/** 当前书正文是否被书内 CSS 缩放（统一正文字号设置用，每次加载测量一次） */
@@ -2008,6 +2024,7 @@ export class EpubReaderView extends FileView {
 		stripScriptsFromDocument(doc);
 		await inlineBlockedStylesheets({ document: doc });
 		this.attachSelectionListeners(doc);
+		this.attachDoubleTapPaging(doc);
 		// 锁定时新加载的 section 也要禁止选中
 		if (this.pluginSettings.annotationLocked && doc.head && !this.selectionLockStyleEls.has(doc)) {
 			const style = doc.createElement("style");
@@ -2518,6 +2535,82 @@ export class EpubReaderView extends FileView {
 			win?.removeEventListener("touchend", scheduleEmit, true);
 		};
 		this.documentSelectionCleanups.set(doc, cleanup);
+	}
+
+	/**
+	 * 手机端双击翻页（仅翻页模式，开关见 settings.epubDoubleTapToPage）。
+	 *
+	 * 必须挂到章节 iframe 的 document 上——iframe 内的事件不会冒泡到外层容器，
+	 * 挂在 readerContainerEl 上收不到。
+	 *
+	 * 两个坑：
+	 * 1. 章节 doc 没有 viewport meta，原生双击缩放会被触发，必须注入
+	 *    touch-action: manipulation（保留滑动与点按，只禁掉双击缩放）。
+	 * 2. foliate 自己也在 touchend 里跑 snap()，且包在 requestAnimationFrame 中，
+	 *    立刻翻页会让两个动画同时写 containerPosition，故延后一拍。
+	 */
+	private attachDoubleTapPaging(doc: Document): void {
+		if (this.doubleTapPagingDocs.has(doc)) {
+			return;
+		}
+		this.doubleTapPagingDocs.add(doc);
+
+		if (!this.pluginSettings.epubDoubleTapToPage) {
+			return;
+		}
+		if (!doc.getElementById("yh-double-tap-fix") && doc.head) {
+			const style = doc.createElement("style");
+			style.id = "yh-double-tap-fix";
+			style.textContent = "html, body { touch-action: manipulation; }";
+			doc.head.appendChild(style);
+		}
+
+		const handler = (ev: TouchEvent): void => {
+			if (!this.pluginSettings.epubDoubleTapToPage || this.currentFlowMode !== "paginated") {
+				return;
+			}
+			if (ev.touches.length > 1) {
+				return;
+			}
+			if ((window.visualViewport?.scale ?? 1) !== 1) {
+				return;
+			}
+			const now = Date.now();
+			if (now - this.lastTapTime > DOUBLE_TAP_INTERVAL_MS) {
+				this.lastTapTime = now;
+				return;
+			}
+			this.lastTapTime = 0;
+			// 有非折叠选区 = 用户在选词/拖选，不翻页
+			const selection = doc.getSelection?.() ?? doc.defaultView?.getSelection?.();
+			if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
+				return;
+			}
+			// 链接 / 图片 / 矢量图 / 画布另有交互（跟链接、开图片查看器），不翻页
+			const target = ev.target as Element | null;
+			if (target && typeof target.closest === "function") {
+				if (
+					target.closest("a[href]") ||
+					target.closest("img") ||
+					target.closest("svg") ||
+					target.closest("canvas")
+				) {
+					return;
+				}
+			}
+			ev.preventDefault();
+			if (this.doubleTapTimer !== null) {
+				window.clearTimeout(this.doubleTapTimer);
+			}
+			this.doubleTapTimer = window.setTimeout(() => {
+				this.doubleTapTimer = null;
+				if (this.pluginSettings.epubDoubleTapToPage && this.currentFlowMode === "paginated") {
+					this.nextPage();
+				}
+			}, DOUBLE_TAP_PAGE_DELAY_MS);
+		};
+
+		doc.addEventListener("touchend", handler, { capture: true });
 	}
 
 	private emitFoliateSelection(doc: Document): boolean {

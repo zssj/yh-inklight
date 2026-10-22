@@ -165,8 +165,8 @@ export interface AnnotationPluginSettings {
   epubDefaultFlow: EpubFlowMode;
   /** 翻页模式下的 300ms 滑动过渡（foliate 的 animated 属性），滚动模式不受影响 */
   epubPageAnimation: boolean;
-  /** 手机端双击翻到下一页，仅翻页模式生效 */
-  epubDoubleTapToPage: boolean;
+  /** 点击书页如何翻页：关闭 / 单击分区 / 单击一律后翻 / 双击后翻（见 EpubTapMode） */
+  epubTapMode: EpubTapMode;
   epubFontSize: number;
   epubLineHeight: number;
   epubUnifyBodyFontSize: boolean;
@@ -226,7 +226,7 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   // EPUB
   epubDefaultFlow: "scrolled",
   epubPageAnimation: true,
-  epubDoubleTapToPage: true,
+  epubTapMode: "single-zone",
   epubFontSize: 16,
   epubLineHeight: 1.72,
   epubUnifyBodyFontSize: false,
@@ -352,6 +352,14 @@ export interface CanvasExcerptNode {
 
 export type EpubReadingTheme = "obsidian" | "white" | "warm" | "green" | "sepia" | "dark";
 export type EpubFlowMode = "paginated" | "scrolled";
+/**
+ * EPUB 点击翻页手势。四档互斥——单击与双击无法同时成立（双击 = 两次单击）。
+ * - off：关闭
+ * - single-zone：左 1/3 上一页、右 1/3 下一页、中间不翻（默认）
+ * - single-next：任意位置单击一律往后翻（不能用触摸往回翻）
+ * - double：单击无效，双击往后翻
+ */
+export type EpubTapMode = "off" | "single-zone" | "single-next" | "double";
 export type EpubBookshelfSortMode = "name" | "recent" | "progress" | "readCount";
 
 export const EPUB_READING_THEMES: { id: EpubReadingTheme; label: string; background: string; text: string; swatch: string }[] = [

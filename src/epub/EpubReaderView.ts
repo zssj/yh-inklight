@@ -63,12 +63,15 @@ const WHEEL_DEBOUNCE_MS = 400;
 /** 双击翻页：两次 touchend 的最大间隔（毫秒） */
 const DOUBLE_TAP_INTERVAL_MS = 300;
 
+/** 单击翻页：按住超过此时长才抬起视为「在长按选字」，不翻页（毫秒） */
+const TAP_HOLD_MAX_MS = 400;
+
 /**
- * 双击翻页：判定成功后延后多久才真正翻页。
+ * 点击翻页：判定成功后延后多久才真正翻页。
  * foliate 在自己的 touchend 里跑 snap()，且包在 requestAnimationFrame 中，
  * 不延后会让两个动画同时写 containerPosition 互相打架。
  */
-const DOUBLE_TAP_PAGE_DELAY_MS = 60;
+const TAP_PAGE_DELAY_MS = 60;
 
 /** 进度保存防抖延迟（毫秒） */
 const PROGRESS_SAVE_DEBOUNCE_MS = 2_000;
@@ -227,12 +230,14 @@ export class EpubReaderView extends FileView {
 	/** 连续 relocate 事件中 fraction 未增长的次数（末页检测） */
 	private stableCountAtEnd = 0;
 	private currentFlowMode: EpubFlowMode;
-	/** 双击翻页：上一次 tap 的时间戳，用于判定双击 */
+	/** 点击翻页：本次触摸的 touchstart 时间戳，用于区分点击与长按选字 */
+	private tapStartTime = 0;
+	/** 点击翻页：双击档的上一次 tap 时间戳 */
 	private lastTapTime = 0;
-	/** 双击翻页：延后翻页的定时器 */
-	private doubleTapTimer: number | null = null;
-	/** 已挂过双击监听的章节 doc（WeakSet 避免持有 iframe 引用） */
-	private doubleTapPagingDocs = new WeakSet<Document>();
+	/** 点击翻页：延后翻页的定时器 */
+	private tapPageTimer: number | null = null;
+	/** 已挂过点击翻页监听的章节 doc（WeakSet 避免持有 iframe 引用） */
+	private tapPagingDocs = new WeakSet<Document>();
 	private currentFontSize: number;
 	private currentTheme: EpubReadingTheme;
 	/** 当前书正文是否被书内 CSS 缩放（统一正文字号设置用，每次加载测量一次） */
@@ -2024,7 +2029,7 @@ export class EpubReaderView extends FileView {
 		stripScriptsFromDocument(doc);
 		await inlineBlockedStylesheets({ document: doc });
 		this.attachSelectionListeners(doc);
-		this.attachDoubleTapPaging(doc);
+		this.attachTapPaging(doc);
 		// 锁定时新加载的 section 也要禁止选中
 		if (this.pluginSettings.annotationLocked && doc.head && !this.selectionLockStyleEls.has(doc)) {
 			const style = doc.createElement("style");
@@ -2538,24 +2543,26 @@ export class EpubReaderView extends FileView {
 	}
 
 	/**
-	 * 手机端双击翻页（仅翻页模式，开关见 settings.epubDoubleTapToPage）。
+	 * 手机端点击翻页（仅翻页模式，档位见 settings.epubTapMode）。
 	 *
 	 * 必须挂到章节 iframe 的 document 上——iframe 内的事件不会冒泡到外层容器，
 	 * 挂在 readerContainerEl 上收不到。
 	 *
-	 * 两个坑：
+	 * 三个坑：
 	 * 1. 章节 doc 没有 viewport meta，原生双击缩放会被触发，必须注入
 	 *    touch-action: manipulation（保留滑动与点按，只禁掉双击缩放）。
 	 * 2. foliate 自己也在 touchend 里跑 snap()，且包在 requestAnimationFrame 中，
 	 *    立刻翻页会让两个动画同时写 containerPosition，故延后一拍。
+	 * 3. 下面的护栏必须全部走完才碰 preventDefault：任何一道 return 都不能
+	 *    拦截原生长按选字、拖动手柄、点菜单按钮的默认行为。
 	 */
-	private attachDoubleTapPaging(doc: Document): void {
-		if (this.doubleTapPagingDocs.has(doc)) {
+	private attachTapPaging(doc: Document): void {
+		if (this.tapPagingDocs.has(doc)) {
 			return;
 		}
-		this.doubleTapPagingDocs.add(doc);
+		this.tapPagingDocs.add(doc);
 
-		if (!this.pluginSettings.epubDoubleTapToPage) {
+		if (this.pluginSettings.epubTapMode === "off") {
 			return;
 		}
 		if (!doc.getElementById("yh-double-tap-fix") && doc.head) {
@@ -2565,28 +2572,48 @@ export class EpubReaderView extends FileView {
 			doc.head.appendChild(style);
 		}
 
+		const startHandler = (): void => {
+			this.tapStartTime = Date.now();
+		};
+
 		const handler = (ev: TouchEvent): void => {
-			if (!this.pluginSettings.epubDoubleTapToPage || this.currentFlowMode !== "paginated") {
+			const mode = this.pluginSettings.epubTapMode;
+			if (mode === "off" || this.currentFlowMode !== "paginated") {
 				return;
 			}
-			if (ev.touches.length > 1) {
+			if (ev.touches.length > 1 || ev.changedTouches.length > 1) {
 				return;
 			}
 			if ((window.visualViewport?.scale ?? 1) !== 1) {
 				return;
 			}
-			const now = Date.now();
-			if (now - this.lastTapTime > DOUBLE_TAP_INTERVAL_MS) {
-				this.lastTapTime = now;
+			// 护栏 1：按住过久才抬起 = 在长按选字。安卓约 500ms 才创建选区，
+			// 不足 500ms 时下面的选区护栏拦不住，这条卡在普通点击(<200ms)与
+			// 长按(≥500ms) 之间补上缺口。
+			if (this.tapStartTime > 0 && Date.now() - this.tapStartTime > TAP_HOLD_MAX_MS) {
 				return;
 			}
-			this.lastTapTime = 0;
-			// 有非折叠选区 = 用户在选词/拖选，不翻页
+			// 护栏 2：选区菜单 / 标注卡片开着时，这一下只负责关掉它们
+			if (this.contextMenuEl || this.annotationCardEl) {
+				this.dismissContextMenu();
+				this.annotationCardEl?.dismiss();
+				this.annotationCardEl = null;
+				return;
+			}
+			const touch = ev.changedTouches[0];
+			if (!touch) {
+				return;
+			}
+			// 护栏 3：点到已有高亮 → 交给 foliate 弹标注卡片（坐标同为 iframe 视口系）
+			if (this.hitAnnotationAt(touch as unknown as Event, doc)) {
+				return;
+			}
+			// 护栏 4：有非折叠选区 = 正在选词 / 拖选
 			const selection = doc.getSelection?.() ?? doc.defaultView?.getSelection?.();
 			if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
 				return;
 			}
-			// 链接 / 图片 / 矢量图 / 画布另有交互（跟链接、开图片查看器），不翻页
+			// 护栏 5：链接 / 图片 / 矢量图 / 画布另有交互（跟链接、开图片查看器）
 			const target = ev.target as Element | null;
 			if (target && typeof target.closest === "function") {
 				if (
@@ -2598,18 +2625,60 @@ export class EpubReaderView extends FileView {
 					return;
 				}
 			}
-			ev.preventDefault();
-			if (this.doubleTapTimer !== null) {
-				window.clearTimeout(this.doubleTapTimer);
-			}
-			this.doubleTapTimer = window.setTimeout(() => {
-				this.doubleTapTimer = null;
-				if (this.pluginSettings.epubDoubleTapToPage && this.currentFlowMode === "paginated") {
-					this.nextPage();
+
+			// ---- 全部护栏通过，才开始翻页 ----
+			const turn = (fn: () => void): void => {
+				ev.preventDefault();
+				if (this.tapPageTimer !== null) {
+					window.clearTimeout(this.tapPageTimer);
 				}
-			}, DOUBLE_TAP_PAGE_DELAY_MS);
+				this.tapPageTimer = window.setTimeout(() => {
+					this.tapPageTimer = null;
+					if (this.pluginSettings.epubTapMode !== "off" && this.currentFlowMode === "paginated") {
+						fn();
+					}
+				}, TAP_PAGE_DELAY_MS);
+			};
+
+			if (mode === "double") {
+				const now = Date.now();
+				if (now - this.lastTapTime > DOUBLE_TAP_INTERVAL_MS) {
+					this.lastTapTime = now;
+					return;
+				}
+				this.lastTapTime = 0;
+				turn(() => this.nextPage());
+				return;
+			}
+			if (mode === "single-next") {
+				turn(() => this.nextPage());
+				return;
+			}
+
+			// single-zone：iframe 宽度 = viewSize = N × 一屏，比可视区宽，
+			// 不能用 innerWidth 除三。把 clientX（iframe 视口坐标）先换算到
+			// 页面坐标，再减去可视窗口左边界，得到可视区内相对位置。
+			const frame = this.findIframeForDocument(doc);
+			const rendererEl = this.foliateView?.renderer as unknown as HTMLElement | undefined;
+			if (!frame || !rendererEl) {
+				return;
+			}
+			const rRect = rendererEl.getBoundingClientRect();
+			const fRect = frame.getBoundingClientRect();
+			const width = rRect.width;
+			if (width <= 0) {
+				return;
+			}
+			const rel = fRect.left + touch.clientX - rRect.left;
+			if (rel < width / 3) {
+				turn(() => this.prevPage());
+			} else if (rel > (width * 2) / 3) {
+				turn(() => this.nextPage());
+			}
+			// 中间 1/3：不翻页，也不 preventDefault（留给图片/链接等默认行为）
 		};
 
+		doc.addEventListener("touchstart", startHandler, { capture: true });
 		doc.addEventListener("touchend", handler, { capture: true });
 	}
 

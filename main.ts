@@ -234,9 +234,15 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
+    const raw = ((await this.loadData()) ?? {}) as Record<string, unknown>;
+    // 0.17.69 的布尔开关并入四档下拉：当年显式关掉的迁移成「关闭」，开着的走新默认
+    if (raw.epubTapMode === undefined && raw.epubDoubleTapToPage === false) {
+      raw.epubTapMode = "off";
+    }
+    delete raw.epubDoubleTapToPage;
     this.settings = {
       ...DEFAULT_SETTINGS,
-      ...((await this.loadData()) ?? {}),
+      ...(raw as Partial<AnnotationPluginSettings>),
     };
   }
 

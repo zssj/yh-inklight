@@ -8424,7 +8424,7 @@ var DEFAULT_SETTINGS = {
   // EPUB
   epubDefaultFlow: "scrolled",
   epubPageAnimation: true,
-  epubDoubleTapToPage: true,
+  epubTapMode: "single-zone",
   epubFontSize: 16,
   epubLineHeight: 1.72,
   epubUnifyBodyFontSize: false,
@@ -9804,9 +9804,13 @@ var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u53CC\u51FB\u7FFB\u9875").setDesc("\u624B\u673A\u4E0A\u53CC\u51FB\u9875\u9762\u4EFB\u610F\u4F4D\u7F6E\u5F80\u540E\u7FFB\u4E00\u9875\uFF0C\u4EC5\u7FFB\u9875\u6A21\u5F0F\u751F\u6548\u3002\u6B63\u5728\u9009\u8BCD\u3001\u70B9\u5230\u94FE\u63A5\u6216\u56FE\u7247\u65F6\u4E0D\u4F1A\u89E6\u53D1\uFF1B\u8BE5\u5F00\u5173\u540C\u65F6\u63A7\u5236\u7CFB\u7EDF\u81EA\u5E26\u7684\u53CC\u51FB\u7F29\u653E\u3002\u6539\u8BBE\u7F6E\u540E\u91CD\u5F00\u4E66\u751F\u6548\u3002").addToggle((toggle) => {
-      toggle.setValue(this.plugin.settings.epubDoubleTapToPage).onChange(async (value) => {
-        this.plugin.settings.epubDoubleTapToPage = value;
+    new import_obsidian6.Setting(containerEl).setName("\u70B9\u51FB\u7FFB\u9875").setDesc("\u624B\u673A\u4E0A\u70B9\u51FB\u4E66\u9875\u5982\u4F55\u7FFB\u9875\uFF0C\u4EC5\u7FFB\u9875\u6A21\u5F0F\u751F\u6548\u3002\u5206\u533A\uFF1A\u5DE6 1/3 \u4E0A\u4E00\u9875\u3001\u53F3 1/3 \u4E0B\u4E00\u9875\uFF0C\u4E2D\u95F4\u4E0D\u7FFB\uFF1B\u5355\u51FB\u4E00\u5F8B\u540E\u7FFB\u65E0\u6CD5\u7528\u89E6\u6478\u5F80\u56DE\u7FFB\uFF1B\u53CC\u51FB\u5219\u53EA\u6709\u53CC\u51FB\u4F1A\u7FFB\u3002\u70B9\u5230\u9009\u533A\u3001\u9AD8\u4EAE\u3001\u94FE\u63A5\u3001\u56FE\u7247\uFF0C\u6216\u957F\u6309\u9009\u5B57\u65F6\u90FD\u4E0D\u4F1A\u89E6\u53D1\u3002\u6539\u8BBE\u7F6E\u540E\u91CD\u5F00\u4E66\u751F\u6548\u3002").addDropdown((dropdown) => {
+      dropdown.addOption("single-zone", "\u5355\u51FB\u5206\u533A\uFF08\u5DE6 1/3 \u4E0A\u4E00\u9875\uFF0C\u53F3 1/3 \u4E0B\u4E00\u9875\uFF09");
+      dropdown.addOption("single-next", "\u5355\u51FB\u4E00\u5F8B\u5F80\u540E\u7FFB");
+      dropdown.addOption("double", "\u53CC\u51FB\u5F80\u540E\u7FFB");
+      dropdown.addOption("off", "\u5173\u95ED");
+      dropdown.setValue(this.plugin.settings.epubTapMode).onChange(async (value) => {
+        this.plugin.settings.epubTapMode = value;
         await this.plugin.saveSettings();
       });
     });
@@ -13012,7 +13016,8 @@ var EPUB_READER_VIEW_TYPE = "inklight-epub-reader";
 var READING_TIME_FLUSH_INTERVAL_MS = 6e4;
 var WHEEL_DEBOUNCE_MS = 400;
 var DOUBLE_TAP_INTERVAL_MS = 300;
-var DOUBLE_TAP_PAGE_DELAY_MS = 60;
+var TAP_HOLD_MAX_MS = 400;
+var TAP_PAGE_DELAY_MS = 60;
 var PROGRESS_SAVE_DEBOUNCE_MS = 2e3;
 var SELECTION_SYNC_RETRY_DELAY_MS = 120;
 var READ_CHECKPOINTS = [
@@ -13057,12 +13062,14 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
     this.clampedToEnd = false;
     /** 连续 relocate 事件中 fraction 未增长的次数（末页检测） */
     this.stableCountAtEnd = 0;
-    /** 双击翻页：上一次 tap 的时间戳，用于判定双击 */
+    /** 点击翻页：本次触摸的 touchstart 时间戳，用于区分点击与长按选字 */
+    this.tapStartTime = 0;
+    /** 点击翻页：双击档的上一次 tap 时间戳 */
     this.lastTapTime = 0;
-    /** 双击翻页：延后翻页的定时器 */
-    this.doubleTapTimer = null;
-    /** 已挂过双击监听的章节 doc（WeakSet 避免持有 iframe 引用） */
-    this.doubleTapPagingDocs = /* @__PURE__ */ new WeakSet();
+    /** 点击翻页：延后翻页的定时器 */
+    this.tapPageTimer = null;
+    /** 已挂过点击翻页监听的章节 doc（WeakSet 避免持有 iframe 引用） */
+    this.tapPagingDocs = /* @__PURE__ */ new WeakSet();
     /** 当前书正文是否被书内 CSS 缩放（统一正文字号设置用，每次加载测量一次） */
     this.bodyFontScaled = false;
     /** 是否已完成正文缩放测量 */
@@ -13161,7 +13168,7 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
       stripScriptsFromDocument(doc);
       await inlineBlockedStylesheets({ document: doc });
       this.attachSelectionListeners(doc);
-      this.attachDoubleTapPaging(doc);
+      this.attachTapPaging(doc);
       if (this.pluginSettings.annotationLocked && doc.head && !this.selectionLockStyleEls.has(doc)) {
         const style2 = doc.createElement("style");
         style2.id = "yh-selection-lock";
@@ -15062,23 +15069,25 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
     this.documentSelectionCleanups.set(doc, cleanup);
   }
   /**
-   * 手机端双击翻页（仅翻页模式，开关见 settings.epubDoubleTapToPage）。
+   * 手机端点击翻页（仅翻页模式，档位见 settings.epubTapMode）。
    *
    * 必须挂到章节 iframe 的 document 上——iframe 内的事件不会冒泡到外层容器，
    * 挂在 readerContainerEl 上收不到。
    *
-   * 两个坑：
+   * 三个坑：
    * 1. 章节 doc 没有 viewport meta，原生双击缩放会被触发，必须注入
    *    touch-action: manipulation（保留滑动与点按，只禁掉双击缩放）。
    * 2. foliate 自己也在 touchend 里跑 snap()，且包在 requestAnimationFrame 中，
    *    立刻翻页会让两个动画同时写 containerPosition，故延后一拍。
+   * 3. 下面的护栏必须全部走完才碰 preventDefault：任何一道 return 都不能
+   *    拦截原生长按选字、拖动手柄、点菜单按钮的默认行为。
    */
-  attachDoubleTapPaging(doc) {
-    if (this.doubleTapPagingDocs.has(doc)) {
+  attachTapPaging(doc) {
+    if (this.tapPagingDocs.has(doc)) {
       return;
     }
-    this.doubleTapPagingDocs.add(doc);
-    if (!this.pluginSettings.epubDoubleTapToPage) {
+    this.tapPagingDocs.add(doc);
+    if (this.pluginSettings.epubTapMode === "off") {
       return;
     }
     if (!doc.getElementById("yh-double-tap-fix") && doc.head) {
@@ -15087,22 +15096,36 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
       style2.textContent = "html, body { touch-action: manipulation; }";
       doc.head.appendChild(style2);
     }
+    const startHandler = () => {
+      this.tapStartTime = Date.now();
+    };
     const handler = (ev) => {
-      if (!this.pluginSettings.epubDoubleTapToPage || this.currentFlowMode !== "paginated") {
+      const mode = this.pluginSettings.epubTapMode;
+      if (mode === "off" || this.currentFlowMode !== "paginated") {
         return;
       }
-      if (ev.touches.length > 1) {
+      if (ev.touches.length > 1 || ev.changedTouches.length > 1) {
         return;
       }
       if ((window.visualViewport?.scale ?? 1) !== 1) {
         return;
       }
-      const now = Date.now();
-      if (now - this.lastTapTime > DOUBLE_TAP_INTERVAL_MS) {
-        this.lastTapTime = now;
+      if (this.tapStartTime > 0 && Date.now() - this.tapStartTime > TAP_HOLD_MAX_MS) {
         return;
       }
-      this.lastTapTime = 0;
+      if (this.contextMenuEl || this.annotationCardEl) {
+        this.dismissContextMenu();
+        this.annotationCardEl?.dismiss();
+        this.annotationCardEl = null;
+        return;
+      }
+      const touch = ev.changedTouches[0];
+      if (!touch) {
+        return;
+      }
+      if (this.hitAnnotationAt(touch, doc)) {
+        return;
+      }
       const selection = doc.getSelection?.() ?? doc.defaultView?.getSelection?.();
       if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
         return;
@@ -15113,17 +15136,51 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
           return;
         }
       }
-      ev.preventDefault();
-      if (this.doubleTapTimer !== null) {
-        window.clearTimeout(this.doubleTapTimer);
-      }
-      this.doubleTapTimer = window.setTimeout(() => {
-        this.doubleTapTimer = null;
-        if (this.pluginSettings.epubDoubleTapToPage && this.currentFlowMode === "paginated") {
-          this.nextPage();
+      const turn = (fn) => {
+        ev.preventDefault();
+        if (this.tapPageTimer !== null) {
+          window.clearTimeout(this.tapPageTimer);
         }
-      }, DOUBLE_TAP_PAGE_DELAY_MS);
+        this.tapPageTimer = window.setTimeout(() => {
+          this.tapPageTimer = null;
+          if (this.pluginSettings.epubTapMode !== "off" && this.currentFlowMode === "paginated") {
+            fn();
+          }
+        }, TAP_PAGE_DELAY_MS);
+      };
+      if (mode === "double") {
+        const now = Date.now();
+        if (now - this.lastTapTime > DOUBLE_TAP_INTERVAL_MS) {
+          this.lastTapTime = now;
+          return;
+        }
+        this.lastTapTime = 0;
+        turn(() => this.nextPage());
+        return;
+      }
+      if (mode === "single-next") {
+        turn(() => this.nextPage());
+        return;
+      }
+      const frame = this.findIframeForDocument(doc);
+      const rendererEl = this.foliateView?.renderer;
+      if (!frame || !rendererEl) {
+        return;
+      }
+      const rRect = rendererEl.getBoundingClientRect();
+      const fRect = frame.getBoundingClientRect();
+      const width = rRect.width;
+      if (width <= 0) {
+        return;
+      }
+      const rel = fRect.left + touch.clientX - rRect.left;
+      if (rel < width / 3) {
+        turn(() => this.prevPage());
+      } else if (rel > width * 2 / 3) {
+        turn(() => this.nextPage());
+      }
     };
+    doc.addEventListener("touchstart", startHandler, { capture: true });
     doc.addEventListener("touchend", handler, { capture: true });
   }
   emitFoliateSelection(doc) {
@@ -16250,9 +16307,14 @@ var OverlayAnnotationsPlugin = class extends import_obsidian20.Plugin {
     this.app.workspace.detachLeavesOfType(EPUB_TOC_VIEW_TYPE);
   }
   async loadSettings() {
+    const raw = await this.loadData() ?? {};
+    if (raw.epubTapMode === void 0 && raw.epubDoubleTapToPage === false) {
+      raw.epubTapMode = "off";
+    }
+    delete raw.epubDoubleTapToPage;
     this.settings = {
       ...DEFAULT_SETTINGS,
-      ...await this.loadData() ?? {}
+      ...raw
     };
   }
   async saveSettings() {

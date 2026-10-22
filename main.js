@@ -9804,8 +9804,8 @@ var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u70B9\u51FB\u7FFB\u9875").setDesc("\u624B\u673A\u4E0A\u70B9\u51FB\u4E66\u9875\u5982\u4F55\u7FFB\u9875\uFF0C\u4EC5\u7FFB\u9875\u6A21\u5F0F\u751F\u6548\u3002\u5206\u533A\uFF1A\u5DE6 1/3 \u4E0A\u4E00\u9875\u3001\u53F3 1/3 \u4E0B\u4E00\u9875\uFF0C\u4E2D\u95F4\u4E0D\u7FFB\uFF1B\u5355\u51FB\u4E00\u5F8B\u540E\u7FFB\u65E0\u6CD5\u7528\u89E6\u6478\u5F80\u56DE\u7FFB\uFF1B\u53CC\u51FB\u5219\u53EA\u6709\u53CC\u51FB\u4F1A\u7FFB\u3002\u70B9\u5230\u9009\u533A\u3001\u9AD8\u4EAE\u3001\u94FE\u63A5\u3001\u56FE\u7247\uFF0C\u6216\u957F\u6309\u9009\u5B57\u65F6\u90FD\u4E0D\u4F1A\u89E6\u53D1\u3002\u6539\u8BBE\u7F6E\u540E\u91CD\u5F00\u4E66\u751F\u6548\u3002").addDropdown((dropdown) => {
-      dropdown.addOption("single-zone", "\u5355\u51FB\u5206\u533A\uFF08\u5DE6 1/3 \u4E0A\u4E00\u9875\uFF0C\u53F3 1/3 \u4E0B\u4E00\u9875\uFF09");
+    new import_obsidian6.Setting(containerEl).setName("\u70B9\u51FB\u7FFB\u9875").setDesc("\u624B\u673A\u4E0A\u70B9\u51FB\u4E66\u9875\u5982\u4F55\u7FFB\u9875\uFF0C\u4EC5\u7FFB\u9875\u6A21\u5F0F\u751F\u6548\u3002\u5206\u533A\uFF1A\u9876\u90E8 1/3 \u5168\u5BBD\u5F80\u540E\u7FFB\uFF08\u5DE6\u624B\u6301\u673A\u65F6\u4E0A\u7F18\u6700\u597D\u591F\uFF09\uFF0C\u5176\u4E0B\u5DE6 1/3 \u4E0A\u4E00\u9875\u3001\u53F3 1/3 \u4E0B\u4E00\u9875\uFF0C\u4E2D\u95F4\u4E0D\u7FFB\uFF1B\u5355\u51FB\u4E00\u5F8B\u540E\u7FFB\u65E0\u6CD5\u7528\u89E6\u6478\u5F80\u56DE\u7FFB\uFF1B\u53CC\u51FB\u5219\u53EA\u6709\u53CC\u51FB\u4F1A\u7FFB\u3002\u70B9\u5230\u9009\u533A\u3001\u9AD8\u4EAE\u3001\u94FE\u63A5\u3001\u56FE\u7247\uFF0C\u6216\u957F\u6309\u9009\u5B57\u65F6\u90FD\u4E0D\u4F1A\u89E6\u53D1\u3002\u6539\u8BBE\u7F6E\u540E\u91CD\u5F00\u4E66\u751F\u6548\u3002").addDropdown((dropdown) => {
+      dropdown.addOption("single-zone", "\u5355\u51FB\u5206\u533A\uFF08\u9876\u90E8\u5168\u5BBD\u4E0E\u53F3\u4FA7\u540E\u7FFB\uFF0C\u4E0B\u65B9\u5DE6\u4FA7\u524D\u7FFB\uFF09");
       dropdown.addOption("single-next", "\u5355\u51FB\u4E00\u5F8B\u5F80\u540E\u7FFB");
       dropdown.addOption("double", "\u53CC\u51FB\u5F80\u540E\u7FFB");
       dropdown.addOption("off", "\u5173\u95ED");
@@ -15170,13 +15170,17 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
       const rRect = rendererEl.getBoundingClientRect();
       const fRect = frame.getBoundingClientRect();
       const width = rRect.width;
-      if (width <= 0) {
+      const height = rRect.height;
+      if (width <= 0 || height <= 0) {
         return;
       }
-      const rel = fRect.left + touch.clientX - rRect.left;
-      if (rel < width / 3) {
+      const relX = fRect.left + touch.clientX - rRect.left;
+      const relY = fRect.top + touch.clientY - rRect.top;
+      if (relY < height / 3) {
+        turn(() => this.nextPage());
+      } else if (relX < width / 3) {
         turn(() => this.prevPage());
-      } else if (rel > width * 2 / 3) {
+      } else if (relX > width * 2 / 3) {
         turn(() => this.nextPage());
       }
     };

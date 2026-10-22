@@ -2655,9 +2655,11 @@ export class EpubReaderView extends FileView {
 				return;
 			}
 
-			// single-zone：iframe 宽度 = viewSize = N × 一屏，比可视区宽，
-			// 不能用 innerWidth 除三。把 clientX（iframe 视口坐标）先换算到
-			// 页面坐标，再减去可视窗口左边界，得到可视区内相对位置。
+			// single-zone：iframe 宽度 = viewSize = N × 一屏，比可视区宽，不能用
+			// innerWidth 除三。renderer 是 <foliate-paginator>，挂在 foliate-view 的
+			// shadowRoot（父文档）里，故它的 rect 是页面坐标；touch.clientX/clientY 是
+			// iframe 视口坐标。两者相加落到同一坐标系，再减可视区左/上边界即得
+			// 「落点在可视窗口内的像素位置」。
 			const frame = this.findIframeForDocument(doc);
 			const rendererEl = this.foliateView?.renderer as unknown as HTMLElement | undefined;
 			if (!frame || !rendererEl) {
@@ -2666,16 +2668,22 @@ export class EpubReaderView extends FileView {
 			const rRect = rendererEl.getBoundingClientRect();
 			const fRect = frame.getBoundingClientRect();
 			const width = rRect.width;
-			if (width <= 0) {
+			const height = rRect.height;
+			if (width <= 0 || height <= 0) {
 				return;
 			}
-			const rel = fRect.left + touch.clientX - rRect.left;
-			if (rel < width / 3) {
+			const relX = fRect.left + touch.clientX - rRect.left;
+			const relY = fRect.top + touch.clientY - rRect.top;
+			// 顶部 1/3 全宽 = 后翻：左手持机时右 1/3 需要横跨屏幕，够不着；
+			// 上缘是拇指/食指最省力的落点，给「后翻」补第二个入口。
+			if (relY < height / 3) {
+				turn(() => this.nextPage());
+			} else if (relX < width / 3) {
 				turn(() => this.prevPage());
-			} else if (rel > (width * 2) / 3) {
+			} else if (relX > (width * 2) / 3) {
 				turn(() => this.nextPage());
 			}
-			// 中间 1/3：不翻页，也不 preventDefault（留给图片/链接等默认行为）
+			// 中下 1/3：不翻页，也不 preventDefault（留给图片/链接等默认行为）
 		};
 
 		doc.addEventListener("touchstart", startHandler, { capture: true });

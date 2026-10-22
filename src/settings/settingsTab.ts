@@ -262,9 +262,9 @@ export class AnnotationSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("点击翻页")
-      .setDesc("手机上点击书页如何翻页，仅翻页模式生效。分区：左 1/3 上一页、右 1/3 下一页，中间不翻；单击一律后翻无法用触摸往回翻；双击则只有双击会翻。点到选区、高亮、链接、图片，或长按选字时都不会触发。改设置后重开书生效。")
+      .setDesc("手机上点击书页如何翻页，仅翻页模式生效。分区：顶部 1/3 全宽往后翻（左手持机时上缘最好够），其下左 1/3 上一页、右 1/3 下一页，中间不翻；单击一律后翻无法用触摸往回翻；双击则只有双击会翻。点到选区、高亮、链接、图片，或长按选字时都不会触发。改设置后重开书生效。")
       .addDropdown((dropdown) => {
-        dropdown.addOption("single-zone", "单击分区（左 1/3 上一页，右 1/3 下一页）");
+        dropdown.addOption("single-zone", "单击分区（顶部全宽与右侧后翻，下方左侧前翻）");
         dropdown.addOption("single-next", "单击一律往后翻");
         dropdown.addOption("double", "双击往后翻");
         dropdown.addOption("off", "关闭");

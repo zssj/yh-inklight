@@ -355,7 +355,7 @@ export type EpubFlowMode = "paginated" | "scrolled";
 /**
  * EPUB 点击翻页手势。四档互斥——单击与双击无法同时成立（双击 = 两次单击）。
  * - off：关闭
- * - single-zone：左 1/3 上一页、右 1/3 下一页、中间不翻（默认）
+ * - single-zone：顶部 1/3 全宽下一页；其下左 1/3 上一页、右 1/3 下一页、中间不翻（默认）
  * - single-next：任意位置单击一律往后翻（不能用触摸往回翻）
  * - double：单击无效，双击往后翻
  */

@@ -9804,7 +9804,7 @@ var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u70B9\u51FB\u7FFB\u9875").setDesc("\u624B\u673A\u4E0A\u70B9\u51FB\u4E66\u9875\u5982\u4F55\u7FFB\u9875\uFF0C\u4EC5\u7FFB\u9875\u6A21\u5F0F\u751F\u6548\u3002\u5206\u533A\uFF1A\u9876\u90E8 1/3 \u5168\u5BBD\u5F80\u540E\u7FFB\uFF08\u5DE6\u624B\u6301\u673A\u65F6\u4E0A\u7F18\u6700\u597D\u591F\uFF09\uFF0C\u5176\u4E0B\u5DE6 1/3 \u4E0A\u4E00\u9875\u3001\u53F3 1/3 \u4E0B\u4E00\u9875\uFF0C\u4E2D\u95F4\u4E0D\u7FFB\uFF1B\u5355\u51FB\u4E00\u5F8B\u540E\u7FFB\u65E0\u6CD5\u7528\u89E6\u6478\u5F80\u56DE\u7FFB\uFF1B\u53CC\u51FB\u5219\u53EA\u6709\u53CC\u51FB\u4F1A\u7FFB\u3002\u70B9\u5230\u9009\u533A\u3001\u9AD8\u4EAE\u3001\u94FE\u63A5\u3001\u56FE\u7247\uFF0C\u6216\u957F\u6309\u9009\u5B57\u65F6\u90FD\u4E0D\u4F1A\u89E6\u53D1\u3002\u6539\u8BBE\u7F6E\u540E\u91CD\u5F00\u4E66\u751F\u6548\u3002").addDropdown((dropdown) => {
+    new import_obsidian6.Setting(containerEl).setName("\u70B9\u51FB\u7FFB\u9875").setDesc("\u624B\u673A\u4E0A\u70B9\u51FB\u4E66\u9875\u5982\u4F55\u7FFB\u9875\uFF0C\u4EC5\u7FFB\u9875\u6A21\u5F0F\u751F\u6548\u3002\u5206\u533A\uFF1A\u9876\u90E8 1/3 \u5168\u5BBD\u5F80\u540E\u7FFB\uFF08\u5DE6\u624B\u6301\u673A\u65F6\u4E0A\u7F18\u6700\u597D\u591F\uFF09\uFF0C\u5176\u4E0B\u5DE6 1/3 \u4E0A\u4E00\u9875\u3001\u53F3 1/3 \u4E0B\u4E00\u9875\uFF0C\u4E2D\u95F4\u4E0D\u7FFB\uFF1B\u5355\u51FB\u4E00\u5F8B\u540E\u7FFB\u65E0\u6CD5\u7528\u89E6\u6478\u5F80\u56DE\u7FFB\uFF1B\u53CC\u51FB\u5219\u53EA\u6709\u53CC\u51FB\u4F1A\u7FFB\u3002\u70B9\u5230\u9009\u533A\u3001\u9AD8\u4EAE\u3001\u94FE\u63A5\u3001\u56FE\u7247\uFF0C\u6216\u957F\u6309\u9009\u5B57\u65F6\u90FD\u4E0D\u4F1A\u89E6\u53D1\u3002\u5DE6\u53F3\u6ED1\u52A8\u624B\u52BF\u7531\u9605\u8BFB\u5668\u81EA\u5E26\uFF0C\u4E0E\u672C\u6863\u4F4D\u65E0\u5173\uFF0C\u59CB\u7EC8\u53EF\u7528\u3002\u6539\u8BBE\u7F6E\u540E\u91CD\u5F00\u4E66\u751F\u6548\u3002").addDropdown((dropdown) => {
       dropdown.addOption("single-zone", "\u5355\u51FB\u5206\u533A\uFF08\u9876\u90E8\u5168\u5BBD\u4E0E\u53F3\u4FA7\u540E\u7FFB\uFF0C\u4E0B\u65B9\u5DE6\u4FA7\u524D\u7FFB\uFF09");
       dropdown.addOption("single-next", "\u5355\u51FB\u4E00\u5F8B\u5F80\u540E\u7FFB");
       dropdown.addOption("double", "\u53CC\u51FB\u5F80\u540E\u7FFB");
@@ -13017,7 +13017,7 @@ var READING_TIME_FLUSH_INTERVAL_MS = 6e4;
 var WHEEL_DEBOUNCE_MS = 400;
 var DOUBLE_TAP_INTERVAL_MS = 300;
 var TAP_HOLD_MAX_MS = 400;
-var TAP_PAGE_DELAY_MS = 60;
+var TAP_MOVE_MAX_PX = 30;
 var PROGRESS_SAVE_DEBOUNCE_MS = 2e3;
 var SELECTION_SYNC_RETRY_DELAY_MS = 120;
 var READ_CHECKPOINTS = [
@@ -13064,10 +13064,23 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
     this.stableCountAtEnd = 0;
     /** 点击翻页：本次触摸的 touchstart 时间戳，用于区分点击与长按选字 */
     this.tapStartTime = 0;
+    /** 点击翻页：本次触摸 touchstart 的落点，用于判定点按 vs 滑动 */
+    this.tapStartX = 0;
+    this.tapStartY = 0;
+    /** 点击翻页：touchstart 时刻的 containerPosition，用于把点按微动拽回原位 */
+    this.tapStartPosition = 0;
     /** 点击翻页：双击档的上一次 tap 时间戳 */
     this.lastTapTime = 0;
-    /** 点击翻页：延后翻页的定时器 */
-    this.tapPageTimer = null;
+    /**
+     * 点击翻页：置位后，下一次 foliate 自己的 snap() 直接吞掉。
+     * foliate 的 snap 不只回弹点按微动，还会按 touchmove 末速度把页翻过去，
+     * 与本插件的翻页叠加会翻两页；吞掉后本插件全权负责这次翻页。
+     */
+    this.suppressNextSnap = false;
+    /** 已安装 snap 遮蔽的 renderer（folio 换书会重建元素） */
+    this.snapPatchedRenderers = /* @__PURE__ */ new WeakSet();
+    /** snap 遮蔽失败只告警一次 */
+    this.snapPatchWarned = false;
     /** 已挂过点击翻页监听的章节 doc（WeakSet 避免持有 iframe 引用） */
     this.tapPagingDocs = /* @__PURE__ */ new WeakSet();
     /** 当前书正文是否被书内 CSS 缩放（统一正文字号设置用，每次加载测量一次） */
@@ -15074,12 +15087,18 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
    * 必须挂到章节 iframe 的 document 上——iframe 内的事件不会冒泡到外层容器，
    * 挂在 readerContainerEl 上收不到。
    *
-   * 三个坑：
+   * 四个坑：
    * 1. 章节 doc 没有 viewport meta，原生双击缩放会被触发，必须注入
    *    touch-action: manipulation（保留滑动与点按，只禁掉双击缩放）。
-   * 2. foliate 自己也在 touchend 里跑 snap()，且包在 requestAnimationFrame 中，
-   *    立刻翻页会让两个动画同时写 containerPosition，故延后一拍。
-   * 3. 下面的护栏必须全部走完才碰 preventDefault：任何一道 return 都不能
+   * 2. foliate 自己也在 touchend 里跑 snap()（包在 requestAnimationFrame 中）。
+   *    它不只把点按微动拽回居中，还会按 touchmove 末速度把页翻过去：叠加
+   *    本插件的翻页会翻两页，且它的 300ms 回弹补间会与本插件刚启动的 300ms
+   *    翻页补间同帧互相覆盖（animate 没有取消机制）。故要翻页时先在
+   *    renderer 实例上把 snap 吞掉，并自己把微动归位——归位后 snap 就是
+   *    no-op，也就不需要任何起步延迟。
+   * 3. 位移超过 TAP_MOVE_MAX_PX 就不算点按：不归位、不吞 snap，整套交给
+   *    foliate 的滑动翻页原样处理。
+   * 4. 下面的护栏必须全部走完才碰 preventDefault：任何一道 return 都不能
    *    拦截原生长按选字、拖动手柄、点菜单按钮的默认行为。
    */
   attachTapPaging(doc) {
@@ -15096,8 +15115,13 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
       style2.textContent = "html, body { touch-action: manipulation; }";
       doc.head.appendChild(style2);
     }
-    const startHandler = () => {
+    const startHandler = (ev) => {
+      const first = ev.changedTouches[0];
       this.tapStartTime = Date.now();
+      this.tapStartX = first?.clientX ?? 0;
+      this.tapStartY = first?.clientY ?? 0;
+      this.tapStartPosition = this.foliateView?.renderer?.containerPosition ?? 0;
+      this.suppressNextSnap = false;
     };
     const handler = (ev) => {
       const mode = this.pluginSettings.epubTapMode;
@@ -15123,6 +15147,13 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
       if (!touch) {
         return;
       }
+      if (this.tapStartTime > 0) {
+        const dx = touch.clientX - this.tapStartX;
+        const dy = touch.clientY - this.tapStartY;
+        if (Math.hypot(dx, dy) > TAP_MOVE_MAX_PX) {
+          return;
+        }
+      }
       if (this.hitAnnotationAt(touch, doc)) {
         return;
       }
@@ -15138,15 +15169,15 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
       }
       const turn = (fn) => {
         ev.preventDefault();
-        if (this.tapPageTimer !== null) {
-          window.clearTimeout(this.tapPageTimer);
-        }
-        this.tapPageTimer = window.setTimeout(() => {
-          this.tapPageTimer = null;
-          if (this.pluginSettings.epubTapMode !== "off" && this.currentFlowMode === "paginated") {
-            fn();
+        const rendererTarget = this.foliateView?.renderer;
+        if (rendererTarget && typeof rendererTarget.containerPosition === "number") {
+          const pos = rendererTarget.containerPosition;
+          if (pos !== this.tapStartPosition && Math.abs(pos - this.tapStartPosition) <= TAP_MOVE_MAX_PX) {
+            rendererTarget.containerPosition = this.tapStartPosition;
           }
-        }, TAP_PAGE_DELAY_MS);
+        }
+        this.suppressNextSnap = true;
+        fn();
       };
       if (mode === "double") {
         const now = Date.now();
@@ -15380,6 +15411,25 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
         renderer.setAttribute("animated", "");
       } else {
         renderer.removeAttribute("animated");
+      }
+    }
+    if (renderer && !this.snapPatchedRenderers.has(renderer)) {
+      const patched = renderer;
+      const original = typeof patched.snap === "function" ? patched.snap.bind(patched) : void 0;
+      if (original) {
+        this.snapPatchedRenderers.add(renderer);
+        patched.snap = (vx, vy) => {
+          if (this.suppressNextSnap) {
+            this.suppressNextSnap = false;
+            return;
+          }
+          original(vx, vy);
+        };
+      } else if (!this.snapPatchWarned) {
+        this.snapPatchWarned = true;
+        console.warn(
+          "yh-inklight: foliate snap() \u4E0D\u53EF\u7528\uFF0C\u70B9\u51FB\u7FFB\u9875\u53EF\u80FD\u4E0E foliate \u62A2\u7FFB\u9875/\u52A8\u753B"
+        );
       }
     }
     this.foliateView.renderer?.render?.();

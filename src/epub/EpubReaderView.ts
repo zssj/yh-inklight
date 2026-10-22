@@ -67,11 +67,10 @@ const DOUBLE_TAP_INTERVAL_MS = 300;
 const TAP_HOLD_MAX_MS = 400;
 
 /**
- * 点击翻页：判定成功后延后多久才真正翻页。
- * foliate 在自己的 touchend 里跑 snap()，且包在 requestAnimationFrame 中，
- * 不延后会让两个动画同时写 containerPosition 互相打架。
+ * 点击翻页：点按期间手指位移超过此值（px）就不再算点按，交回 foliate——
+ * 它自己的 snap() 会把滑动落到邻页，此时既不归位也不拦 snap。
  */
-const TAP_PAGE_DELAY_MS = 60;
+const TAP_MOVE_MAX_PX = 30;
 
 /** 进度保存防抖延迟（毫秒） */
 const PROGRESS_SAVE_DEBOUNCE_MS = 2_000;
@@ -232,10 +231,23 @@ export class EpubReaderView extends FileView {
 	private currentFlowMode: EpubFlowMode;
 	/** 点击翻页：本次触摸的 touchstart 时间戳，用于区分点击与长按选字 */
 	private tapStartTime = 0;
+	/** 点击翻页：本次触摸 touchstart 的落点，用于判定点按 vs 滑动 */
+	private tapStartX = 0;
+	private tapStartY = 0;
+	/** 点击翻页：touchstart 时刻的 containerPosition，用于把点按微动拽回原位 */
+	private tapStartPosition = 0;
 	/** 点击翻页：双击档的上一次 tap 时间戳 */
 	private lastTapTime = 0;
-	/** 点击翻页：延后翻页的定时器 */
-	private tapPageTimer: number | null = null;
+	/**
+	 * 点击翻页：置位后，下一次 foliate 自己的 snap() 直接吞掉。
+	 * foliate 的 snap 不只回弹点按微动，还会按 touchmove 末速度把页翻过去，
+	 * 与本插件的翻页叠加会翻两页；吞掉后本插件全权负责这次翻页。
+	 */
+	private suppressNextSnap = false;
+	/** 已安装 snap 遮蔽的 renderer（folio 换书会重建元素） */
+	private snapPatchedRenderers = new WeakSet<HTMLElement>();
+	/** snap 遮蔽失败只告警一次 */
+	private snapPatchWarned = false;
 	/** 已挂过点击翻页监听的章节 doc（WeakSet 避免持有 iframe 引用） */
 	private tapPagingDocs = new WeakSet<Document>();
 	private currentFontSize: number;
@@ -2548,12 +2560,18 @@ export class EpubReaderView extends FileView {
 	 * 必须挂到章节 iframe 的 document 上——iframe 内的事件不会冒泡到外层容器，
 	 * 挂在 readerContainerEl 上收不到。
 	 *
-	 * 三个坑：
+	 * 四个坑：
 	 * 1. 章节 doc 没有 viewport meta，原生双击缩放会被触发，必须注入
 	 *    touch-action: manipulation（保留滑动与点按，只禁掉双击缩放）。
-	 * 2. foliate 自己也在 touchend 里跑 snap()，且包在 requestAnimationFrame 中，
-	 *    立刻翻页会让两个动画同时写 containerPosition，故延后一拍。
-	 * 3. 下面的护栏必须全部走完才碰 preventDefault：任何一道 return 都不能
+	 * 2. foliate 自己也在 touchend 里跑 snap()（包在 requestAnimationFrame 中）。
+	 *    它不只把点按微动拽回居中，还会按 touchmove 末速度把页翻过去：叠加
+	 *    本插件的翻页会翻两页，且它的 300ms 回弹补间会与本插件刚启动的 300ms
+	 *    翻页补间同帧互相覆盖（animate 没有取消机制）。故要翻页时先在
+	 *    renderer 实例上把 snap 吞掉，并自己把微动归位——归位后 snap 就是
+	 *    no-op，也就不需要任何起步延迟。
+	 * 3. 位移超过 TAP_MOVE_MAX_PX 就不算点按：不归位、不吞 snap，整套交给
+	 *    foliate 的滑动翻页原样处理。
+	 * 4. 下面的护栏必须全部走完才碰 preventDefault：任何一道 return 都不能
 	 *    拦截原生长按选字、拖动手柄、点菜单按钮的默认行为。
 	 */
 	private attachTapPaging(doc: Document): void {
@@ -2572,8 +2590,17 @@ export class EpubReaderView extends FileView {
 			doc.head.appendChild(style);
 		}
 
-		const startHandler = (): void => {
+		const startHandler = (ev: TouchEvent): void => {
+			const first = ev.changedTouches[0];
 			this.tapStartTime = Date.now();
+			this.tapStartX = first?.clientX ?? 0;
+			this.tapStartY = first?.clientY ?? 0;
+			this.tapStartPosition =
+				(this.foliateView?.renderer as unknown as { containerPosition?: number } | undefined)
+					?.containerPosition ?? 0;
+			// 上一次点按留下的 flag 必须在这里清掉：若那次翻页没走到 snap
+			// （如缩放状态不同），残留的 flag 会误吞下一次滑动的 snap。
+			this.suppressNextSnap = false;
 		};
 
 		const handler = (ev: TouchEvent): void => {
@@ -2604,6 +2631,15 @@ export class EpubReaderView extends FileView {
 			if (!touch) {
 				return;
 			}
+			// 护栏 2.5：位移过大 = 滑动。不归位、不吞 snap，整套交给 foliate 的
+			// snap()（按末速度落到邻页）原样处理，否则会变成「滑一下翻两页」。
+			if (this.tapStartTime > 0) {
+				const dx = touch.clientX - this.tapStartX;
+				const dy = touch.clientY - this.tapStartY;
+				if (Math.hypot(dx, dy) > TAP_MOVE_MAX_PX) {
+					return;
+				}
+			}
 			// 护栏 3：点到已有高亮 → 交给 foliate 弹标注卡片（坐标同为 iframe 视口系）
 			if (this.hitAnnotationAt(touch as unknown as Event, doc)) {
 				return;
@@ -2629,15 +2665,27 @@ export class EpubReaderView extends FileView {
 			// ---- 全部护栏通过，才开始翻页 ----
 			const turn = (fn: () => void): void => {
 				ev.preventDefault();
-				if (this.tapPageTimer !== null) {
-					window.clearTimeout(this.tapPageTimer);
-				}
-				this.tapPageTimer = window.setTimeout(() => {
-					this.tapPageTimer = null;
-					if (this.pluginSettings.epubTapMode !== "off" && this.currentFlowMode === "paginated") {
-						fn();
+				// 点按微动会被 foliate 的 touchmove scrollBy 挪走。既然下面把它
+				// 自己的 snap 吞了，就得自己归位：否则书末 next() 不动时页面会
+				// 停在偏移处（下一次点按仍被吞，越留越歪），翻页动画也不该从
+				// 歪的位置起步。偏移若大于手指位移，说明另有一个翻页动画在跑，
+				// 此时归位纯属捣乱，跳过。
+				const rendererTarget = this.foliateView?.renderer as unknown as
+					| { containerPosition?: number }
+					| undefined;
+				if (rendererTarget && typeof rendererTarget.containerPosition === "number") {
+					const pos = rendererTarget.containerPosition;
+					if (
+						pos !== this.tapStartPosition &&
+						Math.abs(pos - this.tapStartPosition) <= TAP_MOVE_MAX_PX
+					) {
+						rendererTarget.containerPosition = this.tapStartPosition;
 					}
-				}, TAP_PAGE_DELAY_MS);
+				}
+				// 与「删掉起步延迟」同批改动：少这一行，foliate 的 snap 会在
+				// 同一帧起 300ms 回弹补间，与本插件的翻页补间互相覆盖。
+				this.suppressNextSnap = true;
+				fn();
 			};
 
 			if (mode === "double") {
@@ -2911,6 +2959,32 @@ export class EpubReaderView extends FileView {
 				renderer.setAttribute("animated", "");
 			} else {
 				renderer.removeAttribute("animated");
+			}
+		}
+		// 在 renderer 实例上遮蔽 foliate 的 snap()（原型方法，实例赋值即遮蔽）。
+		// 章节 doc 的 touchend → #onTouchEnd → this.snap()（paginator.js:898）
+		// 走的正是这个实例，点击翻页靠 suppressNextSnap 把它这一次吞掉。
+		// 只吞 snap、不拦 #onTouchEnd：拦了会跳过它的 #touchScrolled 复位，
+		// 下一次双指缩放会被误 preventDefault。
+		if (renderer && !this.snapPatchedRenderers.has(renderer)) {
+			type SnapFn = (vx: number, vy: number) => unknown;
+			const patched = renderer as unknown as { snap?: SnapFn };
+			const original: SnapFn | undefined =
+				typeof patched.snap === "function" ? patched.snap.bind(patched) : undefined;
+			if (original) {
+				this.snapPatchedRenderers.add(renderer);
+				patched.snap = (vx: number, vy: number): void => {
+					if (this.suppressNextSnap) {
+						this.suppressNextSnap = false;
+						return;
+					}
+					original(vx, vy);
+				};
+			} else if (!this.snapPatchWarned) {
+				this.snapPatchWarned = true;
+				console.warn(
+					"yh-inklight: foliate snap() 不可用，点击翻页可能与 foliate 抢翻页/动画",
+				);
 			}
 		}
 		this.foliateView.renderer?.render?.();

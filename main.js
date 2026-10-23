@@ -15358,7 +15358,13 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
       this.pluginSettings.epubFontFamilyCustom
     );
     const css = [
-      ":root { color-scheme: light dark; }",
+      // foliate 用 #replaceBackground() 把 iframe 外围（页面四周边栏）涂成
+      // 章节 load 时缓存的书籍背景色（paginator.js:253 → :671），换主题后
+      // 该缓存不变 → 中间 body 变了、四周要等下一章才变。:root 上的
+      // --theme-bg-color 是 foliate 留的官方钩子（paginator.js:675-679），
+      // 有值就把颜色部分换成它，三个调用点（:616/:751/:1148）一并覆盖，
+      // 首次打开的同源问题也一起修掉。!important 压过书内同名变量。
+      `:root { color-scheme: light dark; --theme-bg-color: ${colors.background} !important; }`,
       "body {",
       `  background-color: ${colors.background} !important;`,
       `  color: ${colors.textColor} !important;`,

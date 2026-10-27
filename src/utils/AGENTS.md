@@ -2,6 +2,7 @@
 > L2 | 父级: /Users/epiphanyxiao/Documents/Playground/obsidian-annotation-plugin/src/AGENTS.md
 
 成员清单
+format.ts: 通用格式化工具（formatTime 等），供 sidebarView / stickyNoteView 等共用。
 positioning.ts: 便签避让布局纯函数，保留给后续便签栏实验复用。
 
 法则: 算法纯粹·DOM 外置·布局可替换

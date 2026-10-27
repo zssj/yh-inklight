@@ -19,18 +19,21 @@ Version lives in 3 files — bump ALL of them in sync: `manifest.json`, `package
 Steps (run from repo root `E:\OB插件\yh-inklight-src`):
 
 ```bash
-npm run build
+npx tsc --noEmit                  # 类型检查（build 不做类型检查，须单独跑）
+npm run build                     # 重建 main.js（main.js 虽在 .gitignore，但历史上已被 git 跟踪，每次发版提交必须包含重建产物）
 # 本地手动验证主路径，然后：
-git add -A
-git commit -m "v0.17.XX: type: 中文描述"   # 历史格式: v开头版本号 + 中文提交说明
+git add manifest.json package.json versions.json main.js src/<改动的源文件>   # 选择性 add，勿用 git add -A（工作区常有无关改动，如 README.md）
+git commit -m "v0.17.XX: type: 中文描述"   # 历史格式: v开头版本号 + 中文提交说明；正文用「现象/原因/修复」三段
 git push origin
-git tag 0.17.XX                            # 轻量标签，无 v 前缀（0.17.20 之后统一这样）
-git push origin 0.17.XX
+git tag v0.17.XX                  # 轻量标签，带 v 前缀
+git push origin v0.17.XX
 ```
 
-- Tag MUST be lightweight (annotated) and WITHOUT `v` prefix. Older tags (`v0.17.19` 及之前) used `v` prefix — do not follow them.
+- Tag MUST be lightweight and WITH `v` prefix（`v0.17.70`–`v0.17.74` 实际惯例）。历史备注：`0.17.20`–`0.17.69` 期间曾有一段不带 `v` 的 tag（如 `0.17.69`），但近期已回归 `v` 前缀，以 `v` 为准。
 - After pushing the tag, GitHub Actions (`.github/workflows/release.yml`) auto-creates the GitHub Release with `main.js` + `manifest.json` + `styles.css` and auto-generated changelog. No web/`gh` CLI steps needed.
-- Verify: https://github.com/zssj/yh-inklight/releases/tag/0.17.XX shows the release with 3 assets.
+- Verify（`gh` CLI 未登录时用 GitHub API）:
+  - Workflow run: `https://api.github.com/repos/zssj/yh-inklight/actions/runs?event=push&per_page=3` 看 status 变 success
+  - Release: `https://api.github.com/repos/zssj/yh-inklight/releases/latest` 确认 3 个资产齐全，或浏览器打开 https://github.com/zssj/yh-inklight/releases/tag/v0.17.XX
 - Deploy target for manual testing: `E:\知识库\.obsidian\plugins\yh-inklight\`.
 
 ## Key Architecture
@@ -43,7 +46,7 @@ git push origin 0.17.XX
 - **src/pdf/** — PDF overlay highlights using page number + rect % coordinates.
 - **src/epub/** — foliate-js based EPUB reader view, registered as `inklight-epub-reader`.
 - **src/views/sidebarView.ts** — unified annotation sidebar (`yh-inklight-sidebar`), shared across all 3 formats.
-- **Build output `main.js` is gitignored** — always rebuild before testing.
+- **Build output `main.js` is in `.gitignore` but IS git-tracked** — always rebuild before release and include it in the release commit.
 
 ## Conventions
 

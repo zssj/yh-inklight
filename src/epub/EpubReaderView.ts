@@ -109,6 +109,12 @@ const READ_CHECKPOINTS_END_BIT = 1 << (READ_CHECKPOINTS.length - 1);
 const READ_CHECKPOINTS_JUMP_DELTA = 0.6;
 /** 上滑恢复底部导航栏所需的累计滚动距离（px），低于该值视为误触 */
 const NAV_SHOW_SCROLL_THRESHOLD = 30;
+/**
+ * 下滑隐藏底部导航栏所需的累计滚动距离（px），高于 NAV_SHOW_SCROLL_THRESHOLD 形成迟滞：
+ * 显示阈值 < 隐藏阈值之间的抖动（分页归位回弹、惯性反转）两个方向都不触发，
+ * 消除"回滑时导航栏闪现一下又消失"的偶发问题。
+ */
+const NAV_HIDE_SCROLL_THRESHOLD = 45;
 /** 锁定时禁止选中文字的 CSS */
 const SELECTION_LOCK_CSS = "* { user-select: none !important; -webkit-user-select: none !important; }";
 
@@ -314,6 +320,8 @@ export class EpubReaderView extends FileView {
 	private lastScrollFlipTime = 0;
 	/** 隐藏后净上滑累计距离（px），达到阈值才恢复导航栏，防误触 */
 	private navUpAccum = 0;
+	/** 显示后净下滑累计距离（px），达到阈值才隐藏导航栏（迟滞防抖动，见 NAV_HIDE_SCROLL_THRESHOLD） */
+	private navDownAccum = 0;
 	private scrollHideRenderer: HTMLElement | null = null;
 
 	// ================================================================
@@ -874,18 +882,41 @@ export class EpubReaderView extends FileView {
 		}
 		this.lastScrollFlipTime = now;
 		if (this.navHidden) {
-			// 已隐藏：净上滑累计超过阈值才恢复导航栏，防误触
-			this.navUpAccum = Math.max(0, this.navUpAccum - delta);
-			if (this.navUpAccum >= NAV_SHOW_SCROLL_THRESHOLD) {
+			// 已隐藏：净上滑累计超过阈值才恢复导航栏，防误触；
+			// 方向一旦反转（正向抖动）立即清零反向累计，使回弹无法累积到阈值
+			if (delta < 0) {
+				this.navUpAccum += -delta;
+				this.navDownAccum = 0;
+				if (this.navUpAccum >= NAV_SHOW_SCROLL_THRESHOLD) {
+					this.resetNavAccum();
+					this.setNavHidden(false);
+				}
+			} else {
+				this.navDownAccum += delta;
 				this.navUpAccum = 0;
-				this.setNavHidden(false);
 			}
-		} else if (delta > 0) {
-			// 显示态：向下滑即隐藏
-			this.navUpAccum = 0;
-			this.setNavHidden(true);
+		} else {
+			// 显示态：净下滑累计超过隐藏阈值才隐藏（迟滞：高于显示阈值，吸收分页归位回弹）；
+			// 同样方向反转即清零，避免小幅抖动在任一方向误触发
+			if (delta > 0) {
+				this.navDownAccum += delta;
+				this.navUpAccum = 0;
+				if (this.navDownAccum >= NAV_HIDE_SCROLL_THRESHOLD) {
+					this.resetNavAccum();
+					this.setNavHidden(true);
+				}
+			} else {
+				this.navUpAccum += -delta;
+				this.navDownAccum = 0;
+			}
 		}
 	};
+
+	/** 重置导航栏显示/隐藏的双向滚动累计器 */
+	private resetNavAccum(): void {
+		this.navUpAccum = 0;
+		this.navDownAccum = 0;
+	}
 
 	/** 基线化滚动位置：恢复进度/加载完成后调用，避免程序化滚动误触发隐藏导航栏。 */
 	private baselineReaderScroll(): void {
@@ -894,7 +925,7 @@ export class EpubReaderView extends FileView {
 		if (Number.isFinite(start)) {
 			this.lastScrollPos = start;
 		}
-		this.navUpAccum = 0;
+		this.resetNavAccum();
 		this.lastScrollFlipTime = 0;
 	}
 
@@ -1988,7 +2019,7 @@ export class EpubReaderView extends FileView {
 		}
 		this.setNavHidden(false);
 		this.lastScrollPos = 0;
-		this.navUpAccum = 0;
+		this.resetNavAccum();
 		this.lastScrollFlipTime = 0;
 		this.annotationCardEl?.dismiss();
 		this.annotationCardEl = null;

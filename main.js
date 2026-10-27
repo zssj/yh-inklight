@@ -13032,6 +13032,7 @@ var READ_CHECKPOINTS_ALL_MASK = (1 << READ_CHECKPOINTS.length) - 1;
 var READ_CHECKPOINTS_END_BIT = 1 << READ_CHECKPOINTS.length - 1;
 var READ_CHECKPOINTS_JUMP_DELTA = 0.6;
 var NAV_SHOW_SCROLL_THRESHOLD = 30;
+var NAV_HIDE_SCROLL_THRESHOLD = 45;
 var SELECTION_LOCK_CSS = "* { user-select: none !important; -webkit-user-select: none !important; }";
 var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
   // ================================================================
@@ -13131,6 +13132,8 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
     this.lastScrollFlipTime = 0;
     /** 隐藏后净上滑累计距离（px），达到阈值才恢复导航栏，防误触 */
     this.navUpAccum = 0;
+    /** 显示后净下滑累计距离（px），达到阈值才隐藏导航栏（迟滞防抖动，见 NAV_HIDE_SCROLL_THRESHOLD） */
+    this.navDownAccum = 0;
     this.scrollHideRenderer = null;
     this.handleReaderScroll = () => {
       if (!this.pluginSettings.epubHideMobileNavbar || !import_obsidian15.Platform.isMobile) {
@@ -13155,14 +13158,29 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
       }
       this.lastScrollFlipTime = now;
       if (this.navHidden) {
-        this.navUpAccum = Math.max(0, this.navUpAccum - delta);
-        if (this.navUpAccum >= NAV_SHOW_SCROLL_THRESHOLD) {
+        if (delta < 0) {
+          this.navUpAccum += -delta;
+          this.navDownAccum = 0;
+          if (this.navUpAccum >= NAV_SHOW_SCROLL_THRESHOLD) {
+            this.resetNavAccum();
+            this.setNavHidden(false);
+          }
+        } else {
+          this.navDownAccum += delta;
           this.navUpAccum = 0;
-          this.setNavHidden(false);
         }
-      } else if (delta > 0) {
-        this.navUpAccum = 0;
-        this.setNavHidden(true);
+      } else {
+        if (delta > 0) {
+          this.navDownAccum += delta;
+          this.navUpAccum = 0;
+          if (this.navDownAccum >= NAV_HIDE_SCROLL_THRESHOLD) {
+            this.resetNavAccum();
+            this.setNavHidden(true);
+          }
+        } else {
+          this.navUpAccum += -delta;
+          this.navDownAccum = 0;
+        }
       }
     };
     /**
@@ -13751,6 +13769,11 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
     this.scrollHideRenderer = renderer;
     renderer.addEventListener("scroll", this.handleReaderScroll);
   }
+  /** 重置导航栏显示/隐藏的双向滚动累计器 */
+  resetNavAccum() {
+    this.navUpAccum = 0;
+    this.navDownAccum = 0;
+  }
   /** 基线化滚动位置：恢复进度/加载完成后调用，避免程序化滚动误触发隐藏导航栏。 */
   baselineReaderScroll() {
     const renderer = this.scrollHideRenderer;
@@ -13758,7 +13781,7 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
     if (Number.isFinite(start)) {
       this.lastScrollPos = start;
     }
-    this.navUpAccum = 0;
+    this.resetNavAccum();
     this.lastScrollFlipTime = 0;
   }
   setNavHidden(hidden) {
@@ -14697,7 +14720,7 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
     }
     this.setNavHidden(false);
     this.lastScrollPos = 0;
-    this.navUpAccum = 0;
+    this.resetNavAccum();
     this.lastScrollFlipTime = 0;
     this.annotationCardEl?.dismiss();
     this.annotationCardEl = null;

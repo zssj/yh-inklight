@@ -13034,7 +13034,7 @@ var READ_CHECKPOINTS_JUMP_DELTA = 0.6;
 var NAV_SHOW_SCROLL_THRESHOLD = 30;
 var NAV_HIDE_SCROLL_THRESHOLD = 45;
 var SELECTION_LOCK_CSS = "* { user-select: none !important; -webkit-user-select: none !important; }";
-var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
+var EpubReaderView = class extends import_obsidian15.FileView {
   // ================================================================
   // 构造 & 生命周期
   // ================================================================
@@ -13139,7 +13139,7 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
       if (!this.pluginSettings.epubHideMobileNavbar || !import_obsidian15.Platform.isMobile) {
         return;
       }
-      if (this.app.workspace.getActiveViewOfType(_EpubReaderView) !== this) {
+      if (!this.containerEl.isShown()) {
         return;
       }
       const renderer = this.scrollHideRenderer;
@@ -13343,6 +13343,15 @@ var EpubReaderView = class _EpubReaderView extends import_obsidian15.FileView {
     this.containerEl.addClass("yh-epub-reader");
     this.buildLayout();
     this.startReadingTimeTracker();
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        if (leaf?.view !== this || !this.foliateView) {
+          return;
+        }
+        this.attachReaderScrollHide();
+        this.baselineReaderScroll();
+      })
+    );
   }
   /** 视图关闭时释放 foliate 资源与定时器 */
   async onClose() {

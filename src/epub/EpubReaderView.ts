@@ -361,6 +361,18 @@ export class EpubReaderView extends FileView {
 		this.containerEl.addClass("yh-epub-reader");
 		this.buildLayout();
 		this.startReadingTimeTracker();
+		// 自愈：本视图重新变为活动视图时（如杀 App 重启后 activeLeaf 归位、标签切回），
+		// 重绑滚动监听（renderer 元素若被 foliate 重建则这里自动换绑）并基线化，
+		// 避免恢复期的程序化滚动误触发导航栏显隐。
+		this.registerEvent(
+			this.app.workspace.on("active-leaf-change", (leaf) => {
+				if (leaf?.view !== this || !this.foliateView) {
+					return;
+				}
+				this.attachReaderScrollHide();
+				this.baselineReaderScroll();
+			}),
+		);
 	}
 
 	/** 视图关闭时释放 foliate 资源与定时器 */
@@ -862,7 +874,11 @@ export class EpubReaderView extends FileView {
 		if (!this.pluginSettings.epubHideMobileNavbar || !Platform.isMobile) {
 			return;
 		}
-		if (this.app.workspace.getActiveViewOfType(EpubReaderView) !== this) {
+		// 判定本视图可见而非 getActiveViewOfType：杀 App 重启后 Obsidian 恢复工作区时
+		// activeLeaf 可能未正确指回本视图（getActiveViewOfType 返回 null/别的实例），
+		// 导致重启后导航栏显隐失灵、须切一次标签才恢复。isShown 沿祖先链查真实可见性，
+		// 手机端标签切走时容器 display:none，后台标签防误触发效果不变。
+		if (!this.containerEl.isShown()) {
 			return;
 		}
 		const renderer = this.scrollHideRenderer as unknown as { start?: unknown } | null;

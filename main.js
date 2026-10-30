@@ -8090,7 +8090,7 @@ function installReadingViewHighlights(options) {
     }
     frame = requestAnimationFrame(() => {
       frame = null;
-      refreshReadingViewHighlights(options.root, options.marks);
+      refreshReadingViewHighlights(options.root, options.getMarks());
     });
   };
   const delays = import_obsidian2.Platform.isMobile ? MOBILE_RENDER_DELAYS : DESKTOP_RENDER_DELAYS;
@@ -8548,16 +8548,40 @@ var SelectionToolbar = class {
   constructor(options) {
     this.options = options;
     this.visible = false;
+    this.shownStartContainer = null;
+    this.shownStartOffset = 0;
+    this.shownEndContainer = null;
+    this.shownEndOffset = 0;
     this.handleMouseUp = () => {
       window.setTimeout(() => this.showForSelection(), 0);
+    };
+    // 用户重新开始拖动选区（手指按住手柄移动）时选区边界会连续变化：
+    // 立即隐藏工具栏，使其完全退出命中测试，避免 Chrome 拖动手柄的实时
+    // 命中测试砸到工具栏实体导致选区端点跳变（向下拖必经其下边缘路径）。
+    this.handleSelectionChange = () => {
+      if (!this.visible) {
+        return;
+      }
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) {
+        this.hide();
+        return;
+      }
+      const range = selection.getRangeAt(0);
+      if (range.startContainer === this.shownStartContainer && range.startOffset === this.shownStartOffset && range.endContainer === this.shownEndContainer && range.endOffset === this.shownEndOffset) {
+        return;
+      }
+      this.hide();
     };
     this.element = document.body.createDiv({ cls: "yh-toolbar yh-selection-toolbar" });
     this.render();
     this.hide();
     document.addEventListener("mouseup", this.handleMouseUp);
+    document.addEventListener("selectionchange", this.handleSelectionChange);
   }
   destroy() {
     document.removeEventListener("mouseup", this.handleMouseUp);
+    document.removeEventListener("selectionchange", this.handleSelectionChange);
     this.element.remove();
   }
   showForSelection() {
@@ -8573,8 +8597,12 @@ var SelectionToolbar = class {
       return;
     }
     const rect = range.getBoundingClientRect();
+    this.shownStartContainer = range.startContainer;
+    this.shownStartOffset = range.startOffset;
+    this.shownEndContainer = range.endContainer;
+    this.shownEndOffset = range.endOffset;
     if (import_obsidian3.Platform.isMobile && isSelectionInsideMarkdown(range)) {
-      const offset = 8;
+      const offset = 16;
       const height = this.element.offsetHeight || 44;
       let top = rect.bottom + offset;
       if (top + height > window.innerHeight - offset) {
@@ -16842,6 +16870,25 @@ ${lines.slice(0, 8).join("\n")}`);
       }
     }
   }
+  /**
+   * 强制所有打开的 Markdown 编辑器重建高亮装饰。
+   * CM6 装饰重建依赖 ViewUpdate 中的 version 检查，但 store 保存完成时
+   * 编辑器可能没有任何更新事件（doc/selection/viewport 均未变），
+   * 派发一个空事务即可触发一次 ViewUpdate → 版本检查 → 装饰重建。
+   */
+  forceEditorDecorationsRefresh(filePath) {
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      const view = leaf.view;
+      if (!(view instanceof import_obsidian21.MarkdownView)) {
+        continue;
+      }
+      if (filePath && view.file?.path !== filePath) {
+        continue;
+      }
+      const cm = view.editor.cm;
+      cm?.dispatch({});
+    }
+  }
   async createHighlight(color) {
     if (this.pdfLayer.isPdfActive()) {
       await this.pdfLayer.createHighlight(color);
@@ -16864,9 +16911,11 @@ ${lines.slice(0, 8).join("\n")}`);
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
     };
     await this.store.addHighlight(file, highlight);
+    this.forceEditorDecorationsRefresh(file.path);
     await this.refreshActiveReadingViewHighlights(file.path);
     await this.refreshAnnotations();
     this.toolbar.hide();
+    this.clearActiveSelection();
   }
   async createComment() {
     if (this.pdfLayer.isPdfActive()) {
@@ -16911,9 +16960,30 @@ ${lines.slice(0, 8).join("\n")}`);
       resolved: false
     };
     await this.store.addComment(file, comment);
+    this.forceEditorDecorationsRefresh(file.path);
     await this.refreshActiveReadingViewHighlights(file.path);
     await this.refreshAnnotations();
     this.toolbar.hide();
+    this.clearActiveSelection();
+  }
+  /**
+   * 收起当前选区与 Android 系统选择操作条（复制/分享/全选/网页搜索）。
+   * 编辑模式下 CM6 选区折叠到光标处；阅读模式清空 DOM 选区；
+   * 选区移除后系统条自动收起，工具栏也不会因后续 mouseup 回弹。
+   */
+  clearActiveSelection() {
+    const editor = this.activeEditor()?.editor;
+    if (editor) {
+      const selected = editor.getSelection();
+      if (selected) {
+        const cursor = editor.getCursor("to");
+        editor.setSelection(cursor);
+      }
+    }
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) {
+      selection.removeAllRanges();
+    }
   }
   async refreshActiveReadingViewHighlights(filePath) {
     const file = this.app.vault.getAbstractFileByPath(filePath);
@@ -17085,6 +17155,8 @@ ${lines.slice(0, 8).join("\n")}`);
     if (text) {
       navigator.clipboard.writeText(text);
       new import_obsidian21.Notice("Copied selection");
+      this.toolbar.hide();
+      this.clearActiveSelection();
     }
   }
   async handleAnnotationClick(event) {
@@ -17132,9 +17204,18 @@ ${lines.slice(0, 8).join("\n")}`);
     if (!(file instanceof import_obsidian21.TFile)) {
       return;
     }
-    const document2 = await this.store.getDocument(file);
-    const marks = [...document2.highlights, ...document2.comments].filter((item) => !item.orphaned);
-    installReadingViewHighlights({ root: element, context, marks });
+    await this.store.getDocument(file);
+    installReadingViewHighlights({
+      root: element,
+      context,
+      getMarks: () => {
+        const doc = this.store.getCachedDocument(file.path);
+        if (!doc) {
+          return [];
+        }
+        return [...doc.highlights, ...doc.comments].filter((item) => !item.orphaned);
+      }
+    });
   }
 };
 function locateRenderedSelectionInSource(source, selectedText, occurrenceIndex = 0, preferRendered = false) {

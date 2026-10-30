@@ -18,8 +18,38 @@ interface SelectionToolbarOptions {
 export class SelectionToolbar {
   private readonly element: HTMLElement;
   private visible = false;
+  private shownStartContainer: Node | null = null;
+  private shownStartOffset = 0;
+  private shownEndContainer: Node | null = null;
+  private shownEndOffset = 0;
   private readonly handleMouseUp = (): void => {
     window.setTimeout(() => this.showForSelection(), 0);
+  };
+  // 用户重新开始拖动选区（手指按住手柄移动）时选区边界会连续变化：
+  // 立即隐藏工具栏，使其完全退出命中测试，避免 Chrome 拖动手柄的实时
+  // 命中测试砸到工具栏实体导致选区端点跳变（向下拖必经其下边缘路径）。
+  private readonly handleSelectionChange = (): void => {
+    if (!this.visible) {
+      return;
+    }
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      this.hide();
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    if (
+      range.startContainer === this.shownStartContainer &&
+      range.startOffset === this.shownStartOffset &&
+      range.endContainer === this.shownEndContainer &&
+      range.endOffset === this.shownEndOffset
+    ) {
+      return;
+    }
+
+    this.hide();
   };
 
   constructor(private readonly options: SelectionToolbarOptions) {
@@ -27,10 +57,12 @@ export class SelectionToolbar {
     this.render();
     this.hide();
     document.addEventListener("mouseup", this.handleMouseUp);
+    document.addEventListener("selectionchange", this.handleSelectionChange);
   }
 
   destroy(): void {
     document.removeEventListener("mouseup", this.handleMouseUp);
+    document.removeEventListener("selectionchange", this.handleSelectionChange);
     this.element.remove();
   }
 
@@ -49,11 +81,17 @@ export class SelectionToolbar {
     }
 
     const rect = range.getBoundingClientRect();
+    // 记录触发显示的选区边界：后续 selectionchange 若边界不变（如系统自身微调）则不隐藏，
+    // 边界变化（用户重新拖动）则由 handleSelectionChange 立即隐藏。
+    this.shownStartContainer = range.startContainer;
+    this.shownStartOffset = range.startOffset;
+    this.shownEndContainer = range.endContainer;
+    this.shownEndOffset = range.endOffset;
     // 移动端 md：工具栏锚定在选区【下方】（参考 EPUB 选区菜单 rect.bottom 定位），
     // 避开 Android 系统选择操作条（复制/分享/全选/网页搜索，通常悬于选区上方）；
     // 选区贴近屏幕底部放不下时翻转到选区上方。PDF 与桌面端维持原选区上方悬浮。
     if (Platform.isMobile && isSelectionInsideMarkdown(range)) {
-      const offset = 8;
+      const offset = 16;
       const height = this.element.offsetHeight || 44;
       let top = rect.bottom + offset;
       if (top + height > window.innerHeight - offset) {

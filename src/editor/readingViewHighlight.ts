@@ -16,7 +16,8 @@ export type ReadingMark = Pick<HighlightAnnotation | CommentAnnotation, "id" | "
 interface InstallReadingHighlightsOptions {
   root: HTMLElement;
   context: MarkdownPostProcessorContext;
-  marks: ReadingMark[];
+  /** 实时读取最新 marks（不能用安装时的快照：新建高亮后 observer 重绘会用旧列表把新高亮抹掉） */
+  getMarks: () => ReadingMark[];
 }
 
 interface TextSegment {
@@ -55,7 +56,7 @@ export function installReadingViewHighlights(options: InstallReadingHighlightsOp
 
     frame = requestAnimationFrame(() => {
       frame = null;
-      refreshReadingViewHighlights(options.root, options.marks);
+      refreshReadingViewHighlights(options.root, options.getMarks());
     });
   };
 

@@ -642,6 +642,26 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   }
 
 
+  /**
+   * 强制所有打开的 Markdown 编辑器重建高亮装饰。
+   * CM6 装饰重建依赖 ViewUpdate 中的 version 检查，但 store 保存完成时
+   * 编辑器可能没有任何更新事件（doc/selection/viewport 均未变），
+   * 派发一个空事务即可触发一次 ViewUpdate → 版本检查 → 装饰重建。
+   */
+  private forceEditorDecorationsRefresh(filePath?: string): void {
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      const view = leaf.view;
+      if (!(view instanceof MarkdownView)) {
+        continue;
+      }
+      if (filePath && view.file?.path !== filePath) {
+        continue;
+      }
+      const cm = (view.editor as unknown as { cm?: { dispatch: (spec: object) => void } }).cm;
+      cm?.dispatch({});
+    }
+  }
+
   private async createHighlight(color: AnnotationColor): Promise<void> {
     if (this.pdfLayer.isPdfActive()) {
       await this.pdfLayer.createHighlight(color);
@@ -669,9 +689,12 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     };
 
     await this.store.addHighlight(file, highlight);
+    // 编辑模式：store.version 已涨但 CM6 无更新事件，派发空事务强制装饰重建（否则需重开标签页才显示）
+    this.forceEditorDecorationsRefresh(file.path);
     await this.refreshActiveReadingViewHighlights(file.path);
     await this.refreshAnnotations();
     this.toolbar.hide();
+    this.clearActiveSelection();
   }
 
   private async createComment(): Promise<void> {
@@ -722,9 +745,32 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     };
 
     await this.store.addComment(file, comment);
+    // 编辑模式：同 createHighlight，强制 CM6 装饰重建
+    this.forceEditorDecorationsRefresh(file.path);
     await this.refreshActiveReadingViewHighlights(file.path);
     await this.refreshAnnotations();
     this.toolbar.hide();
+    this.clearActiveSelection();
+  }
+
+  /**
+   * 收起当前选区与 Android 系统选择操作条（复制/分享/全选/网页搜索）。
+   * 编辑模式下 CM6 选区折叠到光标处；阅读模式清空 DOM 选区；
+   * 选区移除后系统条自动收起，工具栏也不会因后续 mouseup 回弹。
+   */
+  private clearActiveSelection(): void {
+    const editor = this.activeEditor()?.editor;
+    if (editor) {
+      const selected = editor.getSelection();
+      if (selected) {
+        const cursor = editor.getCursor("to");
+        editor.setSelection(cursor);
+      }
+    }
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) {
+      selection.removeAllRanges();
+    }
   }
 
   private async refreshActiveReadingViewHighlights(filePath: string): Promise<void> {
@@ -918,6 +964,8 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     if (text) {
       navigator.clipboard.writeText(text);
       new Notice("Copied selection");
+      this.toolbar.hide();
+      this.clearActiveSelection();
     }
   }
 
@@ -982,9 +1030,20 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       return;
     }
 
-    const document = await this.store.getDocument(file);
-    const marks = [...document.highlights, ...document.comments].filter((item) => !item.orphaned);
-    installReadingViewHighlights({ root: element, context, marks });
+    await this.store.getDocument(file);
+    // 回调实时读取 store 缓存：新建/删除高亮后 observer 自动重绘时拿到的是最新列表，
+    // 避免安装时快照把后建的高亮抹掉（重开标签页才恢复的现象）。
+    installReadingViewHighlights({
+      root: element,
+      context,
+      getMarks: () => {
+        const doc = this.store.getCachedDocument(file.path);
+        if (!doc) {
+          return [];
+        }
+        return [...doc.highlights, ...doc.comments].filter((item) => !item.orphaned);
+      },
+    });
   }
 }
 

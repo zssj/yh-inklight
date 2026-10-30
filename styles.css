@@ -153,8 +153,18 @@
 .yh-toolbar.is-visible,
 .yh-selection-toolbar.is-visible {
   opacity: 1;
-  pointer-events: auto;
+  /* 容器始终对命中测试透明（pointer-events 维持 none）：手指拖动选区
+     划过工具栏的背景/空白区域能穿透命中下方文本，只有压到按钮本体
+     才拦截，避免拖动手柄命中测试砸到工具栏导致选区端点跳变。
+     按钮在下方单独放开 pointer-events。 */
   transform: translate(-50%, 0);
+}
+
+.yh-toolbar.is-visible .yh-toolbar-color,
+.yh-toolbar.is-visible .yh-toolbar-action,
+.yh-selection-toolbar.is-visible .yh-toolbar-color,
+.yh-selection-toolbar.is-visible .yh-toolbar-action {
+  pointer-events: auto;
 }
 
 

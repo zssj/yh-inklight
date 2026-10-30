@@ -8,6 +8,7 @@
 import { addIcon, Editor, MarkdownPostProcessorContext, MarkdownView, Modal, Notice, Platform, Plugin, TFile } from "obsidian";
 
 import { createTextAnchor, relocateDocumentAnchors } from "./src/anchor/textAnchor";
+import { stripWithMap, strippedScore } from "./src/anchor/textStrip";
 import { createHighlightExtension } from "./src/editor/highlightExtension";
 import { installReadingViewHighlights, refreshReadingViewHighlights } from "./src/editor/readingViewHighlight";
 import { SelectionToolbar } from "./src/editor/selectionToolbar";
@@ -865,11 +866,13 @@ export default class OverlayAnnotationsPlugin extends Plugin {
 
     if (file && selectedText) {
       const source = await this.app.vault.cachedRead(file);
+      const renderContext = selection ? renderedSelectionContext(selection) : null;
       const located = locateRenderedSelectionInSource(
         source,
         selectedText,
         selection ? renderedOccurrenceBeforeSelection(selection, selectedText) : 0,
         selection ? isSelectionInsideCallout(selection) : false,
+        renderContext,
       );
 
       if (located) {
@@ -883,11 +886,21 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       }
     }
 
-    if (file && this.lastSelection?.filePath === file.path) {
+    // 定位失败兜底：仅当选区文本与上次快照【完全一致】时才复用
+    // （DOM range 因焦点切换等原因失效、但选的是同一段文字的场景）。
+    // 文本对不上时绝不能用旧偏移，否则高亮会落到上一次选区的位置。
+    if (
+      file &&
+      this.lastSelection?.filePath === file.path &&
+      selectedText &&
+      this.lastSelection.selectedText.trim() === selectedText
+    ) {
       return this.lastSelection;
     }
 
-    this.lastSelection = null;
+    if (selectedText) {
+      new Notice("无法在原文中定位该选区，未创建标注。");
+    }
     return null;
   }
 
@@ -1075,18 +1088,47 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   }
 }
 
+/** 渲染 DOM 中选区的前后文（用于源码候选位置的消歧评分） */
+interface RenderContext {
+  prefix: string;
+  suffix: string;
+}
+
+/**
+ * 定位渲染选区在源码中的偏移。
+ * 策略：①精确候选（源码中所有完全一致的位置）→ ②剥语法字符候选
+ * （含 ** [[ > 表格符等渲染后消失的符号、跨行选区）→ ③引用标记投影旧算法兜底。
+ * 候选多于一个时，用渲染前后文（剥字符口径）评分选最佳，评分过低则放弃
+ * （宁可报"无法定位"也绝不错位）；不再依赖"第 N 次出现"计数——渲染 DOM
+ * 与源码的出现次数会因 frontmatter、代码块、链接 URL 等不一致。
+ */
 function locateRenderedSelectionInSource(
   source: string,
   selectedText: string,
-  occurrenceIndex = 0,
-  preferRendered = false,
+  occurrenceIndex: number,
+  preferRendered: boolean,
+  renderContext: RenderContext | null,
 ): { startOffset: number; endOffset: number } | null {
-  const exact = nthIndexOf(source, selectedText, occurrenceIndex);
-  if (exact >= 0) {
-    return {
-      startOffset: exact,
-      endOffset: exact + selectedText.length,
-    };
+  const bestExact = pickBestCandidate(
+    collectExactCandidates(source, selectedText),
+    source,
+    renderContext,
+    occurrenceIndex,
+    0.4,
+  );
+  if (bestExact) {
+    return bestExact;
+  }
+
+  const bestStripped = pickBestCandidate(
+    collectStrippedCandidates(source, selectedText),
+    source,
+    renderContext,
+    occurrenceIndex,
+    0.4,
+  );
+  if (bestStripped) {
+    return bestStripped;
   }
 
   if (preferRendered) {
@@ -1097,6 +1139,120 @@ function locateRenderedSelectionInSource(
   }
 
   return locateSelectionIgnoringQuoteMarkers(source, selectedText, occurrenceIndex);
+}
+
+/** 源码中所有与选区文本完全一致的候选位置 */
+function collectExactCandidates(source: string, selectedText: string): Array<{ startOffset: number; endOffset: number }> {
+  const candidates: Array<{ startOffset: number; endOffset: number }> = [];
+  if (!selectedText) {
+    return candidates;
+  }
+
+  let cursor = source.indexOf(selectedText);
+  while (cursor >= 0) {
+    candidates.push({ startOffset: cursor, endOffset: cursor + selectedText.length });
+    cursor = source.indexOf(selectedText, cursor + 1);
+  }
+  return candidates;
+}
+
+/**
+ * 源码中所有与选区剥除空白+装饰字符后一致的候选位置
+ * （映射还原到源码真实偏移），覆盖含语法字符与跨行选区。
+ */
+function collectStrippedCandidates(source: string, selectedText: string): Array<{ startOffset: number; endOffset: number }> {
+  const candidates: Array<{ startOffset: number; endOffset: number }> = [];
+  const strippedSource = stripWithMap(source);
+  const strippedSelected = stripWithMap(selectedText);
+  if (!strippedSelected.text) {
+    return candidates;
+  }
+
+  let cursor = strippedSource.text.indexOf(strippedSelected.text);
+  while (cursor >= 0) {
+    const endIndex = cursor + strippedSelected.text.length - 1;
+    const start = strippedSource.map[cursor];
+    const end = strippedSource.map[endIndex] + 1;
+    if (start !== undefined && end !== undefined && start < end) {
+      candidates.push({ startOffset: start, endOffset: end });
+    }
+    cursor = strippedSource.text.indexOf(strippedSelected.text, cursor + 1);
+  }
+  return candidates;
+}
+
+/** 多候选消歧：单候选直接采用；多候选按渲染前后文评分取最佳，低于阈值放弃 */
+function pickBestCandidate(
+  candidates: Array<{ startOffset: number; endOffset: number }>,
+  source: string,
+  renderContext: RenderContext | null,
+  occurrenceIndex: number,
+  threshold: number,
+): { startOffset: number; endOffset: number } | null {
+  if (!candidates.length) {
+    return null;
+  }
+  if (candidates.length === 1) {
+    return candidates[0];
+  }
+
+  if (!renderContext) {
+    // 无上下文可比时退回旧的"第 N 次出现"策略
+    return candidates[Math.min(Math.max(occurrenceIndex, 0), candidates.length - 1)];
+  }
+
+  let best: { startOffset: number; endOffset: number } | null = null;
+  let bestScore = -1;
+  for (const candidate of candidates) {
+    const score = candidateContextScore(source, candidate, renderContext);
+    if (score > bestScore) {
+      bestScore = score;
+      best = candidate;
+    }
+  }
+
+  if (!best || bestScore < threshold) {
+    return null;
+  }
+  return best;
+}
+
+/** 候选位置与渲染前后文的相似度（剥字符口径，0~1） */
+function candidateContextScore(
+  source: string,
+  candidate: { startOffset: number; endOffset: number },
+  context: RenderContext,
+): number {
+  const before = source.slice(Math.max(0, candidate.startOffset - context.prefix.length), candidate.startOffset);
+  const after = source.slice(candidate.endOffset, candidate.endOffset + context.suffix.length);
+  return strippedScore(context.prefix, before, "suffix") * 0.5 + strippedScore(context.suffix, after, "prefix") * 0.5;
+}
+
+/** 从渲染 DOM 提取选区前后文（各 30 字符），供源码候选消歧评分 */
+function renderedSelectionContext(selection: Selection): RenderContext | null {
+  if (!selection.rangeCount) {
+    return null;
+  }
+
+  const range = selection.getRangeAt(0);
+  const root = selectionRoot(range);
+  if (!root) {
+    return null;
+  }
+
+  const before = document.createRange();
+  before.selectNodeContents(root);
+  before.setEnd(range.startContainer, range.startOffset);
+  const prefix = before.toString().replace(/\r\n/g, "\n").slice(-30);
+  before.detach();
+
+  const after = document.createRange();
+  after.selectNodeContents(root);
+  after.setStart(range.endContainer, range.endOffset);
+  const suffix = after.toString().replace(/\r\n/g, "\n").slice(0, 30);
+  after.detach();
+
+  return { prefix, suffix };
 }
 
 function createAnchorForSnapshot(source: string, snapshot: SelectionSnapshot) {

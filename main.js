@@ -7958,6 +7958,74 @@ function normalizeLineEndings(content) {
   return content.replace(/\r\n/g, "\n");
 }
 
+// src/anchor/textStrip.ts
+var MARKDOWN_DECORATION_CHARS = /* @__PURE__ */ new Set([
+  "*",
+  "_",
+  "~",
+  "=",
+  "`",
+  "[",
+  "]",
+  "(",
+  ")",
+  "#",
+  ">",
+  "|",
+  "+",
+  "-"
+]);
+function stripText(text) {
+  return stripWithMap(text).text;
+}
+function stripWithMap(text) {
+  const map = [];
+  let stripped = "";
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (/\s/.test(char) || MARKDOWN_DECORATION_CHARS.has(char)) {
+      continue;
+    }
+    stripped += char;
+    map.push(index);
+  }
+  return { text: stripped, map };
+}
+function strippedScore(expected, actual, mode) {
+  const left = stripText(expected);
+  const right = stripText(actual);
+  if (!left && !right) {
+    return 1;
+  }
+  if (!left || !right) {
+    return 0;
+  }
+  if (mode === "suffix") {
+    if (right.endsWith(left) || left.endsWith(right)) {
+      return 1;
+    }
+    let shared2 = 0;
+    const max2 = Math.min(left.length, right.length);
+    for (let index = 1; index <= max2; index += 1) {
+      if (left.slice(-index) === right.slice(-index)) {
+        shared2 = index;
+      }
+    }
+    return shared2 / Math.max(left.length, right.length);
+  }
+  if (right.startsWith(left) || left.startsWith(right)) {
+    return 1;
+  }
+  let shared = 0;
+  const max = Math.min(left.length, right.length);
+  for (let index = 1; index <= max; index += 1) {
+    if (left.slice(0, index) === right.slice(0, index)) {
+      shared = index;
+    }
+  }
+  return shared / Math.max(left.length, right.length);
+}
+
 // src/editor/highlightExtension.ts
 var import_state = require("@codemirror/state");
 var import_view = require("@codemirror/view");
@@ -8249,22 +8317,6 @@ function locateNormalizedRange(renderedText, anchor) {
   }
   return best?.range ?? null;
 }
-var MARKDOWN_DECORATION_CHARS = /* @__PURE__ */ new Set([
-  "*",
-  "_",
-  "~",
-  "=",
-  "`",
-  "[",
-  "]",
-  "(",
-  ")",
-  "#",
-  ">",
-  "|",
-  "+",
-  "-"
-]);
 function locateStrippedRange(renderedText, anchor) {
   if (!anchor.selectedText) {
     return null;
@@ -8289,68 +8341,18 @@ function locateStrippedRange(renderedText, anchor) {
     }
     strippedStart = rendered.text.indexOf(selected.text, strippedStart + 1);
   }
-  if (!best || best.score < 0.5) {
+  const threshold = stripText(anchor.selectedText).length < 8 ? 0.7 : 0.5;
+  if (!best || best.score < threshold) {
     return null;
   }
   return best.range;
 }
-function stripWithMap(text) {
-  const map = [];
-  let stripped = "";
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    if (/\s/.test(char) || MARKDOWN_DECORATION_CHARS.has(char)) {
-      continue;
-    }
-    stripped += char;
-    map.push(index);
-  }
-  return { text: stripped, map };
-}
 function rangeScore(renderedText, anchor, range) {
   const before = renderedText.slice(Math.max(0, range.start - anchor.prefix.length), range.start);
   const after = renderedText.slice(range.end, Math.min(renderedText.length, range.end + anchor.suffix.length));
-  const context = prefixScore(anchor.prefix, before) * 0.45 + suffixScore(anchor.suffix, after) * 0.45;
+  const context = strippedScore(anchor.prefix, before, "suffix") * 0.45 + strippedScore(anchor.suffix, after, "prefix") * 0.45;
   const distance = 1 - Math.min(1, Math.abs(range.start - anchor.startOffset) / Math.max(renderedText.length, 1));
   return context + distance * 0.1;
-}
-function prefixScore(expected, actual) {
-  if (!expected && !actual) {
-    return 1;
-  }
-  if (!expected || !actual) {
-    return 0;
-  }
-  if (actual.endsWith(expected) || expected.endsWith(actual)) {
-    return 1;
-  }
-  let shared = 0;
-  const max = Math.min(expected.length, actual.length);
-  for (let index = 1; index <= max; index += 1) {
-    if (expected.slice(-index) === actual.slice(-index)) {
-      shared = index;
-    }
-  }
-  return shared / Math.max(expected.length, actual.length);
-}
-function suffixScore(expected, actual) {
-  if (!expected && !actual) {
-    return 1;
-  }
-  if (!expected || !actual) {
-    return 0;
-  }
-  if (actual.startsWith(expected) || expected.startsWith(actual)) {
-    return 1;
-  }
-  let shared = 0;
-  const max = Math.min(expected.length, actual.length);
-  for (let index = 1; index <= max; index += 1) {
-    if (expected.slice(0, index) === actual.slice(0, index)) {
-      shared = index;
-    }
-  }
-  return shared / Math.max(expected.length, actual.length);
 }
 function normalizeWithMap(value) {
   let text = "";
@@ -17058,11 +17060,13 @@ ${lines.slice(0, 8).join("\n")}`);
     const selectedText = selection?.toString().replace(/\r\n/g, "\n").trim() ?? "";
     if (file && selectedText) {
       const source = await this.app.vault.cachedRead(file);
+      const renderContext = selection ? renderedSelectionContext(selection) : null;
       const located = locateRenderedSelectionInSource(
         source,
         selectedText,
         selection ? renderedOccurrenceBeforeSelection(selection, selectedText) : 0,
-        selection ? isSelectionInsideCallout(selection) : false
+        selection ? isSelectionInsideCallout(selection) : false,
+        renderContext
       );
       if (located) {
         this.lastSelection = {
@@ -17074,10 +17078,12 @@ ${lines.slice(0, 8).join("\n")}`);
         return this.lastSelection;
       }
     }
-    if (file && this.lastSelection?.filePath === file.path) {
+    if (file && this.lastSelection?.filePath === file.path && selectedText && this.lastSelection.selectedText.trim() === selectedText) {
       return this.lastSelection;
     }
-    this.lastSelection = null;
+    if (selectedText) {
+      new import_obsidian21.Notice("\u65E0\u6CD5\u5728\u539F\u6587\u4E2D\u5B9A\u4F4D\u8BE5\u9009\u533A\uFF0C\u672A\u521B\u5EFA\u6807\u6CE8\u3002");
+    }
     return null;
   }
   activeEditor() {
@@ -17236,13 +17242,26 @@ ${lines.slice(0, 8).join("\n")}`);
     });
   }
 };
-function locateRenderedSelectionInSource(source, selectedText, occurrenceIndex = 0, preferRendered = false) {
-  const exact = nthIndexOf(source, selectedText, occurrenceIndex);
-  if (exact >= 0) {
-    return {
-      startOffset: exact,
-      endOffset: exact + selectedText.length
-    };
+function locateRenderedSelectionInSource(source, selectedText, occurrenceIndex, preferRendered, renderContext) {
+  const bestExact = pickBestCandidate(
+    collectExactCandidates(source, selectedText),
+    source,
+    renderContext,
+    occurrenceIndex,
+    0.4
+  );
+  if (bestExact) {
+    return bestExact;
+  }
+  const bestStripped = pickBestCandidate(
+    collectStrippedCandidates(source, selectedText),
+    source,
+    renderContext,
+    occurrenceIndex,
+    0.4
+  );
+  if (bestStripped) {
+    return bestStripped;
   }
   if (preferRendered) {
     const rendered = locateSelectionIgnoringQuoteMarkers(source, selectedText, occurrenceIndex);
@@ -17251,6 +17270,87 @@ function locateRenderedSelectionInSource(source, selectedText, occurrenceIndex =
     }
   }
   return locateSelectionIgnoringQuoteMarkers(source, selectedText, occurrenceIndex);
+}
+function collectExactCandidates(source, selectedText) {
+  const candidates = [];
+  if (!selectedText) {
+    return candidates;
+  }
+  let cursor = source.indexOf(selectedText);
+  while (cursor >= 0) {
+    candidates.push({ startOffset: cursor, endOffset: cursor + selectedText.length });
+    cursor = source.indexOf(selectedText, cursor + 1);
+  }
+  return candidates;
+}
+function collectStrippedCandidates(source, selectedText) {
+  const candidates = [];
+  const strippedSource = stripWithMap(source);
+  const strippedSelected = stripWithMap(selectedText);
+  if (!strippedSelected.text) {
+    return candidates;
+  }
+  let cursor = strippedSource.text.indexOf(strippedSelected.text);
+  while (cursor >= 0) {
+    const endIndex = cursor + strippedSelected.text.length - 1;
+    const start = strippedSource.map[cursor];
+    const end = strippedSource.map[endIndex] + 1;
+    if (start !== void 0 && end !== void 0 && start < end) {
+      candidates.push({ startOffset: start, endOffset: end });
+    }
+    cursor = strippedSource.text.indexOf(strippedSelected.text, cursor + 1);
+  }
+  return candidates;
+}
+function pickBestCandidate(candidates, source, renderContext, occurrenceIndex, threshold) {
+  if (!candidates.length) {
+    return null;
+  }
+  if (candidates.length === 1) {
+    return candidates[0];
+  }
+  if (!renderContext) {
+    return candidates[Math.min(Math.max(occurrenceIndex, 0), candidates.length - 1)];
+  }
+  let best = null;
+  let bestScore = -1;
+  for (const candidate of candidates) {
+    const score = candidateContextScore(source, candidate, renderContext);
+    if (score > bestScore) {
+      bestScore = score;
+      best = candidate;
+    }
+  }
+  if (!best || bestScore < threshold) {
+    return null;
+  }
+  return best;
+}
+function candidateContextScore(source, candidate, context) {
+  const before = source.slice(Math.max(0, candidate.startOffset - context.prefix.length), candidate.startOffset);
+  const after = source.slice(candidate.endOffset, candidate.endOffset + context.suffix.length);
+  return strippedScore(context.prefix, before, "suffix") * 0.5 + strippedScore(context.suffix, after, "prefix") * 0.5;
+}
+function renderedSelectionContext(selection) {
+  if (!selection.rangeCount) {
+    return null;
+  }
+  const range = selection.getRangeAt(0);
+  const root = selectionRoot(range);
+  if (!root) {
+    return null;
+  }
+  const before = document.createRange();
+  before.selectNodeContents(root);
+  before.setEnd(range.startContainer, range.startOffset);
+  const prefix = before.toString().replace(/\r\n/g, "\n").slice(-30);
+  before.detach();
+  const after = document.createRange();
+  after.selectNodeContents(root);
+  after.setStart(range.endContainer, range.endOffset);
+  const suffix = after.toString().replace(/\r\n/g, "\n").slice(0, 30);
+  after.detach();
+  return { prefix, suffix };
 }
 function createAnchorForSnapshot(source, snapshot) {
   const anchor = createTextAnchor(source, snapshot.startOffset, snapshot.endOffset);

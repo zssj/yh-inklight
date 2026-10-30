@@ -8,6 +8,7 @@
 import { MarkdownPostProcessorContext, MarkdownRenderChild, Platform } from "obsidian";
 
 import { findBestFuzzyMatch } from "../anchor/fuzzyMatch";
+import { stripText, stripWithMap, strippedScore } from "../anchor/textStrip";
 import { AnnotationColor, CommentAnnotation, HighlightAnnotation, TextAnchor } from "../storage/types";
 import { highlightBackground } from "./highlightColors";
 
@@ -258,23 +259,6 @@ function locateNormalizedRange(renderedText: string, anchor: TextAnchor): Render
   return best?.range ?? null;
 }
 
-const MARKDOWN_DECORATION_CHARS = new Set([
-  "*",
-  "_",
-  "~",
-  "=",
-  "`",
-  "[",
-  "]",
-  "(",
-  ")",
-  "#",
-  ">",
-  "|",
-  "+",
-  "-",
-]);
-
 function locateStrippedRange(renderedText: string, anchor: TextAnchor): RenderedRange | null {
   if (!anchor.selectedText) {
     return null;
@@ -303,78 +287,24 @@ function locateStrippedRange(renderedText: string, anchor: TextAnchor): Rendered
     strippedStart = rendered.text.indexOf(selected.text, strippedStart + 1);
   }
 
-  if (!best || best.score < 0.5) {
+  // 短选区在文中多次出现时上下文评分天然偏弱，收紧阈值防 wrap 到错误实例；
+  // 长文本维持 0.5，保证跨行/含语法的选区仍能显示。
+  const threshold = stripText(anchor.selectedText).length < 8 ? 0.7 : 0.5;
+  if (!best || best.score < threshold) {
     return null;
   }
 
   return best.range;
 }
 
-/** 剥掉空白与 Markdown 装饰字符，保留原位置映射（map[i] = 第 i 个保留字符在原文中的下标）。 */
-function stripWithMap(text: string): NormalizedIndex {
-  const map: number[] = [];
-  let stripped = "";
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    if (/\s/.test(char) || MARKDOWN_DECORATION_CHARS.has(char)) {
-      continue;
-    }
-    stripped += char;
-    map.push(index);
-  }
-
-  return { text: stripped, map };
-}
-
 function rangeScore(renderedText: string, anchor: TextAnchor, range: RenderedRange): number {
   const before = renderedText.slice(Math.max(0, range.start - anchor.prefix.length), range.start);
   const after = renderedText.slice(range.end, Math.min(renderedText.length, range.end + anchor.suffix.length));
-  const context = prefixScore(anchor.prefix, before) * 0.45 + suffixScore(anchor.suffix, after) * 0.45;
+  // 锚点 prefix/suffix 是源码切片（含 ** [[ 等语法字符），渲染上下文没有；
+  // 剥字符口径评分，两端才可比（阅读模式创建的锚点上下文来自渲染 DOM，同样成立）。
+  const context = strippedScore(anchor.prefix, before, "suffix") * 0.45 + strippedScore(anchor.suffix, after, "prefix") * 0.45;
   const distance = 1 - Math.min(1, Math.abs(range.start - anchor.startOffset) / Math.max(renderedText.length, 1));
   return context + distance * 0.1;
-}
-
-function prefixScore(expected: string, actual: string): number {
-  if (!expected && !actual) {
-    return 1;
-  }
-  if (!expected || !actual) {
-    return 0;
-  }
-  if (actual.endsWith(expected) || expected.endsWith(actual)) {
-    return 1;
-  }
-
-  let shared = 0;
-  const max = Math.min(expected.length, actual.length);
-  for (let index = 1; index <= max; index += 1) {
-    if (expected.slice(-index) === actual.slice(-index)) {
-      shared = index;
-    }
-  }
-  return shared / Math.max(expected.length, actual.length);
-}
-
-function suffixScore(expected: string, actual: string): number {
-  if (!expected && !actual) {
-    return 1;
-  }
-  if (!expected || !actual) {
-    return 0;
-  }
-  if (actual.startsWith(expected) || expected.startsWith(actual)) {
-    return 1;
-  }
-
-  let shared = 0;
-  const max = Math.min(expected.length, actual.length);
-  for (let index = 1; index <= max; index += 1) {
-    if (expected.slice(0, index) === actual.slice(0, index)) {
-      shared = index;
-    }
-  }
-  return shared / Math.max(expected.length, actual.length);
 }
 
 function normalizeWithMap(value: string): NormalizedIndex {

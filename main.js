@@ -8158,7 +8158,18 @@ var import_obsidian2 = require("obsidian");
 var MARK_SELECTOR = ".yh-reading-highlight, mark.yh-highlight";
 var MOBILE_RENDER_DELAYS = [0, 80, 220, 520, 900];
 var DESKTOP_RENDER_DELAYS = [0, 40, 160];
+var installedRoots = /* @__PURE__ */ new WeakMap();
+var refreshing = false;
 function installReadingViewHighlights(options) {
+  let installedKeys = installedRoots.get(options.root);
+  if (!installedKeys) {
+    installedKeys = /* @__PURE__ */ new Set();
+    installedRoots.set(options.root, installedKeys);
+  }
+  if (installedKeys.has(options.installKey)) {
+    return;
+  }
+  installedKeys.add(options.installKey);
   const component = new import_obsidian2.MarkdownRenderChild(options.root);
   let frame = null;
   let disposed = false;
@@ -8180,6 +8191,9 @@ function installReadingViewHighlights(options) {
     component.register(() => window.clearTimeout(timer));
   }
   const observer = new MutationObserver((mutations) => {
+    if (refreshing) {
+      return;
+    }
     if (mutations.every(isOwnHighlightMutation)) {
       return;
     }
@@ -8192,13 +8206,21 @@ function installReadingViewHighlights(options) {
       cancelAnimationFrame(frame);
     }
     observer.disconnect();
+    installedKeys?.delete(options.installKey);
   });
   options.context.addChild(component);
 }
 function refreshReadingViewHighlights(root, marks) {
-  unwrapReadingHighlights(root);
-  renderReadingHighlights(root, marks);
-  renderCalloutReadingHighlights(root, marks);
+  refreshing = true;
+  try {
+    unwrapReadingHighlights(root);
+    renderReadingHighlights(root, marks);
+    renderCalloutReadingHighlights(root, marks);
+  } finally {
+    queueMicrotask(() => {
+      refreshing = false;
+    });
+  }
 }
 function renderReadingHighlights(root, marks) {
   const liveMarks = marks.filter((mark) => !mark.orphaned && mark.anchor.selectedText.trim()).sort((left, right) => right.anchor.selectedText.length - left.anchor.selectedText.length);
@@ -17222,9 +17244,11 @@ ${lines.slice(0, 8).join("\n")}`);
       return;
     }
     await this.store.getDocument(file);
+    const root = element.closest(".markdown-embed") ?? element.closest(".markdown-preview-view") ?? element;
     installReadingViewHighlights({
-      root: element,
+      root,
       context,
+      installKey: context.sourcePath,
       getMarks: () => {
         const doc = this.store.getCachedDocument(file.path);
         if (!doc) {

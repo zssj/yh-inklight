@@ -1074,9 +1074,19 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     await this.store.getDocument(file);
     // 回调实时读取 store 缓存：新建/删除高亮后 observer 自动重绘时拿到的是最新列表，
     // 避免安装时快照把后建的高亮抹掉（重开标签页才恢复的现象）。
+    // post-processor 的 element 只是预览页的单个 section（obsidian.d.ts:3837，
+    // 通常只含一个段落），跨段选区的文本不在任何单个 section 内，精确定位必然失败、
+    // fuzzy 只能包住其中最长的一段——必须向上取整个预览页作为高亮根节点。
+    // embed 内容位于 .markdown-embed 内且同样含完整文本，优先取它，避免把整篇宿主笔记
+    // 一起 collectText（宿主文本可能与 embed 文本互为候选，干扰消歧评分）。
+    const root =
+      element.closest<HTMLElement>(".markdown-embed") ??
+      element.closest<HTMLElement>(".markdown-preview-view") ??
+      element;
     installReadingViewHighlights({
-      root: element,
+      root,
       context,
+      installKey: context.sourcePath,
       getMarks: () => {
         const doc = this.store.getCachedDocument(file.path);
         if (!doc) {

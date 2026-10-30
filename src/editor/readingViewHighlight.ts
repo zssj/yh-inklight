@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Reading View 渲染 DOM、TextAnchor 数据与 fuzzyMatch 的容错定位能力
- * [OUTPUT]: 对外提供 installReadingViewHighlights，在非 CodeMirror 阅读模式中注入视觉高亮
+ * [OUTPUT]: 对外提供 installReadingViewHighlights（按 root+sourcePath 去重安装，根节点为整个预览页）与 refreshReadingViewHighlights
  * [POS]: editor 模块的 Reading View 投影层，与 highlightExtension 分别覆盖 HTML DOM 与 CM6
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
@@ -17,6 +17,8 @@ export type ReadingMark = Pick<HighlightAnnotation | CommentAnnotation, "id" | "
 interface InstallReadingHighlightsOptions {
   root: HTMLElement;
   context: MarkdownPostProcessorContext;
+  /** 安装去重键（sourcePath）：root 上取到的是整个预览页，每个 section 的 post-processor 都会来安装，同键只装一次 */
+  installKey: string;
   /** 实时读取最新 marks（不能用安装时的快照：新建高亮后 observer 重绘会用旧列表把新高亮抹掉） */
   getMarks: () => ReadingMark[];
 }
@@ -36,7 +38,24 @@ const MARK_SELECTOR = ".yh-reading-highlight, mark.yh-highlight";
 const MOBILE_RENDER_DELAYS = [0, 80, 220, 520, 900];
 const DESKTOP_RENDER_DELAYS = [0, 40, 160];
 
+/** 已安装记录：root → 已装 installKey 集合（root 是整个预览页，每个 section 的 post-processor 都会触发安装） */
+const installedRoots = new WeakMap<HTMLElement, Set<string>>();
+
+/** 同步刷新中标志：unwrap 移动 Text 节点产生的 mutation 不被 isOwnHighlightMutation 识别，会触发"重绘→unwrap→再重绘"死循环 */
+let refreshing = false;
+
 export function installReadingViewHighlights(options: InstallReadingHighlightsOptions): void {
+  let installedKeys = installedRoots.get(options.root);
+  if (!installedKeys) {
+    installedKeys = new Set<string>();
+    installedRoots.set(options.root, installedKeys);
+  }
+  if (installedKeys.has(options.installKey)) {
+    // 同一预览页同一文件已装过 observer（其余 section 的 post-processor 重复到达），直接复用
+    return;
+  }
+  installedKeys.add(options.installKey);
+
   const component = new MarkdownRenderChild(options.root);
   let frame: number | null = null;
   let disposed = false;
@@ -63,6 +82,10 @@ export function installReadingViewHighlights(options: InstallReadingHighlightsOp
   }
 
   const observer = new MutationObserver((mutations) => {
+    if (refreshing) {
+      return;
+    }
+
     if (mutations.every(isOwnHighlightMutation)) {
       return;
     }
@@ -77,14 +100,24 @@ export function installReadingViewHighlights(options: InstallReadingHighlightsOp
       cancelAnimationFrame(frame);
     }
     observer.disconnect();
+    installedKeys?.delete(options.installKey);
   });
   options.context.addChild(component);
 }
 
 export function refreshReadingViewHighlights(root: HTMLElement, marks: ReadingMark[]): void {
-  unwrapReadingHighlights(root);
-  renderReadingHighlights(root, marks);
-  renderCalloutReadingHighlights(root, marks);
+  refreshing = true;
+  try {
+    unwrapReadingHighlights(root);
+    renderReadingHighlights(root, marks);
+    renderCalloutReadingHighlights(root, marks);
+  } finally {
+    // observer 回调是 mutation 后排队的微任务，先于本复位执行，刷新期间的 mutation 会被 refreshing 挡掉；
+    // 复位必须异步进行，否则刷新刚结束时 observer 仍会读到 false 而再次触发。
+    queueMicrotask(() => {
+      refreshing = false;
+    });
+  }
 }
 
 function renderReadingHighlights(root: HTMLElement, marks: ReadingMark[]): void {

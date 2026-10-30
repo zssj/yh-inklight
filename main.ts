@@ -132,8 +132,6 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       onComment: () => this.createComment(),
       onCopy: () => this.copySelection(),
       onOpenSidebar: () => this.activateSidebar(),
-      // 移动端 md 吸底用：复用 EPUB 的底部安全间距设置（安卓系统导航条遮挡时调大）
-      getBottomInset: () => this.settings.epubMobileBottomInset,
     });
     this.popover = new AnnotationPopover({ app: this.app, component: this });
     this.pdfViewerAdapter = new PdfViewerAdapter(this.app, this);

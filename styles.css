@@ -157,13 +157,6 @@
   transform: translate(-50%, 0);
 }
 
-/* 移动端 md：工具栏吸底（固定于系统导航条上方），避开 Android 系统选择操作条。
-   bottom 由 JS 内联写入（含设置里的底部安全间距），此处只切换定位方式；
-   transform 沿用上面的 translateX(-50%) 做水平居中。 */
-.yh-toolbar.yh-toolbar--docked {
-  position: fixed;
-  top: auto;
-}
 
 .yh-toolbar-color {
   width: 20px;

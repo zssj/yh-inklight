@@ -184,6 +184,14 @@ function locateRenderedRange(renderedText: string, anchor: TextAnchor): Rendered
     return normalized;
   }
 
+  // 编辑模式创建的锚点存的是 Markdown 源码原文（含换行与 ##、**、[[ 等语法字符），
+  // 阅读模式渲染 DOM 里两者都不存在，精确/归一化均失配。此处剥掉空白与装饰字符后
+  // 再搜，用位置映射还原偏移，并要求前后文评分 ≥ 0.5 防止误匹配到别处。
+  const stripped = locateStrippedRange(renderedText, anchor);
+  if (stripped) {
+    return stripped;
+  }
+
   const fuzzy = findBestFuzzyMatch(
     renderedText,
     anchor.selectedText,
@@ -247,6 +255,75 @@ function locateNormalizedRange(renderedText: string, anchor: TextAnchor): Render
   }
 
   return best?.range ?? null;
+}
+
+const MARKDOWN_DECORATION_CHARS = new Set([
+  "*",
+  "_",
+  "~",
+  "=",
+  "`",
+  "[",
+  "]",
+  "(",
+  ")",
+  "#",
+  ">",
+  "|",
+  "+",
+  "-",
+]);
+
+function locateStrippedRange(renderedText: string, anchor: TextAnchor): RenderedRange | null {
+  if (!anchor.selectedText) {
+    return null;
+  }
+
+  const rendered = stripWithMap(renderedText);
+  const selected = stripWithMap(anchor.selectedText);
+  if (rendered.text.length < 2 || !selected.text) {
+    return null;
+  }
+
+  let strippedStart = rendered.text.indexOf(selected.text);
+  let best: { range: RenderedRange; score: number } | null = null;
+
+  while (strippedStart >= 0) {
+    const strippedEnd = strippedStart + selected.text.length - 1;
+    const start = rendered.map[strippedStart];
+    const end = rendered.map[strippedEnd] + 1;
+    if (start !== undefined && end !== undefined && start < end) {
+      const range = { start, end };
+      const score = rangeScore(renderedText, anchor, range);
+      if (!best || score > best.score) {
+        best = { range, score };
+      }
+    }
+    strippedStart = rendered.text.indexOf(selected.text, strippedStart + 1);
+  }
+
+  if (!best || best.score < 0.5) {
+    return null;
+  }
+
+  return best.range;
+}
+
+/** 剥掉空白与 Markdown 装饰字符，保留原位置映射（map[i] = 第 i 个保留字符在原文中的下标）。 */
+function stripWithMap(text: string): NormalizedIndex {
+  const map: number[] = [];
+  let stripped = "";
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (/\s/.test(char) || MARKDOWN_DECORATION_CHARS.has(char)) {
+      continue;
+    }
+    stripped += char;
+    map.push(index);
+  }
+
+  return { text: stripped, map };
 }
 
 function rangeScore(renderedText: string, anchor: TextAnchor, range: RenderedRange): number {

@@ -8190,6 +8190,10 @@ function locateRenderedRange(renderedText, anchor) {
   if (normalized) {
     return normalized;
   }
+  const stripped = locateStrippedRange(renderedText, anchor);
+  if (stripped) {
+    return stripped;
+  }
   const fuzzy = findBestFuzzyMatch(
     renderedText,
     anchor.selectedText,
@@ -8244,6 +8248,64 @@ function locateNormalizedRange(renderedText, anchor) {
     normalizedStart = rendered.text.indexOf(selected.text, normalizedStart + 1);
   }
   return best?.range ?? null;
+}
+var MARKDOWN_DECORATION_CHARS = /* @__PURE__ */ new Set([
+  "*",
+  "_",
+  "~",
+  "=",
+  "`",
+  "[",
+  "]",
+  "(",
+  ")",
+  "#",
+  ">",
+  "|",
+  "+",
+  "-"
+]);
+function locateStrippedRange(renderedText, anchor) {
+  if (!anchor.selectedText) {
+    return null;
+  }
+  const rendered = stripWithMap(renderedText);
+  const selected = stripWithMap(anchor.selectedText);
+  if (rendered.text.length < 2 || !selected.text) {
+    return null;
+  }
+  let strippedStart = rendered.text.indexOf(selected.text);
+  let best = null;
+  while (strippedStart >= 0) {
+    const strippedEnd = strippedStart + selected.text.length - 1;
+    const start = rendered.map[strippedStart];
+    const end = rendered.map[strippedEnd] + 1;
+    if (start !== void 0 && end !== void 0 && start < end) {
+      const range = { start, end };
+      const score = rangeScore(renderedText, anchor, range);
+      if (!best || score > best.score) {
+        best = { range, score };
+      }
+    }
+    strippedStart = rendered.text.indexOf(selected.text, strippedStart + 1);
+  }
+  if (!best || best.score < 0.5) {
+    return null;
+  }
+  return best.range;
+}
+function stripWithMap(text) {
+  const map = [];
+  let stripped = "";
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (/\s/.test(char) || MARKDOWN_DECORATION_CHARS.has(char)) {
+      continue;
+    }
+    stripped += char;
+    map.push(index);
+  }
+  return { text: stripped, map };
 }
 function rangeScore(renderedText, anchor, range) {
   const before = renderedText.slice(Math.max(0, range.start - anchor.prefix.length), range.start);
@@ -8512,16 +8574,20 @@ var SelectionToolbar = class {
     }
     const rect = range.getBoundingClientRect();
     if (import_obsidian3.Platform.isMobile && isSelectionInsideMarkdown(range)) {
-      this.element.style.top = "";
-      this.element.style.left = "50%";
-      this.element.style.bottom = `${Math.max(8, this.options.getBottomInset() + 8)}px`;
-      this.element.toggleClass("yh-toolbar--docked", true);
+      const offset = 8;
+      const height = this.element.offsetHeight || 44;
+      let top = rect.bottom + offset;
+      if (top + height > window.innerHeight - offset) {
+        top = Math.max(offset, rect.top - height - offset);
+      }
+      this.element.style.bottom = "";
+      this.element.style.top = `${top}px`;
+      this.element.style.left = `${Math.min(Math.max(8, rect.left + rect.width / 2), window.innerWidth - 8)}px`;
       this.element.toggleClass("is-visible", true);
       this.visible = true;
       return;
     }
     this.element.style.bottom = "";
-    this.element.toggleClass("yh-toolbar--docked", false);
     this.element.style.left = `${Math.max(8, rect.left + rect.width / 2)}px`;
     this.element.style.top = `${Math.max(8, rect.top - 46)}px`;
     this.element.toggleClass("is-visible", true);
@@ -16324,9 +16390,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian21.Plugin {
       onHighlight: (color) => this.createHighlight(color),
       onComment: () => this.createComment(),
       onCopy: () => this.copySelection(),
-      onOpenSidebar: () => this.activateSidebar(),
-      // 移动端 md 吸底用：复用 EPUB 的底部安全间距设置（安卓系统导航条遮挡时调大）
-      getBottomInset: () => this.settings.epubMobileBottomInset
+      onOpenSidebar: () => this.activateSidebar()
     });
     this.popover = new AnnotationPopover({ app: this.app, component: this });
     this.pdfViewerAdapter = new PdfViewerAdapter(this.app, this);

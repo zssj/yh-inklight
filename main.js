@@ -7758,7 +7758,7 @@ __export(main_exports, {
   default: () => OverlayAnnotationsPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian20 = require("obsidian");
+var import_obsidian21 = require("obsidian");
 
 // src/anchor/fuzzyMatch.ts
 function findBestFuzzyMatch(source, target, expectedStart) {
@@ -8395,6 +8395,9 @@ function highlightSelectorForId(id) {
   return `.yh-reading-highlight[data-yh-id="${escaped}"], mark.yh-highlight[data-yh-id="${escaped}"]`;
 }
 
+// src/editor/selectionToolbar.ts
+var import_obsidian3 = require("obsidian");
+
 // src/storage/types.ts
 var ANNOTATION_COLORS = [
   "yellow",
@@ -8508,6 +8511,17 @@ var SelectionToolbar = class {
       return;
     }
     const rect = range.getBoundingClientRect();
+    if (import_obsidian3.Platform.isMobile && isSelectionInsideMarkdown(range)) {
+      this.element.style.top = "";
+      this.element.style.left = "50%";
+      this.element.style.bottom = `${Math.max(8, this.options.getBottomInset() + 8)}px`;
+      this.element.toggleClass("yh-toolbar--docked", true);
+      this.element.toggleClass("is-visible", true);
+      this.visible = true;
+      return;
+    }
+    this.element.style.bottom = "";
+    this.element.toggleClass("yh-toolbar--docked", false);
     this.element.style.left = `${Math.max(8, rect.left + rect.width / 2)}px`;
     this.element.style.top = `${Math.max(8, rect.top - 46)}px`;
     this.element.toggleClass("is-visible", true);
@@ -8562,6 +8576,13 @@ function isSelectionInsideWorkspace(range) {
     container.closest(".workspace") || container.closest(".callout-content") || container.closest(".markdown-preview-view")
   );
 }
+function isSelectionInsideMarkdown(range) {
+  const container = range.commonAncestorContainer instanceof HTMLElement ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
+  if (!container) {
+    return false;
+  }
+  return Boolean(container.closest(".markdown-source-view") || container.closest(".markdown-preview-view"));
+}
 var NOTE_ICON = `
   <svg width="14" height="14" viewBox="0 0 24 24"
     fill="none" stroke="currentColor" stroke-width="2"
@@ -8594,7 +8615,7 @@ var OVERVIEW_ICON = `
 `;
 
 // src/pdf/pdfAnnotationLayer.ts
-var import_obsidian3 = require("obsidian");
+var import_obsidian4 = require("obsidian");
 var PDF_VIEWER_SELECTOR = ".pdf-container, .pdf-viewer, .pdf-embed, .workspace-leaf-content[data-type='pdf']";
 var PdfAnnotationLayer = class {
   constructor(options) {
@@ -8647,7 +8668,7 @@ var PdfAnnotationLayer = class {
   async createHighlight(color) {
     const snapshot = this.resolveSelection();
     if (!snapshot) {
-      new import_obsidian3.Notice("\u8BF7\u5148\u5728 PDF \u4E2D\u9009\u4E2D\u6587\u672C\u3002");
+      new import_obsidian4.Notice("\u8BF7\u5148\u5728 PDF \u4E2D\u9009\u4E2D\u6587\u672C\u3002");
       return true;
     }
     await this.options.addHighlight(snapshot.file, {
@@ -8663,7 +8684,7 @@ var PdfAnnotationLayer = class {
   async createComment(color, content, author, title = "") {
     const snapshot = this.resolveSelection();
     if (!snapshot) {
-      new import_obsidian3.Notice("\u8BF7\u5148\u5728 PDF \u4E2D\u9009\u4E2D\u6587\u672C\u3002");
+      new import_obsidian4.Notice("\u8BF7\u5148\u5728 PDF \u4E2D\u9009\u4E2D\u6587\u672C\u3002");
       return true;
     }
     const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -8964,7 +8985,7 @@ var PdfAnnotationLayer = class {
     const header = this.popover.createDiv({ cls: "yh-popover-header" });
     header.createSpan({ cls: "yh-popover-title", text: `PDF \u7B2C ${annotation.anchor.pageNumber} \u9875` });
     const close = header.createEl("button", { cls: "yh-icon-button", attr: { type: "button", title: "\u5173\u95ED" } });
-    (0, import_obsidian3.setIcon)(close, "x");
+    (0, import_obsidian4.setIcon)(close, "x");
     close.addEventListener("click", () => this.hidePopover());
     const card = this.popover.createDiv({
       cls: "yh-popover-card",
@@ -8973,7 +8994,7 @@ var PdfAnnotationLayer = class {
     card.createDiv({ cls: "yh-popover-quote", text: annotation.anchor.selectedText });
     if ("content" in annotation && annotation.content) {
       const body = card.createDiv({ cls: "yh-popover-body" });
-      import_obsidian3.MarkdownRenderer.render(this.options.app, annotation.content, body, sourcePath, this.options.component);
+      import_obsidian4.MarkdownRenderer.render(this.options.app, annotation.content, body, sourcePath, this.options.component);
     }
     const width = Math.min(320, window.innerWidth - 24);
     this.popover.style.width = `${width}px`;
@@ -9031,7 +9052,7 @@ function pdfHighlightBackground(color) {
 }
 
 // src/pdf/pdfViewerAdapter.ts
-var import_obsidian4 = require("obsidian");
+var import_obsidian5 = require("obsidian");
 var PDF_PAGE_SELECTOR = ".pdf-page, .page[data-page-number], .page";
 var PDF_VIEWER_SELECTOR2 = ".pdf-container, .pdf-viewer, .pdf-embed, .workspace-leaf-content[data-type='pdf']";
 var PdfViewerAdapter = class {
@@ -9041,7 +9062,7 @@ var PdfViewerAdapter = class {
   }
   getContext() {
     const file = this.app.workspace.getActiveFile();
-    if (!(file instanceof import_obsidian4.TFile) || file.extension.toLowerCase() !== "pdf") {
+    if (!(file instanceof import_obsidian5.TFile) || file.extension.toLowerCase() !== "pdf") {
       return null;
     }
     const activeView = this.app.workspace.activeLeaf?.view;
@@ -9274,10 +9295,10 @@ var PdfViewerAdapter = class {
 };
 
 // src/settings/settingsTab.ts
-var import_obsidian6 = require("obsidian");
+var import_obsidian7 = require("obsidian");
 
 // src/ai/EpubAiClient.ts
-var import_obsidian5 = require("obsidian");
+var import_obsidian6 = require("obsidian");
 var REQUEST_TIMEOUT_MS = 3e4;
 var MAX_SELECTED_CHARS = 3e3;
 var AI_PROVIDER_PRESETS = [
@@ -9477,7 +9498,7 @@ async function chatWithAi(cfg, systemPrompt, userText) {
   let response;
   try {
     response = await withTimeout(
-      (0, import_obsidian5.requestUrl)({
+      (0, import_obsidian6.requestUrl)({
         url: endpoint,
         method: "POST",
         contentType: "application/json",
@@ -9651,7 +9672,7 @@ function resolveFontFamily(fontFamily, custom) {
 }
 
 // src/settings/settingsTab.ts
-var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
+var AnnotationSettingsTab = class extends import_obsidian7.PluginSettingTab {
   constructor(plugin) {
     super(plugin.app, plugin);
     this.plugin = plugin;
@@ -9660,7 +9681,7 @@ var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "\u58A8\u5149\u6279\u6CE8" });
-    new import_obsidian6.Setting(containerEl).setName("\u9ED8\u8BA4\u9AD8\u4EAE\u989C\u8272").addDropdown((dropdown) => {
+    new import_obsidian7.Setting(containerEl).setName("\u9ED8\u8BA4\u9AD8\u4EAE\u989C\u8272").addDropdown((dropdown) => {
       for (const color of ANNOTATION_COLORS) {
         dropdown.addOption(color, COLOR_LABELS[color]);
       }
@@ -9669,14 +9690,14 @@ var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u4FBF\u7B7E\u5BBD\u5EA6").addSlider((slider) => {
+    new import_obsidian7.Setting(containerEl).setName("\u4FBF\u7B7E\u5BBD\u5EA6").addSlider((slider) => {
       slider.setLimits(220, 420, 10).setValue(this.plugin.settings.stickyWidth).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.stickyWidth = value;
         await this.plugin.saveSettings();
         this.plugin.refreshAnnotations();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u4FBF\u7B7E\u663E\u793A\u4F4D\u7F6E").setDesc("\u53F3\u4FA7\u4E3A\u9605\u8BFB\u5E03\u5C40\u9996\u9009\uFF1B\u5DE6\u4FA7\u4E3A\u9AD8\u7EA7\u504F\u597D\u3002").addDropdown((dropdown) => {
+    new import_obsidian7.Setting(containerEl).setName("\u4FBF\u7B7E\u663E\u793A\u4F4D\u7F6E").setDesc("\u53F3\u4FA7\u4E3A\u9605\u8BFB\u5E03\u5C40\u9996\u9009\uFF1B\u5DE6\u4FA7\u4E3A\u9AD8\u7EA7\u504F\u597D\u3002").addDropdown((dropdown) => {
       dropdown.addOption("right", "\u53F3\u4FA7");
       dropdown.addOption("left", "\u5DE6\u4FA7");
       dropdown.setValue(this.plugin.settings.stickySide).onChange(async (value) => {
@@ -9685,27 +9706,27 @@ var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
         this.plugin.refreshAnnotations();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u7A84\u5C4F\u6298\u53E0\u9608\u503C").setDesc("\u5F53\u7F16\u8F91\u9762\u677F\u5BBD\u5EA6\u4F4E\u4E8E\u6B64\u503C\u65F6\uFF0C\u4FBF\u7B7E\u4EE5\u5F39\u5C42\u5F62\u5F0F\u663E\u793A\u3002").addSlider((slider) => {
+    new import_obsidian7.Setting(containerEl).setName("\u7A84\u5C4F\u6298\u53E0\u9608\u503C").setDesc("\u5F53\u7F16\u8F91\u9762\u677F\u5BBD\u5EA6\u4F4E\u4E8E\u6B64\u503C\u65F6\uFF0C\u4FBF\u7B7E\u4EE5\u5F39\u5C42\u5F62\u5F0F\u663E\u793A\u3002").addSlider((slider) => {
       slider.setLimits(640, 1200, 20).setValue(this.plugin.settings.stickyCollapseWidth).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.stickyCollapseWidth = value;
         await this.plugin.saveSettings();
         this.plugin.refreshAnnotations();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u663E\u793A\u8FDE\u63A5\u7EBF").addToggle((toggle) => {
+    new import_obsidian7.Setting(containerEl).setName("\u663E\u793A\u8FDE\u63A5\u7EBF").addToggle((toggle) => {
       toggle.setValue(this.plugin.settings.showLeaderLines).onChange(async (value) => {
         this.plugin.settings.showLeaderLines = value;
         await this.plugin.saveSettings();
         this.plugin.refreshAnnotations();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u9ED8\u8BA4\u4F5C\u8005").addText((text) => {
+    new import_obsidian7.Setting(containerEl).setName("\u9ED8\u8BA4\u4F5C\u8005").addText((text) => {
       text.setValue(this.plugin.settings.defaultAuthor).onChange(async (value) => {
         this.plugin.settings.defaultAuthor = value.trim() || "\u8BFB\u8005";
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u91CD\u547D\u540D\u65F6\u8FC1\u79FB\u6279\u6CE8").addToggle((toggle) => {
+    new import_obsidian7.Setting(containerEl).setName("\u91CD\u547D\u540D\u65F6\u8FC1\u79FB\u6279\u6CE8").addToggle((toggle) => {
       toggle.setValue(this.plugin.settings.migrateOnRename).onChange(async (value) => {
         this.plugin.settings.migrateOnRename = value;
         await this.plugin.saveSettings();
@@ -9719,7 +9740,7 @@ var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
   renderEpubSettings() {
     const { containerEl } = this;
     containerEl.createEl("h3", { text: "EPUB \u9605\u8BFB" });
-    new import_obsidian6.Setting(containerEl).setName("\u9605\u8BFB\u5B57\u53F7").setDesc("EPUB \u6B63\u6587\u57FA\u7840\u5B57\u53F7\uFF08px\uFF09\u3002\u6539\u5B8C\u7ACB\u5373\u751F\u6548\u3002").addSlider((slider) => {
+    new import_obsidian7.Setting(containerEl).setName("\u9605\u8BFB\u5B57\u53F7").setDesc("EPUB \u6B63\u6587\u57FA\u7840\u5B57\u53F7\uFF08px\uFF09\u3002\u6539\u5B8C\u7ACB\u5373\u751F\u6548\u3002").addSlider((slider) => {
       slider.setLimits(12, 28, 1).setValue(this.plugin.settings.epubFontSize).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.epubFontSize = value;
         await this.plugin.saveSettings();
@@ -9733,7 +9754,7 @@ var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
       }
       fontSampleEl.style.fontFamily = resolveFontFamily(this.plugin.settings.epubFontFamily, this.plugin.settings.epubFontFamilyCustom) || "inherit";
     };
-    const fontSetting = new import_obsidian6.Setting(containerEl).setName("\u6B63\u6587\u5B57\u4F53").setDesc(
+    const fontSetting = new import_obsidian7.Setting(containerEl).setName("\u6B63\u6587\u5B57\u4F53").setDesc(
       "\u63A7\u5236 EPUB \u6B63\u6587\u6BB5\u843D\u4F7F\u7528\u7684\u5B57\u4F53\u3002\u4E0B\u62C9\u53EA\u5217\u51FA\u672C\u673A\u5DF2\u5B89\u88C5\u7684\u5E38\u89C1\u5B57\u4F53\uFF1B\u5217\u8868\u91CC\u6CA1\u6709\u7684\u53EF\u5728\u4E0B\u65B9\u624B\u586B\uFF0C\u624B\u586B\u4F18\u5148\u3002\u4E66\u81EA\u5E26\u7684\u6807\u9898\u3001\u5F15\u6587\u3001\u4EE3\u7801\u5B57\u4F53\u4E0D\u53D7\u5F71\u54CD\u3002\u6539\u5B8C\u7ACB\u5373\u751F\u6548\u3002"
     ).addDropdown((dropdown) => {
       for (const option of FIXED_FONT_OPTIONS) {
@@ -9767,21 +9788,21 @@ var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
     });
     fontSampleEl.style.cssText = "font-size:15px;line-height:1.7;color:var(--text-normal);word-break:break-word;";
     refreshFontPreview();
-    new import_obsidian6.Setting(containerEl).setName("\u9605\u8BFB\u884C\u8DDD").setDesc("EPUB \u6B63\u6587\u884C\u8DDD\uFF08\u500D\uFF09\u3002\u6539\u5B8C\u7ACB\u5373\u751F\u6548\u3002").addSlider((slider) => {
+    new import_obsidian7.Setting(containerEl).setName("\u9605\u8BFB\u884C\u8DDD").setDesc("EPUB \u6B63\u6587\u884C\u8DDD\uFF08\u500D\uFF09\u3002\u6539\u5B8C\u7ACB\u5373\u751F\u6548\u3002").addSlider((slider) => {
       slider.setLimits(1, 2.5, 0.05).setValue(this.plugin.settings.epubLineHeight).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.epubLineHeight = value;
         await this.plugin.saveSettings();
         this.plugin.refreshEpubReaderAppearance();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u7EDF\u4E00\u6B63\u6587\u5B57\u53F7").setDesc("\u5FFD\u7565\u7535\u5B50\u4E66\u81EA\u5E26\u7684\u6B63\u6587\u7F29\u653E\u500D\u6570\uFF0C\u6240\u6709\u4E66\u6B63\u6587\u6309\u300C\u9605\u8BFB\u5B57\u53F7\u300D\u663E\u793A\uFF1B\u4EC5\u5BF9\u6B63\u6587\u786E\u5B9E\u88AB\u4E66\u5185 CSS \u7F29\u653E\u7684\u4E66\u751F\u6548\uFF0C\u811A\u6CE8/\u56FE\u6CE8\u4E0D\u53D7\u5F71\u54CD\u3002\u6539\u5B8C\u7ACB\u5373\u751F\u6548\u3002").addToggle((toggle) => {
+    new import_obsidian7.Setting(containerEl).setName("\u7EDF\u4E00\u6B63\u6587\u5B57\u53F7").setDesc("\u5FFD\u7565\u7535\u5B50\u4E66\u81EA\u5E26\u7684\u6B63\u6587\u7F29\u653E\u500D\u6570\uFF0C\u6240\u6709\u4E66\u6B63\u6587\u6309\u300C\u9605\u8BFB\u5B57\u53F7\u300D\u663E\u793A\uFF1B\u4EC5\u5BF9\u6B63\u6587\u786E\u5B9E\u88AB\u4E66\u5185 CSS \u7F29\u653E\u7684\u4E66\u751F\u6548\uFF0C\u811A\u6CE8/\u56FE\u6CE8\u4E0D\u53D7\u5F71\u54CD\u3002\u6539\u5B8C\u7ACB\u5373\u751F\u6548\u3002").addToggle((toggle) => {
       toggle.setValue(this.plugin.settings.epubUnifyBodyFontSize).onChange(async (value) => {
         this.plugin.settings.epubUnifyBodyFontSize = value;
         await this.plugin.saveSettings();
         this.plugin.refreshEpubReaderAppearance(true);
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u9605\u8BFB\u4E3B\u9898").setDesc("EPUB \u9605\u8BFB\u533A\u80CC\u666F\u4E0E\u6587\u5B57\u914D\u8272\u3002").addDropdown((dropdown) => {
+    new import_obsidian7.Setting(containerEl).setName("\u9605\u8BFB\u4E3B\u9898").setDesc("EPUB \u9605\u8BFB\u533A\u80CC\u666F\u4E0E\u6587\u5B57\u914D\u8272\u3002").addDropdown((dropdown) => {
       for (const theme of EPUB_READING_THEMES) {
         dropdown.addOption(theme.id, theme.label);
       }
@@ -9790,7 +9811,7 @@ var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u7FFB\u9875\u6A21\u5F0F").setDesc("\u7FFB\u9875\u4E3A\u5206\u9875\u5E03\u5C40\uFF1B\u6EDA\u52A8\u4E3A\u8FDE\u7EED\u6EDA\u52A8\u9605\u8BFB\u3002").addDropdown((dropdown) => {
+    new import_obsidian7.Setting(containerEl).setName("\u7FFB\u9875\u6A21\u5F0F").setDesc("\u7FFB\u9875\u4E3A\u5206\u9875\u5E03\u5C40\uFF1B\u6EDA\u52A8\u4E3A\u8FDE\u7EED\u6EDA\u52A8\u9605\u8BFB\u3002").addDropdown((dropdown) => {
       dropdown.addOption("paginated", "\u7FFB\u9875");
       dropdown.addOption("scrolled", "\u6EDA\u52A8");
       dropdown.setValue(this.plugin.settings.epubDefaultFlow).onChange(async (value) => {
@@ -9798,13 +9819,13 @@ var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u7FFB\u9875\u52A8\u753B").setDesc("\u7FFB\u9875\u6A21\u5F0F\u4E0B\u5207\u6362\u9875\u9762\u65F6\u7684 300ms \u6ED1\u52A8\u8FC7\u6E21\u3002\u8FDE\u6309\u65B9\u5411\u952E\u7FFB\u9875\u4F1A\u53D8\u6162\uFF0C\u5ACC\u949D\u53EF\u5173\u95ED\u3002\u6EDA\u52A8\u6A21\u5F0F\u4E0D\u53D7\u5F71\u54CD\uFF1B\u6539\u8BBE\u7F6E\u540E\u91CD\u5F00\u4E66\u751F\u6548\u3002").addToggle((toggle) => {
+    new import_obsidian7.Setting(containerEl).setName("\u7FFB\u9875\u52A8\u753B").setDesc("\u7FFB\u9875\u6A21\u5F0F\u4E0B\u5207\u6362\u9875\u9762\u65F6\u7684 300ms \u6ED1\u52A8\u8FC7\u6E21\u3002\u8FDE\u6309\u65B9\u5411\u952E\u7FFB\u9875\u4F1A\u53D8\u6162\uFF0C\u5ACC\u949D\u53EF\u5173\u95ED\u3002\u6EDA\u52A8\u6A21\u5F0F\u4E0D\u53D7\u5F71\u54CD\uFF1B\u6539\u8BBE\u7F6E\u540E\u91CD\u5F00\u4E66\u751F\u6548\u3002").addToggle((toggle) => {
       toggle.setValue(this.plugin.settings.epubPageAnimation).onChange(async (value) => {
         this.plugin.settings.epubPageAnimation = value;
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u70B9\u51FB\u7FFB\u9875").setDesc("\u624B\u673A\u4E0A\u70B9\u51FB\u4E66\u9875\u5982\u4F55\u7FFB\u9875\uFF0C\u4EC5\u7FFB\u9875\u6A21\u5F0F\u751F\u6548\u3002\u5206\u533A\uFF1A\u9876\u90E8 1/3 \u5168\u5BBD\u5F80\u540E\u7FFB\uFF08\u5DE6\u624B\u6301\u673A\u65F6\u4E0A\u7F18\u6700\u597D\u591F\uFF09\uFF0C\u5176\u4E0B\u5DE6 1/3 \u4E0A\u4E00\u9875\u3001\u53F3 1/3 \u4E0B\u4E00\u9875\uFF0C\u4E2D\u95F4\u4E0D\u7FFB\uFF1B\u5355\u51FB\u4E00\u5F8B\u540E\u7FFB\u65E0\u6CD5\u7528\u89E6\u6478\u5F80\u56DE\u7FFB\uFF1B\u53CC\u51FB\u5219\u53EA\u6709\u53CC\u51FB\u4F1A\u7FFB\u3002\u70B9\u5230\u9009\u533A\u3001\u9AD8\u4EAE\u3001\u94FE\u63A5\u3001\u56FE\u7247\uFF0C\u6216\u957F\u6309\u9009\u5B57\u65F6\u90FD\u4E0D\u4F1A\u89E6\u53D1\u3002\u5DE6\u53F3\u6ED1\u52A8\u624B\u52BF\u7531\u9605\u8BFB\u5668\u81EA\u5E26\uFF0C\u4E0E\u672C\u6863\u4F4D\u65E0\u5173\uFF0C\u59CB\u7EC8\u53EF\u7528\u3002\u6539\u8BBE\u7F6E\u540E\u91CD\u5F00\u4E66\u751F\u6548\u3002").addDropdown((dropdown) => {
+    new import_obsidian7.Setting(containerEl).setName("\u70B9\u51FB\u7FFB\u9875").setDesc("\u624B\u673A\u4E0A\u70B9\u51FB\u4E66\u9875\u5982\u4F55\u7FFB\u9875\uFF0C\u4EC5\u7FFB\u9875\u6A21\u5F0F\u751F\u6548\u3002\u5206\u533A\uFF1A\u9876\u90E8 1/3 \u5168\u5BBD\u5F80\u540E\u7FFB\uFF08\u5DE6\u624B\u6301\u673A\u65F6\u4E0A\u7F18\u6700\u597D\u591F\uFF09\uFF0C\u5176\u4E0B\u5DE6 1/3 \u4E0A\u4E00\u9875\u3001\u53F3 1/3 \u4E0B\u4E00\u9875\uFF0C\u4E2D\u95F4\u4E0D\u7FFB\uFF1B\u5355\u51FB\u4E00\u5F8B\u540E\u7FFB\u65E0\u6CD5\u7528\u89E6\u6478\u5F80\u56DE\u7FFB\uFF1B\u53CC\u51FB\u5219\u53EA\u6709\u53CC\u51FB\u4F1A\u7FFB\u3002\u70B9\u5230\u9009\u533A\u3001\u9AD8\u4EAE\u3001\u94FE\u63A5\u3001\u56FE\u7247\uFF0C\u6216\u957F\u6309\u9009\u5B57\u65F6\u90FD\u4E0D\u4F1A\u89E6\u53D1\u3002\u5DE6\u53F3\u6ED1\u52A8\u624B\u52BF\u7531\u9605\u8BFB\u5668\u81EA\u5E26\uFF0C\u4E0E\u672C\u6863\u4F4D\u65E0\u5173\uFF0C\u59CB\u7EC8\u53EF\u7528\u3002\u6539\u8BBE\u7F6E\u540E\u91CD\u5F00\u4E66\u751F\u6548\u3002").addDropdown((dropdown) => {
       dropdown.addOption("single-zone", "\u5355\u51FB\u5206\u533A\uFF08\u9876\u90E8\u5168\u5BBD\u4E0E\u53F3\u4FA7\u540E\u7FFB\uFF0C\u4E0B\u65B9\u5DE6\u4FA7\u524D\u7FFB\uFF09");
       dropdown.addOption("single-next", "\u5355\u51FB\u4E00\u5F8B\u5F80\u540E\u7FFB");
       dropdown.addOption("double", "\u53CC\u51FB\u5F80\u540E\u7FFB");
@@ -9814,14 +9835,14 @@ var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u624B\u673A\u7AEF\u6C89\u6D78\u5F0F\u5BFC\u822A\u680F").setDesc("\u624B\u673A\u4E0A\u9605\u8BFB EPUB \u65F6\uFF0C\u5411\u4E0B\u6EDA\u52A8\u81EA\u52A8\u9690\u85CF Obsidian \u5E95\u90E8\u5BFC\u822A\u680F\uFF0C\u5411\u4E0A\u6EDA\u52A8\u6062\u590D\u3002").addToggle((toggle) => {
+    new import_obsidian7.Setting(containerEl).setName("\u624B\u673A\u7AEF\u6C89\u6D78\u5F0F\u5BFC\u822A\u680F").setDesc("\u624B\u673A\u4E0A\u9605\u8BFB EPUB \u65F6\uFF0C\u5411\u4E0B\u6EDA\u52A8\u81EA\u52A8\u9690\u85CF Obsidian \u5E95\u90E8\u5BFC\u822A\u680F\uFF0C\u5411\u4E0A\u6EDA\u52A8\u6062\u590D\u3002").addToggle((toggle) => {
       toggle.setValue(this.plugin.settings.epubHideMobileNavbar).onChange(async (value) => {
         this.plugin.settings.epubHideMobileNavbar = value;
         await this.plugin.saveSettings();
       });
     });
-    if (import_obsidian6.Platform.isAndroidApp) {
-      new import_obsidian6.Setting(containerEl).setName("\u5E95\u90E8\u5B89\u5168\u95F4\u8DDD").setDesc("EPUB \u8FDB\u5EA6\u6761\u4E0E\u624B\u673A\u7CFB\u7EDF\u5BFC\u822A\u6761\u4E4B\u95F4\u7684\u8DDD\u79BB\uFF08px\uFF09\u3002\u8FDB\u5EA6\u6761\u88AB\u7CFB\u7EDF\u5BFC\u822A\u6761\u6321\u4F4F\u65F6\u8C03\u5927\uFF0C\u8C03\u5230\u8FDB\u5EA6\u6761\u5B8C\u6574\u9732\u51FA\u4E3A\u6B62\u3002").addSlider((slider) => {
+    if (import_obsidian7.Platform.isAndroidApp) {
+      new import_obsidian7.Setting(containerEl).setName("\u5E95\u90E8\u5B89\u5168\u95F4\u8DDD").setDesc("EPUB \u8FDB\u5EA6\u6761\u4E0E\u624B\u673A\u7CFB\u7EDF\u5BFC\u822A\u6761\u4E4B\u95F4\u7684\u8DDD\u79BB\uFF08px\uFF09\u3002\u8FDB\u5EA6\u6761\u88AB\u7CFB\u7EDF\u5BFC\u822A\u6761\u6321\u4F4F\u65F6\u8C03\u5927\uFF0C\u8C03\u5230\u8FDB\u5EA6\u6761\u5B8C\u6574\u9732\u51FA\u4E3A\u6B62\u3002").addSlider((slider) => {
         slider.setLimits(0, 64, 2).setValue(this.plugin.settings.epubMobileBottomInset).setDynamicTooltip().onChange(async (value) => {
           this.plugin.settings.epubMobileBottomInset = value;
           await this.plugin.saveSettings();
@@ -9829,7 +9850,7 @@ var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
         });
       });
     }
-    new import_obsidian6.Setting(containerEl).setName("\u9AD8\u4EAE\u6837\u5F0F").setDesc("EPUB \u6587\u672C\u6807\u6CE8\u7684\u9ED8\u8BA4\u5448\u73B0\u6837\u5F0F\u3002").addDropdown((dropdown) => {
+    new import_obsidian7.Setting(containerEl).setName("\u9AD8\u4EAE\u6837\u5F0F").setDesc("EPUB \u6587\u672C\u6807\u6CE8\u7684\u9ED8\u8BA4\u5448\u73B0\u6837\u5F0F\u3002").addDropdown((dropdown) => {
       for (const style2 of EPUB_HIGHLIGHT_STYLES) {
         dropdown.addOption(style2.id, style2.label);
       }
@@ -9843,7 +9864,7 @@ var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
   renderAiSettings() {
     const { containerEl } = this;
     containerEl.createEl("h3", { text: "AI \u52A9\u624B" });
-    new import_obsidian6.Setting(containerEl).setName("\u670D\u52A1\u5546").setDesc("\u9009\u4E2D\u540E\u81EA\u52A8\u586B\u5165\u63A5\u53E3\u5730\u5740\u4E0E\u63A8\u8350\u6A21\u578B\u540D\uFF0C\u4F60\u53EA\u9700\u586B API Key\u3002\u9009\u300C\u81EA\u5B9A\u4E49\u300D\u5219\u4E09\u9879\u90FD\u81EA\u5DF1\u586B\u3002").addDropdown((dropdown) => {
+    new import_obsidian7.Setting(containerEl).setName("\u670D\u52A1\u5546").setDesc("\u9009\u4E2D\u540E\u81EA\u52A8\u586B\u5165\u63A5\u53E3\u5730\u5740\u4E0E\u63A8\u8350\u6A21\u578B\u540D\uFF0C\u4F60\u53EA\u9700\u586B API Key\u3002\u9009\u300C\u81EA\u5B9A\u4E49\u300D\u5219\u4E09\u9879\u90FD\u81EA\u5DF1\u586B\u3002").addDropdown((dropdown) => {
       for (const preset of AI_PROVIDER_PRESETS) {
         dropdown.addOption(preset.id, preset.label);
       }
@@ -9858,42 +9879,42 @@ var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
         this.display();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u63A5\u53E3\u5730\u5740").setDesc("OpenAI \u517C\u5BB9\u7684 Base URL\uFF0C\u901A\u5E38\u4EE5 /v1 \u7ED3\u5C3E\u3002").addText((text) => {
+    new import_obsidian7.Setting(containerEl).setName("\u63A5\u53E3\u5730\u5740").setDesc("OpenAI \u517C\u5BB9\u7684 Base URL\uFF0C\u901A\u5E38\u4EE5 /v1 \u7ED3\u5C3E\u3002").addText((text) => {
       text.setValue(this.plugin.settings.aiBaseUrl).onChange(async (value) => {
         this.plugin.settings.aiBaseUrl = value.trim();
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("API Key").setDesc("\u660E\u6587\u4FDD\u5B58\u5728\u672C\u673A\u63D2\u4EF6 data.json\uFF0C\u8BF7\u52FF\u628A\u5E93\u76EE\u5F55\u5916\u4F20\u3002\u586B\u5B8C\u5EFA\u8BAE\u70B9\u4E0B\u65B9\u300C\u6D4B\u8BD5\u8FDE\u63A5\u300D\u3002").addText((text) => {
+    new import_obsidian7.Setting(containerEl).setName("API Key").setDesc("\u660E\u6587\u4FDD\u5B58\u5728\u672C\u673A\u63D2\u4EF6 data.json\uFF0C\u8BF7\u52FF\u628A\u5E93\u76EE\u5F55\u5916\u4F20\u3002\u586B\u5B8C\u5EFA\u8BAE\u70B9\u4E0B\u65B9\u300C\u6D4B\u8BD5\u8FDE\u63A5\u300D\u3002").addText((text) => {
       text.inputEl.type = "password";
       text.setValue(this.plugin.settings.aiApiKey).onChange(async (value) => {
         this.plugin.settings.aiApiKey = value.trim();
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u6A21\u578B\u540D").setDesc("\u4F8B\u5982 mimo-v2.6-flash\u3001deepseek-chat\u3002").addText((text) => {
+    new import_obsidian7.Setting(containerEl).setName("\u6A21\u578B\u540D").setDesc("\u4F8B\u5982 mimo-v2.6-flash\u3001deepseek-chat\u3002").addText((text) => {
       text.setValue(this.plugin.settings.aiModel).onChange(async (value) => {
         this.plugin.settings.aiModel = value.trim();
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u6700\u5927 Token").setDesc("\u5355\u6B21\u56DE\u590D\u7684\u8F93\u51FA\u4E0A\u9650\u3002\u9ED8\u8BA4 1024\uFF1B\u300C\u81EA\u5B9A\u4E49\u300D\u63D0\u95EE\u8981 200-300 \u5B57\uFF0C\u8C03\u5C0F\u5BB9\u6613\u88AB\u622A\u65AD\u3002\u56DE\u590D\u88AB\u622A\u65AD\u65F6\u4F1A\u5728\u672B\u5C3E\u63D0\u793A\u3002").addSlider((slider) => {
+    new import_obsidian7.Setting(containerEl).setName("\u6700\u5927 Token").setDesc("\u5355\u6B21\u56DE\u590D\u7684\u8F93\u51FA\u4E0A\u9650\u3002\u9ED8\u8BA4 1024\uFF1B\u300C\u81EA\u5B9A\u4E49\u300D\u63D0\u95EE\u8981 200-300 \u5B57\uFF0C\u8C03\u5C0F\u5BB9\u6613\u88AB\u622A\u65AD\u3002\u56DE\u590D\u88AB\u622A\u65AD\u65F6\u4F1A\u5728\u672B\u5C3E\u63D0\u793A\u3002").addSlider((slider) => {
       slider.setLimits(256, 4096, 256).setValue(this.plugin.settings.aiMaxTokens).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.aiMaxTokens = value;
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u9644\u52A0\u7CFB\u7EDF\u63D0\u793A\u8BCD").setDesc("\u53EF\u7559\u7A7A\u3002\u586B\u4E86\u4F1A\u8FFD\u52A0\u5728\u5185\u7F6E\u63D0\u793A\u8BCD\u4E4B\u540E\uFF0C\u7528\u6765\u8C03\u6574\u98CE\u683C\uFF0C\u4F8B\u5982\u300C\u56DE\u7B54\u8981\u50CF\u7ED9\u9AD8\u4E2D\u751F\u8BB2\u8BFE\u300D\u3002").addTextArea((area) => {
+    new import_obsidian7.Setting(containerEl).setName("\u9644\u52A0\u7CFB\u7EDF\u63D0\u793A\u8BCD").setDesc("\u53EF\u7559\u7A7A\u3002\u586B\u4E86\u4F1A\u8FFD\u52A0\u5728\u5185\u7F6E\u63D0\u793A\u8BCD\u4E4B\u540E\uFF0C\u7528\u6765\u8C03\u6574\u98CE\u683C\uFF0C\u4F8B\u5982\u300C\u56DE\u7B54\u8981\u50CF\u7ED9\u9AD8\u4E2D\u751F\u8BB2\u8BFE\u300D\u3002").addTextArea((area) => {
       area.setValue(this.plugin.settings.aiSystemPrompt).onChange(async (value) => {
         this.plugin.settings.aiSystemPrompt = value.trim();
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u8FDE\u63A5\u6D4B\u8BD5").setDesc("\u7528\u5F53\u524D\u914D\u7F6E\u53D1\u4E00\u6761\u6781\u5C0F\u8BF7\u6C42\uFF0C\u9A8C\u8BC1\u5730\u5740\u3001Key \u4E0E\u6A21\u578B\u662F\u5426\u53EF\u7528\u3002").addButton((button) => {
+    new import_obsidian7.Setting(containerEl).setName("\u8FDE\u63A5\u6D4B\u8BD5").setDesc("\u7528\u5F53\u524D\u914D\u7F6E\u53D1\u4E00\u6761\u6781\u5C0F\u8BF7\u6C42\uFF0C\u9A8C\u8BC1\u5730\u5740\u3001Key \u4E0E\u6A21\u578B\u662F\u5426\u53EF\u7528\u3002").addButton((button) => {
       button.setButtonText("\u6D4B\u8BD5\u8FDE\u63A5").setCta().onClick(async () => {
         const cfg = resolveAiConfig(this.plugin.settings);
         if (!isAiConfigured(cfg)) {
-          new import_obsidian6.Notice("AI \u52A9\u624B\uFF1A\u8BF7\u5148\u628A\u63A5\u53E3\u5730\u5740\u3001API Key\u3001\u6A21\u578B\u540D\u90FD\u586B\u4E0A");
+          new import_obsidian7.Notice("AI \u52A9\u624B\uFF1A\u8BF7\u5148\u628A\u63A5\u53E3\u5730\u5740\u3001API Key\u3001\u6A21\u578B\u540D\u90FD\u586B\u4E0A");
           return;
         }
         const originalLabel = button.buttonEl.textContent ?? "\u6D4B\u8BD5\u8FDE\u63A5";
@@ -9901,10 +9922,10 @@ var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
         button.setButtonText("\u6D4B\u8BD5\u4E2D\u2026");
         try {
           const reply = await testAiConnection(cfg);
-          new import_obsidian6.Notice(`AI \u52A9\u624B\u8FDE\u63A5\u6210\u529F\uFF1A${reply.slice(0, 80)}`, 8e3);
+          new import_obsidian7.Notice(`AI \u52A9\u624B\u8FDE\u63A5\u6210\u529F\uFF1A${reply.slice(0, 80)}`, 8e3);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          new import_obsidian6.Notice(`AI \u52A9\u624B\u6D4B\u8BD5\u5931\u8D25\uFF1A${message}`, 12e3);
+          new import_obsidian7.Notice(`AI \u52A9\u624B\u6D4B\u8BD5\u5931\u8D25\uFF1A${message}`, 12e3);
         } finally {
           button.setDisabled(false);
           button.setButtonText(originalLabel);
@@ -9916,13 +9937,13 @@ var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
   renderMarkdownStatsSettings() {
     const { containerEl } = this;
     containerEl.createEl("h3", { text: "Markdown \u7EDF\u8BA1" });
-    new import_obsidian6.Setting(containerEl).setName("\u7EDF\u8BA1 Markdown \u6253\u5F00\u6B21\u6570").setDesc("\u8BB0\u5F55\u6BCF\u4E2A Markdown \u7B14\u8BB0\u88AB\u6253\u5F00\u7684\u6B21\u6570\uFF0C\u7528\u4E8E\u300C\u7B14\u8BB0\u4F7F\u7528\u7EDF\u8BA1\u300D\u89C6\u56FE\u3002\u53EA\u8BB0\u5F55\u542F\u7528\u540E\u7684\u6253\u5F00\u884C\u4E3A\u3002").addToggle((toggle) => {
+    new import_obsidian7.Setting(containerEl).setName("\u7EDF\u8BA1 Markdown \u6253\u5F00\u6B21\u6570").setDesc("\u8BB0\u5F55\u6BCF\u4E2A Markdown \u7B14\u8BB0\u88AB\u6253\u5F00\u7684\u6B21\u6570\uFF0C\u7528\u4E8E\u300C\u7B14\u8BB0\u4F7F\u7528\u7EDF\u8BA1\u300D\u89C6\u56FE\u3002\u53EA\u8BB0\u5F55\u542F\u7528\u540E\u7684\u6253\u5F00\u884C\u4E3A\u3002").addToggle((toggle) => {
       toggle.setValue(this.plugin.settings.mdOpenTracking).onChange(async (value) => {
         this.plugin.settings.mdOpenTracking = value;
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian6.Setting(containerEl).setName("\u6E05\u7A7A\u6253\u5F00\u6B21\u6570\u7EDF\u8BA1").setDesc("\u5C06\u5168\u90E8 Markdown \u7B14\u8BB0\u7684\u6253\u5F00\u6B21\u6570\u6E05\u96F6\uFF08\u4E0D\u5F71\u54CD\u6279\u6CE8\u6570\u636E\uFF09\u3002").addButton((button) => {
+    new import_obsidian7.Setting(containerEl).setName("\u6E05\u7A7A\u6253\u5F00\u6B21\u6570\u7EDF\u8BA1").setDesc("\u5C06\u5168\u90E8 Markdown \u7B14\u8BB0\u7684\u6253\u5F00\u6B21\u6570\u6E05\u96F6\uFF08\u4E0D\u5F71\u54CD\u6279\u6CE8\u6570\u636E\uFF09\u3002").addButton((button) => {
       button.setButtonText("\u6E05\u7A7A\u7EDF\u8BA1").setWarning().onClick(async () => {
         this.plugin.mdOpenStats = {};
         await this.plugin.saveMdOpenStats();
@@ -9933,9 +9954,9 @@ var AnnotationSettingsTab = class extends import_obsidian6.PluginSettingTab {
 };
 
 // src/storage/annotationStore.ts
-var import_obsidian7 = require("obsidian");
+var import_obsidian8 = require("obsidian");
 var STORE_DIR = ".obsidian-annotations";
-var INDEX_PATH = (0, import_obsidian7.normalizePath)(`${STORE_DIR}/index.json`);
+var INDEX_PATH = (0, import_obsidian8.normalizePath)(`${STORE_DIR}/index.json`);
 var MAX_LEGACY_SIDECAR_NAME_LENGTH = 180;
 var MAX_COMPACT_SIDECAR_PREFIX_LENGTH = 96;
 var AnnotationStoreReadError = class extends Error {
@@ -9976,7 +9997,7 @@ var AnnotationStore = class {
     const filePaths = Object.keys(this.index.files).sort((left, right) => left.localeCompare(right));
     for (const filePath of filePaths) {
       const file = this.app.vault.getAbstractFileByPath(filePath);
-      if (!(file instanceof import_obsidian7.TFile)) {
+      if (!(file instanceof import_obsidian8.TFile)) {
         continue;
       }
       documents.push(await this.getDocument(file));
@@ -10014,7 +10035,7 @@ var AnnotationStore = class {
       this.verifyPersistedDocument(normalized, persisted, sidecarPath);
       await this.writeIndex(nextIndex);
     } catch (error) {
-      new import_obsidian7.Notice(`\u58A8\u5149\u6279\u6CE8\u672A\u4FDD\u5B58\uFF0C\u8BF7\u68C0\u67E5\u5199\u5165\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001\uFF1A${sidecarPath}`);
+      new import_obsidian8.Notice(`\u58A8\u5149\u6279\u6CE8\u672A\u4FDD\u5B58\uFF0C\u8BF7\u68C0\u67E5\u5199\u5165\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001\uFF1A${sidecarPath}`);
       throw new AnnotationStoreWriteError(sidecarPath, error);
     }
     this.documents.set(this.toCacheKey(normalized.filePath), normalized);
@@ -10177,16 +10198,16 @@ var AnnotationStore = class {
       `\u300A${oldBase.split(/[\\/]/).pop()}\u300B\u6458\u5F55.md`
     ];
     for (const candidate of candidates) {
-      const candidatePath = (0, import_obsidian7.normalizePath)(`${parent}/${candidate}`);
+      const candidatePath = (0, import_obsidian8.normalizePath)(`${parent}/${candidate}`);
       const excerptFile = this.app.vault.getAbstractFileByPath(candidatePath);
-      if (!(excerptFile instanceof import_obsidian7.TFile)) {
+      if (!(excerptFile instanceof import_obsidian8.TFile)) {
         continue;
       }
       try {
         const content = await this.app.vault.read(excerptFile);
         const updated = content.split(oldPath).join(newPath);
         const newName = candidate.replace(oldBase.split(/[\\/]/).pop(), newBase.split(/[\\/]/).pop());
-        const targetPath = (0, import_obsidian7.normalizePath)(`${parent}/${newName}`);
+        const targetPath = (0, import_obsidian8.normalizePath)(`${parent}/${newName}`);
         if (updated !== content) {
           await this.app.vault.modify(excerptFile, updated);
         }
@@ -10291,10 +10312,10 @@ var AnnotationStore = class {
     const document2 = await this.getDocument(file);
     const baseName = file.basename || file.name.replace(/\.md$/i, "");
     const suffix = format === "summary" ? "" : `-${format}`;
-    const targetPath = (0, import_obsidian7.normalizePath)(`${file.parent?.path ?? ""}/${baseName}-notes${suffix}.md`);
+    const targetPath = (0, import_obsidian8.normalizePath)(`${file.parent?.path ?? ""}/${baseName}-notes${suffix}.md`);
     const lines = buildExportLines(`Notes for ${file.path}`, [{ filePath: file.path, document: document2 }], format);
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
-    if (existing instanceof import_obsidian7.TFile) {
+    if (existing instanceof import_obsidian8.TFile) {
       await this.app.vault.modify(existing, lines.join("\n"));
       return existing;
     }
@@ -10303,11 +10324,11 @@ var AnnotationStore = class {
   async exportAllNotes(format = "summary") {
     const documents = await this.getIndexedDocuments();
     const suffix = format === "summary" ? "" : `-${format}`;
-    const targetPath = (0, import_obsidian7.normalizePath)(`inklight-all-notes${suffix}.md`);
+    const targetPath = (0, import_obsidian8.normalizePath)(`inklight-all-notes${suffix}.md`);
     const sources = documents.map((document2) => ({ filePath: document2.filePath, document: document2 }));
     const lines = buildExportLines("\u58A8\u5149\u6279\u6CE8\u5168\u5E93\u6C47\u603B", sources, format);
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
-    if (existing instanceof import_obsidian7.TFile) {
+    if (existing instanceof import_obsidian8.TFile) {
       await this.app.vault.modify(existing, lines.join("\n"));
       return existing;
     }
@@ -10315,7 +10336,7 @@ var AnnotationStore = class {
   }
   async testWriteAccess() {
     await this.ensureStoreDir();
-    const testPath = (0, import_obsidian7.normalizePath)(`${STORE_DIR}/.write-test.json`);
+    const testPath = (0, import_obsidian8.normalizePath)(`${STORE_DIR}/.write-test.json`);
     const payload = JSON.stringify({ ok: true, timestamp: (/* @__PURE__ */ new Date()).toISOString() }, null, 2);
     try {
       await this.app.vault.adapter.write(testPath, payload);
@@ -10326,7 +10347,7 @@ var AnnotationStore = class {
       await this.deleteIfExists(testPath);
       return testPath;
     } catch (error) {
-      new import_obsidian7.Notice(`\u58A8\u5149\u6279\u6CE8\u5B58\u50A8\u6D4B\u8BD5\u5931\u8D25\uFF1A${testPath}`);
+      new import_obsidian8.Notice(`\u58A8\u5149\u6279\u6CE8\u5B58\u50A8\u6D4B\u8BD5\u5931\u8D25\uFF1A${testPath}`);
       throw new AnnotationStoreWriteError(testPath, error);
     }
   }
@@ -10347,14 +10368,14 @@ var AnnotationStore = class {
   }
   toLegacySidecarPath(filePath) {
     const safeName = this.normalizeVaultPath(filePath).toLowerCase().split(/[\\/]/).map((part) => encodeURIComponent(part)).join("__");
-    return (0, import_obsidian7.normalizePath)(`${STORE_DIR}/${safeName}.json`);
+    return (0, import_obsidian8.normalizePath)(`${STORE_DIR}/${safeName}.json`);
   }
   toCompactSidecarPath(filePath) {
     const normalizedPath = this.normalizeVaultPath(filePath).toLowerCase();
     const fileName = normalizedPath.split(/[\\/]/).pop() ?? "annotation";
     const encodedName = encodeURIComponent(fileName).replace(/%/g, "_").replace(/[^a-z0-9._-]/g, "_");
     const prefix = encodedName.slice(0, MAX_COMPACT_SIDECAR_PREFIX_LENGTH).replace(/[._-]+$/g, "") || "annotation";
-    return (0, import_obsidian7.normalizePath)(`${STORE_DIR}/${prefix}--${hashPath(normalizedPath)}.json`);
+    return (0, import_obsidian8.normalizePath)(`${STORE_DIR}/${prefix}--${hashPath(normalizedPath)}.json`);
   }
   async createEmptyDocument(file) {
     return {
@@ -10406,7 +10427,7 @@ var AnnotationStore = class {
     await this.ensureDir(STORE_DIR);
   }
   async ensureDir(path) {
-    const normalizedPath = (0, import_obsidian7.normalizePath)(path);
+    const normalizedPath = (0, import_obsidian8.normalizePath)(path);
     if (!await this.app.vault.adapter.exists(normalizedPath)) {
       await this.app.vault.adapter.mkdir(normalizedPath);
     }
@@ -10423,7 +10444,7 @@ var AnnotationStore = class {
     }
   }
   async readJson(path, fallback, options = {}) {
-    const normalizedPath = (0, import_obsidian7.normalizePath)(path);
+    const normalizedPath = (0, import_obsidian8.normalizePath)(path);
     if (!await this.app.vault.adapter.exists(normalizedPath)) {
       return fallback;
     }
@@ -10433,25 +10454,25 @@ var AnnotationStore = class {
       if (options.allowCorruptFallback) {
         return fallback;
       }
-      new import_obsidian7.Notice(`\u58A8\u5149\u6279\u6CE8\u65E0\u6CD5\u8BFB\u53D6 ${normalizedPath}\uFF0C\u5DF2\u505C\u6B62\u5199\u5165\u4EE5\u4FDD\u62A4\u6279\u6CE8\u6570\u636E\u3002`);
+      new import_obsidian8.Notice(`\u58A8\u5149\u6279\u6CE8\u65E0\u6CD5\u8BFB\u53D6 ${normalizedPath}\uFF0C\u5DF2\u505C\u6B62\u5199\u5165\u4EE5\u4FDD\u62A4\u6279\u6CE8\u6570\u636E\u3002`);
       throw new AnnotationStoreReadError(normalizedPath, error);
     }
   }
   async readExistingJson(path) {
-    const normalizedPath = (0, import_obsidian7.normalizePath)(path);
+    const normalizedPath = (0, import_obsidian8.normalizePath)(path);
     if (!await this.app.vault.adapter.exists(normalizedPath)) {
       throw new Error(`Expected JSON file does not exist: ${normalizedPath}`);
     }
     return JSON.parse(await this.app.vault.adapter.read(normalizedPath));
   }
   async deleteIfExists(path) {
-    const normalizedPath = (0, import_obsidian7.normalizePath)(path);
+    const normalizedPath = (0, import_obsidian8.normalizePath)(path);
     if (await this.app.vault.adapter.exists(normalizedPath)) {
       await this.app.vault.adapter.remove(normalizedPath);
     }
   }
   normalizeVaultPath(filePath) {
-    return (0, import_obsidian7.normalizePath)(filePath);
+    return (0, import_obsidian8.normalizePath)(filePath);
   }
   toCacheKey(filePath) {
     return this.normalizeVaultPath(filePath).toLowerCase();
@@ -10677,7 +10698,7 @@ function entrySource(entry) {
 }
 
 // src/views/annotationPopover.ts
-var import_obsidian8 = require("obsidian");
+var import_obsidian9 = require("obsidian");
 var AnnotationPopover = class {
   constructor(options) {
     this.options = options;
@@ -10697,7 +10718,7 @@ var AnnotationPopover = class {
       cls: "yh-icon-button",
       attr: { type: "button", title: "\u5173\u95ED\u6279\u6CE8\u5F39\u5C42" }
     });
-    (0, import_obsidian8.setIcon)(close, "x");
+    (0, import_obsidian9.setIcon)(close, "x");
     close.addEventListener("click", () => this.hide());
     const list = this.element.createDiv({ cls: "yh-popover-list" });
     for (const item of options.items) {
@@ -10737,7 +10758,7 @@ var AnnotationPopover = class {
       return;
     }
     const body = card.createDiv({ cls: "yh-popover-body" });
-    import_obsidian8.MarkdownRenderer.render(this.options.app, item.content, body, sourcePath, this.options.component);
+    import_obsidian9.MarkdownRenderer.render(this.options.app, item.content, body, sourcePath, this.options.component);
   }
   place(rect) {
     const width = Math.min(320, window.innerWidth - 24);
@@ -10754,7 +10775,7 @@ function clamp(value, min, max) {
 }
 
 // src/views/sidebarView.ts
-var import_obsidian9 = require("obsidian");
+var import_obsidian10 = require("obsidian");
 
 // src/utils/format.ts
 function formatTime(value) {
@@ -10763,7 +10784,7 @@ function formatTime(value) {
 
 // src/views/sidebarView.ts
 var ANNOTATION_SIDEBAR_VIEW = "yh-inklight-sidebar";
-var AnnotationSidebarView = class extends import_obsidian9.ItemView {
+var AnnotationSidebarView = class extends import_obsidian10.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -11015,13 +11036,13 @@ var AnnotationSidebarView = class extends import_obsidian9.ItemView {
       cls: "yh-icon-btn yh-ov-refresh",
       attr: { type: "button", title: "Refresh", "aria-label": "Refresh annotations" }
     });
-    (0, import_obsidian9.setIcon)(refresh, "refresh-cw");
+    (0, import_obsidian10.setIcon)(refresh, "refresh-cw");
     refresh.addEventListener("click", () => this.requestRender());
     const close = actions.createEl("button", {
       cls: "yh-icon-btn yh-ov-close",
       attr: { type: "button", title: "Close panel", "aria-label": "Close panel" }
     });
-    (0, import_obsidian9.setIcon)(close, "x");
+    (0, import_obsidian10.setIcon)(close, "x");
     close.addEventListener("click", () => {
       void this.leaf.detach();
     });
@@ -11053,7 +11074,7 @@ var AnnotationSidebarView = class extends import_obsidian9.ItemView {
       await this.render();
     });
     const filterButton = searchRow.createEl("button", { cls: "yh-icon-btn", attr: { type: "button", title: "\u7B5B\u9009" } });
-    (0, import_obsidian9.setIcon)(filterButton, "filter");
+    (0, import_obsidian10.setIcon)(filterButton, "filter");
     const filterRow = container.createDiv({ cls: "yh-ov-filter-row" });
     const color = filterRow.createEl("select", { cls: "yh-filter-select" });
     color.createEl("option", { text: "\u5168\u90E8\u989C\u8272", value: "all" });
@@ -11118,7 +11139,7 @@ var AnnotationSidebarView = class extends import_obsidian9.ItemView {
     this.addExpandToggle(quote, card);
     if (cardData.content) {
       const content = card.createDiv({ cls: "yh-ov-content" });
-      void import_obsidian9.MarkdownRenderer.render(this.app, cardData.content, content, cardData.sourcePath, this).then(() => {
+      void import_obsidian10.MarkdownRenderer.render(this.app, cardData.content, content, cardData.sourcePath, this).then(() => {
         this.addExpandToggle(content, card);
       });
     }
@@ -11134,7 +11155,7 @@ var AnnotationSidebarView = class extends import_obsidian9.ItemView {
         cls: "yh-ov-btn yh-ov-btn--icon",
         attr: { type: "button", title: "\u7F16\u8F91\u7B14\u8BB0", "data-action": "edit-note" }
       });
-      (0, import_obsidian9.setIcon)(edit2, "pencil");
+      (0, import_obsidian10.setIcon)(edit2, "pencil");
       edit2.disabled = !file;
       edit2.addEventListener("click", () => {
         if (file) {
@@ -11175,7 +11196,7 @@ var AnnotationSidebarView = class extends import_obsidian9.ItemView {
     remove.addEventListener("click", async () => {
       if (file) {
         await this.deleteCard(file, cardData);
-        new import_obsidian9.Notice("\u6279\u6CE8\u5DF2\u5220\u9664");
+        new import_obsidian10.Notice("\u6279\u6CE8\u5DF2\u5220\u9664");
         await this.plugin.refreshAnnotations();
       }
     });
@@ -11356,7 +11377,7 @@ var AnnotationSidebarView = class extends import_obsidian9.ItemView {
   }
   fileForCard(card) {
     const file = this.app.vault.getAbstractFileByPath(card.sourcePath);
-    return file instanceof import_obsidian9.TFile ? file : null;
+    return file instanceof import_obsidian10.TFile ? file : null;
   }
   filterCards(cards) {
     return cards.filter((card) => this.color === "all" || card.color === this.color).filter((card) => {
@@ -11392,7 +11413,7 @@ var AnnotationSidebarView = class extends import_obsidian9.ItemView {
         return;
       }
       const exported = this.annotationScope === "all" ? await this.plugin.store.exportAllNotes(this.exportFormat) : await this.plugin.store.exportNotes(file, this.exportFormat);
-      new import_obsidian9.Notice(`\u5DF2\u5BFC\u51FA\u7B14\u8BB0\u81F3 ${exported.path}`);
+      new import_obsidian10.Notice(`\u5DF2\u5BFC\u51FA\u7B14\u8BB0\u81F3 ${exported.path}`);
     });
     const exportFormat = footer.createEl("select", { cls: "yh-filter-select yh-export-format", attr: { title: "\u5BFC\u51FA\u683C\u5F0F" } });
     exportFormat.createEl("option", { text: "\u9ED8\u8BA4\u6458\u8981", value: "summary" });
@@ -11417,7 +11438,7 @@ var AnnotationSidebarView = class extends import_obsidian9.ItemView {
       }, 120);
       return;
     }
-    const view = leaf.view instanceof import_obsidian9.MarkdownView ? leaf.view : this.app.workspace.getActiveViewOfType(import_obsidian9.MarkdownView);
+    const view = leaf.view instanceof import_obsidian10.MarkdownView ? leaf.view : this.app.workspace.getActiveViewOfType(import_obsidian10.MarkdownView);
     if (!view) {
       return;
     }
@@ -11444,7 +11465,7 @@ function isCodeLikeText(text) {
 }
 
 // src/views/stickyNoteLane.ts
-var import_obsidian11 = require("obsidian");
+var import_obsidian12 = require("obsidian");
 
 // src/utils/positioning.ts
 var GAP = 10;
@@ -11462,7 +11483,7 @@ function layoutStickyNotes(items) {
 }
 
 // src/views/stickyNoteView.ts
-var import_obsidian10 = require("obsidian");
+var import_obsidian11 = require("obsidian");
 function renderStickyNoteCard(container, options) {
   container.empty();
   const card = container.createDiv({
@@ -11486,18 +11507,18 @@ function renderStickyNoteCard(container, options) {
     cls: "yh-icon-btn",
     attr: { type: "button", title: "\u7F16\u8F91\u7B14\u8BB0" }
   });
-  (0, import_obsidian10.setIcon)(edit, "pencil");
+  (0, import_obsidian11.setIcon)(edit, "pencil");
   const collapse2 = tools.createEl("button", {
     cls: "yh-icon-btn",
     attr: { type: "button", title: options.comment.collapsed ? "\u5C55\u5F00" : "\u6298\u53E0" }
   });
-  (0, import_obsidian10.setIcon)(collapse2, options.comment.collapsed ? "chevron-down" : "chevron-up");
+  (0, import_obsidian11.setIcon)(collapse2, options.comment.collapsed ? "chevron-down" : "chevron-up");
   collapse2.addEventListener("click", () => options.onToggle(options.comment));
   const remove = tools.createEl("button", {
     cls: "yh-icon-btn",
     attr: { type: "button", title: "\u5220\u9664\u7B14\u8BB0" }
   });
-  (0, import_obsidian10.setIcon)(remove, "trash-2");
+  (0, import_obsidian11.setIcon)(remove, "trash-2");
   remove.addEventListener("click", () => options.onDelete(options.comment));
   if (options.comment.collapsed) {
     const body2 = card.createDiv({ cls: "yh-card-body" });
@@ -11515,7 +11536,7 @@ function renderStickyNoteCard(container, options) {
 }
 function renderDisplayMode(container, options) {
   container.empty();
-  import_obsidian10.MarkdownRenderer.render(options.app, options.comment.content, container, options.sourcePath, options.component);
+  import_obsidian11.MarkdownRenderer.render(options.app, options.comment.content, container, options.sourcePath, options.component);
 }
 function renderEditMode(container, options) {
   container.empty();
@@ -11574,7 +11595,7 @@ var StickyNoteLane = class {
     this.options.component.register(() => this.destroy());
   }
   async render() {
-    const view = this.options.app.workspace.getActiveViewOfType(import_obsidian11.MarkdownView);
+    const view = this.options.app.workspace.getActiveViewOfType(import_obsidian12.MarkdownView);
     if (!view || !view.file || view.file.extension !== "md") {
       this.hide();
       return;
@@ -11724,7 +11745,7 @@ var StickyNoteLane = class {
 };
 
 // src/epub/EpubReaderView.ts
-var import_obsidian15 = require("obsidian");
+var import_obsidian16 = require("obsidian");
 
 // src/epub/EpubChapterResolver.ts
 function resolveChapterLabel(entries, spineIndex) {
@@ -12104,7 +12125,7 @@ function installFoliateCustomElementGuard(registry = customElements) {
 }
 
 // src/epub/EpubFoliatePatches.ts
-var import_obsidian12 = require("obsidian");
+var import_obsidian13 = require("obsidian");
 var foliateBlobIframePatchInstalled = false;
 var foliateBlobIframeLoadTokens = /* @__PURE__ */ new WeakMap();
 async function readBlobUrlAsText(url) {
@@ -12434,13 +12455,13 @@ async function showFoliateStart(view) {
 }
 
 // src/epub/EpubNoteModal.ts
-var import_obsidian13 = require("obsidian");
+var import_obsidian14 = require("obsidian");
 var NOTE_TYPE_OPTIONS = [
   { value: "insight", label: "\u{1F4A1} \u6D1E\u89C1" },
   { value: "question", label: "\u2753 \u7591\u95EE" },
   { value: "reminder", label: "\u{1F514} \u63D0\u9192" }
 ];
-var EpubNoteModal = class extends import_obsidian13.Modal {
+var EpubNoteModal = class extends import_obsidian14.Modal {
   constructor(app, selectedText, initial, onSubmit, titleText = "\u5199\u4E0B\u4F60\u7684\u60F3\u6CD5") {
     super(app);
     this.selectedText = selectedText;
@@ -12531,7 +12552,7 @@ var EpubNoteModal = class extends import_obsidian13.Modal {
     const ta = body.createEl("textarea", { cls: "yh-epub-note-textarea" });
     ta.placeholder = "\u5728\u8FD9\u91CC\u5199\u4E0B\u4F60\u7684\u60F3\u6CD5\u3001\u7591\u95EE\u6216\u8054\u60F3\u2026";
     ta.value = this.note;
-    ta.rows = import_obsidian13.Platform.isMobile ? 4 : 6;
+    ta.rows = import_obsidian14.Platform.isMobile ? 4 : 6;
     window.setTimeout(() => ta.focus(), 30);
     const actions = body.createDiv({ cls: "yh-epub-note-actions" });
     const cancelBtn = actions.createEl("button", {
@@ -12555,7 +12576,7 @@ var EpubNoteModal = class extends import_obsidian13.Modal {
         this.close();
       }
     });
-    if (import_obsidian13.Platform.isMobile) {
+    if (import_obsidian14.Platform.isMobile) {
       this.setupKeyboardAwareness();
     }
   }
@@ -12619,9 +12640,9 @@ var EpubNoteModal = class extends import_obsidian13.Modal {
 };
 
 // src/epub/EpubAiModal.ts
-var import_obsidian14 = require("obsidian");
+var import_obsidian15 = require("obsidian");
 var QUOTE_MAX = 240;
-var EpubAiModal = class extends import_obsidian14.Modal {
+var EpubAiModal = class extends import_obsidian15.Modal {
   constructor(app, selectedText, settings, onSave) {
     super(app);
     this.currentAction = null;
@@ -12706,7 +12727,7 @@ var EpubAiModal = class extends import_obsidian14.Modal {
       this.close();
       this.onSave(note);
     });
-    if (import_obsidian14.Platform.isMobile) {
+    if (import_obsidian15.Platform.isMobile) {
       this.setupKeyboardAwareness();
     }
   }
@@ -12761,9 +12782,9 @@ var EpubAiModal = class extends import_obsidian14.Modal {
     }
     try {
       await navigator.clipboard.writeText(text);
-      new import_obsidian14.Notice("\u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F");
+      new import_obsidian15.Notice("\u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F");
     } catch {
-      new import_obsidian14.Notice("\u590D\u5236\u5931\u8D25\uFF0C\u8BF7\u624B\u52A8\u957F\u6309\u9009\u4E2D\u7ED3\u679C\u6587\u5B57");
+      new import_obsidian15.Notice("\u590D\u5236\u5931\u8D25\uFF0C\u8BF7\u624B\u52A8\u957F\u6309\u9009\u4E2D\u7ED3\u679C\u6587\u5B57");
     }
   }
   renderResult() {
@@ -13034,7 +13055,7 @@ var READ_CHECKPOINTS_JUMP_DELTA = 0.6;
 var NAV_SHOW_SCROLL_THRESHOLD = 30;
 var NAV_HIDE_SCROLL_THRESHOLD = 45;
 var SELECTION_LOCK_CSS = "* { user-select: none !important; -webkit-user-select: none !important; }";
-var EpubReaderView = class extends import_obsidian15.FileView {
+var EpubReaderView = class extends import_obsidian16.FileView {
   // ================================================================
   // 构造 & 生命周期
   // ================================================================
@@ -13136,7 +13157,7 @@ var EpubReaderView = class extends import_obsidian15.FileView {
     this.navDownAccum = 0;
     this.scrollHideRenderer = null;
     this.handleReaderScroll = () => {
-      if (!this.pluginSettings.epubHideMobileNavbar || !import_obsidian15.Platform.isMobile) {
+      if (!this.pluginSettings.epubHideMobileNavbar || !import_obsidian16.Platform.isMobile) {
         return;
       }
       if (!this.containerEl.isShown()) {
@@ -13242,7 +13263,7 @@ var EpubReaderView = class extends import_obsidian15.FileView {
       }
       this.linkNoticeHref = href;
       this.linkNoticeAt = now;
-      new import_obsidian15.Notice(`\u58A8\u5149\uFF1A\u8DF3\u8F6C\u5931\u8D25\uFF08${reason}\uFF09`);
+      new import_obsidian16.Notice(`\u58A8\u5149\uFF1A\u8DF3\u8F6C\u5931\u8D25\uFF08${reason}\uFF09`);
     };
     /**
      * 自足的同文档片段跳转（href 形如 `#jz_1_1106`，多看格式脚注标记即此类）。
@@ -13404,7 +13425,7 @@ var EpubReaderView = class extends import_obsidian15.FileView {
       this.renderSidebar();
     } catch (error) {
       console.error("yh-inklight: EPUB load failed", error);
-      new import_obsidian15.Notice(`\u58A8\u5149 EPUB \u52A0\u8F7D\u5931\u8D25: ${error instanceof Error ? error.message : String(error)}`);
+      new import_obsidian16.Notice(`\u58A8\u5149 EPUB \u52A0\u8F7D\u5931\u8D25: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   /**
@@ -13427,7 +13448,7 @@ var EpubReaderView = class extends import_obsidian15.FileView {
    * 故用设置值撑开底部留白，把进度条托离系统导航条。
    */
   applyContainerInset() {
-    if (!import_obsidian15.Platform.isAndroidApp) {
+    if (!import_obsidian16.Platform.isAndroidApp) {
       return;
     }
     const inset = Math.max(0, this.pluginSettings.epubMobileBottomInset);
@@ -13439,7 +13460,7 @@ var EpubReaderView = class extends import_obsidian15.FileView {
    */
   buildLayout() {
     this.containerEl.empty();
-    if (import_obsidian15.Platform.isAndroidApp) {
+    if (import_obsidian16.Platform.isAndroidApp) {
       this.containerEl.style.setProperty("--yh-safe-top", "24px");
     }
     this.applyContainerInset();
@@ -13476,7 +13497,7 @@ var EpubReaderView = class extends import_obsidian15.FileView {
       cls: "yh-epub-toolbar-btn",
       attr: { type: "button", title: "\u5207\u6362\u4FA7\u8FB9\u680F", "aria-label": "\u5207\u6362\u4FA7\u8FB9\u680F" }
     });
-    (0, import_obsidian15.setIcon)(toggleBtn, "menu");
+    (0, import_obsidian16.setIcon)(toggleBtn, "menu");
     toggleBtn.addEventListener("click", () => this.toggleSidebar());
     this.toolbarTitleRowEl.createDiv({
       cls: "yh-epub-toolbar-title",
@@ -13501,7 +13522,7 @@ var EpubReaderView = class extends import_obsidian15.FileView {
     });
     const updateLockIcon = () => {
       const locked = this.pluginSettings.annotationLocked;
-      (0, import_obsidian15.setIcon)(lockBtn, locked ? "lock" : "pen-line");
+      (0, import_obsidian16.setIcon)(lockBtn, locked ? "lock" : "pen-line");
       lockBtn.title = locked ? "\u6807\u6CE8\u5DF2\u9501\u5B9A\uFF08\u70B9\u51FB\u89E3\u9501\uFF09" : "\u6807\u6CE8\u5DF2\u5F00\u542F\uFF08\u70B9\u51FB\u9501\u5B9A\uFF09";
       lockBtn.toggleClass("is-active", locked);
     };
@@ -13520,25 +13541,25 @@ var EpubReaderView = class extends import_obsidian15.FileView {
       cls: "yh-epub-toolbar-btn",
       attr: { type: "button", title: "\u641C\u7D22\u5168\u6587", "aria-label": "\u641C\u7D22\u5168\u6587" }
     });
-    (0, import_obsidian15.setIcon)(searchBtn, "search");
+    (0, import_obsidian16.setIcon)(searchBtn, "search");
     searchBtn.addEventListener("click", () => this.toggleToolbarSearch());
     const flowBtn = this.toolbarControlsRowEl.createEl("button", {
       cls: "yh-epub-toolbar-btn",
       attr: { type: "button", title: this.currentFlowMode === "paginated" ? "\u5207\u6362\u4E3A\u6EDA\u52A8" : "\u5207\u6362\u4E3A\u5206\u9875" }
     });
-    (0, import_obsidian15.setIcon)(flowBtn, this.currentFlowMode === "paginated" ? "lines-of-text" : "sheets-in-box");
+    (0, import_obsidian16.setIcon)(flowBtn, this.currentFlowMode === "paginated" ? "lines-of-text" : "sheets-in-box");
     flowBtn.addEventListener("click", () => this.toggleFlowMode());
     const prevBtn = this.toolbarControlsRowEl.createEl("button", {
       cls: "yh-epub-toolbar-btn",
       attr: { type: "button", title: "\u4E0A\u4E00\u9875", "aria-label": "\u4E0A\u4E00\u9875" }
     });
-    (0, import_obsidian15.setIcon)(prevBtn, "chevron-left");
+    (0, import_obsidian16.setIcon)(prevBtn, "chevron-left");
     prevBtn.addEventListener("click", () => this.prevPage());
     const nextBtn = this.toolbarControlsRowEl.createEl("button", {
       cls: "yh-epub-toolbar-btn",
       attr: { type: "button", title: "\u4E0B\u4E00\u9875", "aria-label": "\u4E0B\u4E00\u9875" }
     });
-    (0, import_obsidian15.setIcon)(nextBtn, "chevron-right");
+    (0, import_obsidian16.setIcon)(nextBtn, "chevron-right");
     nextBtn.addEventListener("click", () => this.nextPage());
   }
   /**
@@ -13666,7 +13687,7 @@ var EpubReaderView = class extends import_obsidian15.FileView {
     );
     if (existing) {
       await this.store.removeBookmark(this.file, existing.id);
-      new import_obsidian15.Notice("\u5DF2\u79FB\u9664\u4E66\u7B7E");
+      new import_obsidian16.Notice("\u5DF2\u79FB\u9664\u4E66\u7B7E");
     } else {
       const bookmark = {
         id: crypto.randomUUID(),
@@ -13678,7 +13699,7 @@ var EpubReaderView = class extends import_obsidian15.FileView {
         createdAt: (/* @__PURE__ */ new Date()).toISOString()
       };
       await this.store.addBookmark(this.file, bookmark);
-      new import_obsidian15.Notice("\u5DF2\u6DFB\u52A0\u4E66\u7B7E");
+      new import_obsidian16.Notice("\u5DF2\u6DFB\u52A0\u4E66\u7B7E");
     }
     this.refreshAnnotations();
   }
@@ -13960,7 +13981,7 @@ var EpubReaderView = class extends import_obsidian15.FileView {
       });
     } catch (error) {
       console.error("yh-inklight: EPUB highlight creation failed", error);
-      new import_obsidian15.Notice("\u753B\u7EBF\u521B\u5EFA\u5931\u8D25");
+      new import_obsidian16.Notice("\u753B\u7EBF\u521B\u5EFA\u5931\u8D25");
     }
   }
   /**
@@ -14031,7 +14052,7 @@ var EpubReaderView = class extends import_obsidian15.FileView {
           });
         } catch (error) {
           console.error("yh-inklight: EPUB comment creation failed", error);
-          new import_obsidian15.Notice("\u6807\u6CE8\u521B\u5EFA\u5931\u8D25");
+          new import_obsidian16.Notice("\u6807\u6CE8\u521B\u5EFA\u5931\u8D25");
         }
       }
     ).open();
@@ -14095,7 +14116,7 @@ var EpubReaderView = class extends import_obsidian15.FileView {
       this.refreshAnnotations();
     } catch (error) {
       console.error("yh-inklight: EPUB annotation deletion failed", error);
-      new import_obsidian15.Notice("\u6807\u6CE8\u5220\u9664\u5931\u8D25");
+      new import_obsidian16.Notice("\u6807\u6CE8\u5220\u9664\u5931\u8D25");
     }
   }
   /**
@@ -14855,7 +14876,7 @@ var EpubReaderView = class extends import_obsidian15.FileView {
         }
       }
     );
-    card.show(anchor, import_obsidian15.Platform.isMobile);
+    card.show(anchor, import_obsidian16.Platform.isMobile);
     this.annotationCardEl = card;
   }
   resolveAnnotationCardAnchor(index, range) {
@@ -14916,7 +14937,7 @@ var EpubReaderView = class extends import_obsidian15.FileView {
           this.refreshAnnotations();
         } catch (error) {
           console.error("yh-inklight: EPUB comment update failed", error);
-          new import_obsidian15.Notice("\u6807\u6CE8\u66F4\u65B0\u5931\u8D25");
+          new import_obsidian16.Notice("\u6807\u6CE8\u66F4\u65B0\u5931\u8D25");
         }
       },
       "\u7F16\u8F91\u60F3\u6CD5"
@@ -14967,10 +14988,10 @@ var EpubReaderView = class extends import_obsidian15.FileView {
           this.refreshRenditionAnnotations();
           this.renderSidebar();
           this.refreshAnnotations();
-          new import_obsidian15.Notice("\u5DF2\u6DFB\u52A0\u6807\u6CE8");
+          new import_obsidian16.Notice("\u5DF2\u6DFB\u52A0\u6807\u6CE8");
         } catch (error) {
           console.error("yh-inklight: EPUB highlight to comment conversion failed", error);
-          new import_obsidian15.Notice("\u6807\u6CE8\u521B\u5EFA\u5931\u8D25");
+          new import_obsidian16.Notice("\u6807\u6CE8\u521B\u5EFA\u5931\u8D25");
         }
       }
     ).open();
@@ -15402,7 +15423,7 @@ var EpubReaderView = class extends import_obsidian15.FileView {
       `  color: ${colors.textColor} !important;`,
       `  font-size: ${size}px !important;`,
       `  line-height: ${this.pluginSettings.epubLineHeight} !important;`,
-      ...import_obsidian15.Platform.isMobile ? ["  padding-bottom: 60px !important;"] : [],
+      ...import_obsidian16.Platform.isMobile ? ["  padding-bottom: 60px !important;"] : [],
       "}",
       "p, div, span, li, h1, h2, h3, h4, h5, h6, blockquote, td, th, dt, dd {",
       `  color: ${colors.textColor} !important;`,
@@ -15632,7 +15653,7 @@ var EpubReaderView = class extends import_obsidian15.FileView {
 };
 
 // src/epub/EpubBookshelfView.ts
-var import_obsidian16 = require("obsidian");
+var import_obsidian17 = require("obsidian");
 var EPUB_BOOKSHELF_VIEW_TYPE = "inklight-epub-bookshelf";
 var SORT_OPTIONS = [
   ["name", "\u4E66\u540D"],
@@ -15660,7 +15681,7 @@ function parseLastReadTime(value) {
   }
   return 0;
 }
-var EpubBookshelfView = class extends import_obsidian16.ItemView {
+var EpubBookshelfView = class extends import_obsidian17.ItemView {
   constructor(leaf, store, settings, saveSettings, onOpen) {
     super(leaf);
     this.books = [];
@@ -15862,11 +15883,11 @@ var EpubBookshelfView = class extends import_obsidian16.ItemView {
 };
 
 // src/epub/EpubTocView.ts
-var import_obsidian17 = require("obsidian");
+var import_obsidian18 = require("obsidian");
 var EPUB_TOC_VIEW_TYPE = "inklight-epub-toc";
 var EMPTY_HINT_NO_READER = "\u8BF7\u5148\u6253\u5F00\u7535\u5B50\u4E66";
 var EMPTY_HINT_NO_TOC = "\u672A\u627E\u5230\u76EE\u5F55\u4FE1\u606F\u3002";
-var EpubTocView = class extends import_obsidian17.ItemView {
+var EpubTocView = class extends import_obsidian18.ItemView {
   constructor(leaf) {
     super(leaf);
     /** 上次渲染的指纹，避免 relocate/leaf 切换时无谓重建列表 */
@@ -15980,7 +16001,7 @@ var EpubTocView = class extends import_obsidian17.ItemView {
 };
 
 // src/epub/EpubGotoHandler.ts
-var import_obsidian18 = require("obsidian");
+var import_obsidian19 = require("obsidian");
 var CFI_COMMENT_RE = /<!--\s*yh-epub-cfi:\s*(epubcfi\([\s\S]*?\))\s*-->/;
 var SOURCE_EXTENSIONS = ["epub", "mobi", "azw3", "fb2", "fbz", "cbz", "txt"];
 function registerEpubGotoHandler(plugin, openAtCfi, resolveAnn) {
@@ -16029,7 +16050,7 @@ function wireGotoAnchor(anchor, sourcePath, goto, resolveAnn, app) {
       void goto(target.file, target.cfi);
       return;
     }
-    new import_obsidian18.Notice("Unable to resolve source annotation");
+    new import_obsidian19.Notice("Unable to resolve source annotation");
   });
 }
 function findTargetNear(container, exportPath, app) {
@@ -16078,9 +16099,9 @@ function findEpubFileFromExportPath(exportPath, app) {
 }
 
 // src/views/markdownStatsView.ts
-var import_obsidian19 = require("obsidian");
+var import_obsidian20 = require("obsidian");
 var MARKDOWN_STATS_VIEW_TYPE = "inklight-md-stats";
-var ConfirmDeleteModal = class extends import_obsidian19.Modal {
+var ConfirmDeleteModal = class extends import_obsidian20.Modal {
   constructor(app, file, onConfirm) {
     super(app);
     this.file = file;
@@ -16102,7 +16123,7 @@ var ConfirmDeleteModal = class extends import_obsidian19.Modal {
     this.contentEl.empty();
   }
 };
-var MarkdownStatsView = class extends import_obsidian19.ItemView {
+var MarkdownStatsView = class extends import_obsidian20.ItemView {
   constructor(leaf, stats, saveSettings, onOpen) {
     super(leaf);
     this.entries = [];
@@ -16217,10 +16238,10 @@ var MarkdownStatsView = class extends import_obsidian19.ItemView {
     new ConfirmDeleteModal(this.app, file, async () => {
       try {
         await this.app.vault.trash(file, false);
-        new import_obsidian19.Notice(`\u5DF2\u5220\u9664\u300C${file.basename}\u300D`);
+        new import_obsidian20.Notice(`\u5DF2\u5220\u9664\u300C${file.basename}\u300D`);
         this.refresh();
       } catch (err) {
-        new import_obsidian19.Notice(`\u5220\u9664\u5931\u8D25\uFF1A${String(err)}`);
+        new import_obsidian20.Notice(`\u5220\u9664\u5931\u8D25\uFF1A${String(err)}`);
       }
     }).open();
   }
@@ -16245,7 +16266,7 @@ var YH_INKLIGHT_ICON = `
     </g>
   </svg>
 `;
-var OverlayAnnotationsPlugin = class extends import_obsidian20.Plugin {
+var OverlayAnnotationsPlugin = class extends import_obsidian21.Plugin {
   constructor() {
     super(...arguments);
     this.settings = DEFAULT_SETTINGS;
@@ -16260,7 +16281,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian20.Plugin {
     this.mdOpenStats = {};
   }
   async onload() {
-    (0, import_obsidian20.addIcon)("yh-inklight-icon", YH_INKLIGHT_ICON);
+    (0, import_obsidian21.addIcon)("yh-inklight-icon", YH_INKLIGHT_ICON);
     await this.loadSettings();
     console.info(`yh-inklight loaded v${this.manifest.version}`);
     this.store = new AnnotationStore(this.app);
@@ -16303,7 +16324,9 @@ var OverlayAnnotationsPlugin = class extends import_obsidian20.Plugin {
       onHighlight: (color) => this.createHighlight(color),
       onComment: () => this.createComment(),
       onCopy: () => this.copySelection(),
-      onOpenSidebar: () => this.activateSidebar()
+      onOpenSidebar: () => this.activateSidebar(),
+      // 移动端 md 吸底用：复用 EPUB 的底部安全间距设置（安卓系统导航条遮挡时调大）
+      getBottomInset: () => this.settings.epubMobileBottomInset
     });
     this.popover = new AnnotationPopover({ app: this.app, component: this });
     this.pdfViewerAdapter = new PdfViewerAdapter(this.app, this);
@@ -16452,7 +16475,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian20.Plugin {
   }
   /** 手机端防抖同步左侧栏目录视图（layout-change 可能连续触发）。 */
   scheduleEpubTocSync() {
-    if (!import_obsidian20.Platform.isMobile) {
+    if (!import_obsidian21.Platform.isMobile) {
       return;
     }
     if (this.epubTocSyncTimer !== null) {
@@ -16469,7 +16492,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian20.Plugin {
    * ensureSideLeaf 仅在该类型视图不存在时新建，不会覆盖文件管理器等已有标签。
    */
   async syncEpubTocLeaf() {
-    if (!import_obsidian20.Platform.isMobile) {
+    if (!import_obsidian21.Platform.isMobile) {
       return;
     }
     const workspace = this.app.workspace;
@@ -16510,7 +16533,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian20.Plugin {
   async gotoPdfPage(pageNumber) {
     const ok = await this.pdfViewerAdapter.goToPage(pageNumber, { flash: true, block: "center" });
     if (!ok) {
-      new import_obsidian20.Notice(`\u672A\u627E\u5230\u7B2C ${pageNumber} \u9875`);
+      new import_obsidian21.Notice(`\u672A\u627E\u5230\u7B2C ${pageNumber} \u9875`);
     }
   }
   registerRibbonIcon() {
@@ -16562,12 +16585,12 @@ var OverlayAnnotationsPlugin = class extends import_obsidian20.Plugin {
       name: "\u663E\u793A PDF \u76EE\u5F55",
       callback: async () => {
         if (!this.pdfLayer.isPdfActive()) {
-          new import_obsidian20.Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A PDF \u6587\u4EF6");
+          new import_obsidian21.Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A PDF \u6587\u4EF6");
           return;
         }
         const outline = await this.pdfLayer.getOutline();
         if (outline.length === 0) {
-          new import_obsidian20.Notice("\u8BE5 PDF \u6CA1\u6709\u76EE\u5F55");
+          new import_obsidian21.Notice("\u8BE5 PDF \u6CA1\u6709\u76EE\u5F55");
           return;
         }
         const lines = outline.map((item) => {
@@ -16575,7 +16598,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian20.Plugin {
           const children = item.children.filter((c2) => c2.pageNumber > 0).map((c2) => `  \u2514 ${c2.title} \u2192 p.${c2.pageNumber}`).join("\n");
           return `${item.title}${pageInfo}${children ? "\n" + children : ""}`;
         });
-        new import_obsidian20.Notice(`PDF \u76EE\u5F55\uFF08${outline.length} \u9879\uFF09\uFF1A
+        new import_obsidian21.Notice(`PDF \u76EE\u5F55\uFF08${outline.length} \u9879\uFF09\uFF1A
 ${lines.slice(0, 8).join("\n")}`);
       }
     });
@@ -16585,9 +16608,9 @@ ${lines.slice(0, 8).join("\n")}`);
       callback: async () => {
         try {
           const path = await this.store.testWriteAccess();
-          new import_obsidian20.Notice(`\u58A8\u5149\u6279\u6CE8\u5B58\u50A8\u53EF\u5199\uFF1A${path}`);
+          new import_obsidian21.Notice(`\u58A8\u5149\u6279\u6CE8\u5B58\u50A8\u53EF\u5199\uFF1A${path}`);
         } catch {
-          new import_obsidian20.Notice("\u58A8\u5149\u6279\u6CE8\u5B58\u50A8\u4E0D\u53EF\u5199\uFF0C\u8BF7\u68C0\u67E5 .obsidian-annotations \u76EE\u5F55\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001\u3002");
+          new import_obsidian21.Notice("\u58A8\u5149\u6279\u6CE8\u5B58\u50A8\u4E0D\u53EF\u5199\uFF0C\u8BF7\u68C0\u67E5 .obsidian-annotations \u76EE\u5F55\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001\u3002");
         }
       }
     });
@@ -16604,7 +16627,7 @@ ${lines.slice(0, 8).join("\n")}`);
     });
     this.registerEvent(
       this.app.vault.on("modify", async (file) => {
-        if (!(file instanceof import_obsidian20.TFile) || file.extension !== "md") {
+        if (!(file instanceof import_obsidian21.TFile) || file.extension !== "md") {
           return;
         }
         const document2 = await this.store.getDocument(file);
@@ -16620,7 +16643,7 @@ ${lines.slice(0, 8).join("\n")}`);
     );
     this.registerEvent(
       this.app.vault.on("rename", async (file, oldPath) => {
-        if (!this.settings.migrateOnRename || !(file instanceof import_obsidian20.TFile)) {
+        if (!this.settings.migrateOnRename || !(file instanceof import_obsidian21.TFile)) {
           return;
         }
         const ext = file.extension.toLowerCase();
@@ -16649,7 +16672,7 @@ ${lines.slice(0, 8).join("\n")}`);
     );
     this.registerEvent(
       this.app.workspace.on("file-open", async (file) => {
-        if (file instanceof import_obsidian20.TFile && ["md", "pdf"].includes(file.extension.toLowerCase())) {
+        if (file instanceof import_obsidian21.TFile && ["md", "pdf"].includes(file.extension.toLowerCase())) {
           this.popover.hide();
           await this.store.getDocument(file);
           await this.refreshAnnotations();
@@ -16663,7 +16686,7 @@ ${lines.slice(0, 8).join("\n")}`);
     );
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
-        if (file instanceof import_obsidian20.TFile && file.extension.toLowerCase() === "md") {
+        if (file instanceof import_obsidian21.TFile && file.extension.toLowerCase() === "md") {
           const stats = this.mdOpenStats;
           if (stats[file.path]) {
             delete stats[file.path];
@@ -16716,7 +16739,7 @@ ${lines.slice(0, 8).join("\n")}`);
   }
   /** 记录一次 Markdown 打开（开启开关、.md 文件、60s 冷却内不重复计）。 */
   countMarkdownOpen(file) {
-    if (!this.settings.mdOpenTracking || !(file instanceof import_obsidian20.TFile) || file.extension.toLowerCase() !== "md") {
+    if (!this.settings.mdOpenTracking || !(file instanceof import_obsidian21.TFile) || file.extension.toLowerCase() !== "md") {
       return;
     }
     const now = Date.now();
@@ -16763,11 +16786,11 @@ ${lines.slice(0, 8).join("\n")}`);
     }
     const snapshot = await this.resolveSelection();
     if (!snapshot) {
-      new import_obsidian20.Notice("\u8BF7\u5148\u9009\u4E2D\u6587\u672C\u3002");
+      new import_obsidian21.Notice("\u8BF7\u5148\u9009\u4E2D\u6587\u672C\u3002");
       return;
     }
     const file = this.app.vault.getAbstractFileByPath(snapshot.filePath);
-    if (!(file instanceof import_obsidian20.TFile)) {
+    if (!(file instanceof import_obsidian21.TFile)) {
       return;
     }
     const highlight = {
@@ -16797,11 +16820,11 @@ ${lines.slice(0, 8).join("\n")}`);
     }
     const snapshot = await this.resolveSelection();
     if (!snapshot) {
-      new import_obsidian20.Notice("\u8BF7\u5148\u9009\u4E2D\u6587\u672C\u3002");
+      new import_obsidian21.Notice("\u8BF7\u5148\u9009\u4E2D\u6587\u672C\u3002");
       return;
     }
     const file = this.app.vault.getAbstractFileByPath(snapshot.filePath);
-    if (!(file instanceof import_obsidian20.TFile)) {
+    if (!(file instanceof import_obsidian21.TFile)) {
       return;
     }
     const note = await new CommentModal(this.app, "", "").openAndRead();
@@ -16830,7 +16853,7 @@ ${lines.slice(0, 8).join("\n")}`);
   }
   async refreshActiveReadingViewHighlights(filePath) {
     const file = this.app.vault.getAbstractFileByPath(filePath);
-    if (!(file instanceof import_obsidian20.TFile)) {
+    if (!(file instanceof import_obsidian21.TFile)) {
       return;
     }
     const document2 = this.store.getCachedDocument(filePath) ?? await this.store.getDocument(file);
@@ -16840,7 +16863,7 @@ ${lines.slice(0, 8).join("\n")}`);
     }
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       const view = leaf.view;
-      if (!(view instanceof import_obsidian20.MarkdownView) || view.file?.path !== filePath) {
+      if (!(view instanceof import_obsidian21.MarkdownView) || view.file?.path !== filePath) {
         continue;
       }
       const previewRoot = findPreviewRoot(view);
@@ -16897,7 +16920,7 @@ ${lines.slice(0, 8).join("\n")}`);
     return null;
   }
   activeEditor() {
-    const view = this.app.workspace.getActiveViewOfType(import_obsidian20.MarkdownView);
+    const view = this.app.workspace.getActiveViewOfType(import_obsidian21.MarkdownView);
     return view ? { editor: view.editor, file: view.file } : null;
   }
   async activateSidebar() {
@@ -16964,8 +16987,8 @@ ${lines.slice(0, 8).join("\n")}`);
    */
   async openEpubAtCfi(filePath, cfi) {
     const file = this.app.vault.getAbstractFileByPath(filePath);
-    if (!(file instanceof import_obsidian20.TFile) || file.extension.toLowerCase() !== "epub") {
-      new import_obsidian20.Notice("\u65E0\u6CD5\u627E\u5230\u5BF9\u5E94\u7684\u7535\u5B50\u4E66\u6587\u4EF6");
+    if (!(file instanceof import_obsidian21.TFile) || file.extension.toLowerCase() !== "epub") {
+      new import_obsidian21.Notice("\u65E0\u6CD5\u627E\u5230\u5BF9\u5E94\u7684\u7535\u5B50\u4E66\u6587\u4EF6");
       return;
     }
     const leaf = this.app.workspace.getLeaf("tab");
@@ -16997,7 +17020,7 @@ ${lines.slice(0, 8).join("\n")}`);
     const text = window.getSelection()?.toString() || this.activeEditor()?.editor.getSelection() || "";
     if (text) {
       navigator.clipboard.writeText(text);
-      new import_obsidian20.Notice("Copied selection");
+      new import_obsidian21.Notice("Copied selection");
     }
   }
   async handleAnnotationClick(event) {
@@ -17015,7 +17038,7 @@ ${lines.slice(0, 8).join("\n")}`);
     }
     const annotationId = mark.dataset.yhId;
     const file = this.app.workspace.getActiveFile();
-    if (!annotationId || !(file instanceof import_obsidian20.TFile)) {
+    if (!annotationId || !(file instanceof import_obsidian21.TFile)) {
       return;
     }
     const document2 = this.store.getCachedDocument(file.path) ?? await this.store.getDocument(file);
@@ -17042,7 +17065,7 @@ ${lines.slice(0, 8).join("\n")}`);
     }
     await sleep(100);
     const file = this.app.vault.getAbstractFileByPath(context.sourcePath);
-    if (!(file instanceof import_obsidian20.TFile)) {
+    if (!(file instanceof import_obsidian21.TFile)) {
       return;
     }
     const document2 = await this.store.getDocument(file);
@@ -17195,7 +17218,7 @@ function nthIndexOf(source, target, occurrenceIndex) {
   }
   return -1;
 }
-var CommentModal = class extends import_obsidian20.Modal {
+var CommentModal = class extends import_obsidian21.Modal {
   constructor(app, initialTitle, initialContent) {
     super(app);
     this.initialTitle = initialTitle;

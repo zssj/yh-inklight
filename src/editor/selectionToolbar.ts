@@ -5,6 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
+import { Platform } from "obsidian";
 import { ANNOTATION_COLORS, AnnotationColor, COLOR_LABELS } from "../storage/types";
 
 interface SelectionToolbarOptions {
@@ -12,6 +13,8 @@ interface SelectionToolbarOptions {
   onComment: () => void;
   onCopy: () => void;
   onOpenSidebar: () => void;
+  /** 移动端 md 吸底时距屏幕底部的偏移 px（含系统导航条安全间距，由 main.ts 从设置读取） */
+  getBottomInset: () => number;
 }
 
 export class SelectionToolbar {
@@ -48,6 +51,19 @@ export class SelectionToolbar {
     }
 
     const rect = range.getBoundingClientRect();
+    // 移动端 md：吸底固定，避开 Android 系统选择操作条（复制/分享/全选/网页搜索，
+    // 系统绘制、位置随选区浮动，插件无法与之协调，只能让位）。PDF/桌面端维持选区上方悬浮。
+    if (Platform.isMobile && isSelectionInsideMarkdown(range)) {
+      this.element.style.top = "";
+      this.element.style.left = "50%";
+      this.element.style.bottom = `${Math.max(8, this.options.getBottomInset() + 8)}px`;
+      this.element.toggleClass("yh-toolbar--docked", true);
+      this.element.toggleClass("is-visible", true);
+      this.visible = true;
+      return;
+    }
+    this.element.style.bottom = "";
+    this.element.toggleClass("yh-toolbar--docked", false);
     this.element.style.left = `${Math.max(8, rect.left + rect.width / 2)}px`;
     this.element.style.top = `${Math.max(8, rect.top - 46)}px`;
     this.element.toggleClass("is-visible", true);
@@ -117,6 +133,20 @@ function isSelectionInsideWorkspace(range: Range): boolean {
       container.closest(".callout-content") ||
       container.closest(".markdown-preview-view"),
   );
+}
+
+/** 选区是否位于 Markdown 视图内（编辑模式 CM6 容器或阅读模式预览容器）。 */
+function isSelectionInsideMarkdown(range: Range): boolean {
+  const container =
+    range.commonAncestorContainer instanceof HTMLElement
+      ? range.commonAncestorContainer
+      : range.commonAncestorContainer.parentElement;
+
+  if (!container) {
+    return false;
+  }
+
+  return Boolean(container.closest(".markdown-source-view") || container.closest(".markdown-preview-view"));
 }
 
 const NOTE_ICON = `

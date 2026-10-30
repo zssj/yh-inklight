@@ -7976,19 +7976,12 @@ var MARKDOWN_DECORATION_CHARS = /* @__PURE__ */ new Set([
   "-"
 ]);
 function foldWhitespaceWithMap(value) {
-  let text = "";
   const map = [];
-  let pendingSpace = false;
+  let text = "";
   for (let index = 0; index < value.length; index += 1) {
     const char = value[index];
     if (/\s/.test(char)) {
-      pendingSpace = text.length > 0;
       continue;
-    }
-    if (pendingSpace) {
-      text += " ";
-      map.push(index);
-      pendingSpace = false;
     }
     text += char.toLowerCase();
     map.push(index);

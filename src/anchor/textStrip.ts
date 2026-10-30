@@ -30,26 +30,21 @@ export interface StrippedIndex {
 }
 
 /**
- * 空白折叠归一化：连续空白折叠为单个空格、统一小写，保留原位置映射。
- * 用于解决"渲染选区段间一个 \n、源码段间空行 \n\n"这类换行形态差异
- * ——折叠后两端精确相等，偏移经 map 还原分毫不差。
+ * 空白移除归一化：删除全部空白字符、统一小写，保留原位置映射。
+ * 用于解决跨段/跨行选区的换行形态三层不一致——源码段间空行 \n\n、
+ * 渲染 DOM 段间可能有 \n 文本节点也可能完全没有、Selection.toString()
+ * 段间一个 \n。移除空白后四套表示完全相等（若折叠成单空格，渲染 DOM
+ * 无空白节点时会因"空格 vs 无分隔符"失配），偏移经 map 还原分毫不差。
+ * 标点保留在归一化文本中，段界拼接误配风险远低于连标点都剥的 strip 轮。
  */
 export function foldWhitespaceWithMap(value: string): StrippedIndex {
-  let text = "";
   const map: number[] = [];
-  let pendingSpace = false;
+  let text = "";
 
   for (let index = 0; index < value.length; index += 1) {
     const char = value[index];
     if (/\s/.test(char)) {
-      pendingSpace = text.length > 0;
       continue;
-    }
-
-    if (pendingSpace) {
-      text += " ";
-      map.push(index);
-      pendingSpace = false;
     }
 
     text += char.toLowerCase();

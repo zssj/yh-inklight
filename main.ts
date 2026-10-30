@@ -8,7 +8,7 @@
 import { addIcon, Editor, MarkdownPostProcessorContext, MarkdownView, Modal, Notice, Platform, Plugin, TFile } from "obsidian";
 
 import { createTextAnchor, relocateDocumentAnchors } from "./src/anchor/textAnchor";
-import { stripWithMap, strippedScore } from "./src/anchor/textStrip";
+import { foldWhitespaceWithMap, stripWithMap, strippedScore } from "./src/anchor/textStrip";
 import { createHighlightExtension } from "./src/editor/highlightExtension";
 import { installReadingViewHighlights, refreshReadingViewHighlights } from "./src/editor/readingViewHighlight";
 import { SelectionToolbar } from "./src/editor/selectionToolbar";
@@ -1120,6 +1120,20 @@ function locateRenderedSelectionInSource(
     return bestExact;
   }
 
+  // 空白折叠归一化轮：跨段选区的换行形态两侧不一致（渲染选区段间一个 \n、
+  // 源码段间空行 \n\n），折叠为单空格后精确相等，偏移经 map 还原分毫不差。
+  // 比剥字符轮可靠（不抹段落边界、不产生拼接误配），故置于其前。
+  const bestFolded = pickBestCandidate(
+    collectFoldedCandidates(source, selectedText),
+    source,
+    renderContext,
+    occurrenceIndex,
+    0.4,
+  );
+  if (bestFolded) {
+    return bestFolded;
+  }
+
   const bestStripped = pickBestCandidate(
     collectStrippedCandidates(source, selectedText),
     source,
@@ -1152,6 +1166,31 @@ function collectExactCandidates(source: string, selectedText: string): Array<{ s
   while (cursor >= 0) {
     candidates.push({ startOffset: cursor, endOffset: cursor + selectedText.length });
     cursor = source.indexOf(selectedText, cursor + 1);
+  }
+  return candidates;
+}
+
+/**
+ * 源码中与选区空白折叠后一致的候选位置（折叠为单空格、统一小写后精确相等，
+ * 映射还原到源码真实偏移），覆盖跨段/跨行选区的换行形态差异。
+ */
+function collectFoldedCandidates(source: string, selectedText: string): Array<{ startOffset: number; endOffset: number }> {
+  const candidates: Array<{ startOffset: number; endOffset: number }> = [];
+  const foldedSource = foldWhitespaceWithMap(source);
+  const foldedSelected = foldWhitespaceWithMap(selectedText);
+  if (!foldedSelected.text) {
+    return candidates;
+  }
+
+  let cursor = foldedSource.text.indexOf(foldedSelected.text);
+  while (cursor >= 0) {
+    const endIndex = cursor + foldedSelected.text.length - 1;
+    const start = foldedSource.map[cursor];
+    const end = foldedSource.map[endIndex] + 1;
+    if (start !== undefined && end !== undefined && start < end) {
+      candidates.push({ startOffset: start, endOffset: end });
+    }
+    cursor = foldedSource.text.indexOf(foldedSelected.text, cursor + 1);
   }
   return candidates;
 }

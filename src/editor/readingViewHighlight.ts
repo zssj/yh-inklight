@@ -8,7 +8,7 @@
 import { MarkdownPostProcessorContext, MarkdownRenderChild, Platform } from "obsidian";
 
 import { findBestFuzzyMatch } from "../anchor/fuzzyMatch";
-import { stripText, stripWithMap, strippedScore } from "../anchor/textStrip";
+import { foldWhitespaceWithMap, stripText, stripWithMap, strippedScore } from "../anchor/textStrip";
 import { AnnotationColor, CommentAnnotation, HighlightAnnotation, TextAnchor } from "../storage/types";
 import { highlightBackground } from "./highlightColors";
 
@@ -30,11 +30,6 @@ interface TextSegment {
 interface RenderedRange {
   start: number;
   end: number;
-}
-
-interface NormalizedIndex {
-  text: string;
-  map: number[];
 }
 
 const MARK_SELECTOR = ".yh-reading-highlight, mark.yh-highlight";
@@ -233,8 +228,8 @@ function locateBestTextRange(renderedText: string, anchor: TextAnchor): Rendered
 }
 
 function locateNormalizedRange(renderedText: string, anchor: TextAnchor): RenderedRange | null {
-  const rendered = normalizeWithMap(renderedText);
-  const selected = normalizeWithMap(anchor.selectedText);
+  const rendered = foldWhitespaceWithMap(renderedText);
+  const selected = foldWhitespaceWithMap(anchor.selectedText);
   if (!rendered.text || !selected.text) {
     return null;
   }
@@ -305,31 +300,6 @@ function rangeScore(renderedText: string, anchor: TextAnchor, range: RenderedRan
   const context = strippedScore(anchor.prefix, before, "suffix") * 0.45 + strippedScore(anchor.suffix, after, "prefix") * 0.45;
   const distance = 1 - Math.min(1, Math.abs(range.start - anchor.startOffset) / Math.max(renderedText.length, 1));
   return context + distance * 0.1;
-}
-
-function normalizeWithMap(value: string): NormalizedIndex {
-  let text = "";
-  const map: number[] = [];
-  let pendingSpace = false;
-
-  for (let index = 0; index < value.length; index += 1) {
-    const char = value[index];
-    if (/\s/.test(char)) {
-      pendingSpace = text.length > 0;
-      continue;
-    }
-
-    if (pendingSpace) {
-      text += " ";
-      map.push(index);
-      pendingSpace = false;
-    }
-
-    text += char.toLowerCase();
-    map.push(index);
-  }
-
-  return { text: text.trim(), map };
 }
 
 function collectText(root: HTMLElement): { text: string; segments: TextSegment[] } {

@@ -7975,6 +7975,26 @@ var MARKDOWN_DECORATION_CHARS = /* @__PURE__ */ new Set([
   "+",
   "-"
 ]);
+function foldWhitespaceWithMap(value) {
+  let text = "";
+  const map = [];
+  let pendingSpace = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (/\s/.test(char)) {
+      pendingSpace = text.length > 0;
+      continue;
+    }
+    if (pendingSpace) {
+      text += " ";
+      map.push(index);
+      pendingSpace = false;
+    }
+    text += char.toLowerCase();
+    map.push(index);
+  }
+  return { text, map };
+}
 function stripText(text) {
   return stripWithMap(text).text;
 }
@@ -8295,8 +8315,8 @@ function locateBestTextRange(renderedText, anchor) {
   return best?.range ?? null;
 }
 function locateNormalizedRange(renderedText, anchor) {
-  const rendered = normalizeWithMap(renderedText);
-  const selected = normalizeWithMap(anchor.selectedText);
+  const rendered = foldWhitespaceWithMap(renderedText);
+  const selected = foldWhitespaceWithMap(anchor.selectedText);
   if (!rendered.text || !selected.text) {
     return null;
   }
@@ -8353,26 +8373,6 @@ function rangeScore(renderedText, anchor, range) {
   const context = strippedScore(anchor.prefix, before, "suffix") * 0.45 + strippedScore(anchor.suffix, after, "prefix") * 0.45;
   const distance = 1 - Math.min(1, Math.abs(range.start - anchor.startOffset) / Math.max(renderedText.length, 1));
   return context + distance * 0.1;
-}
-function normalizeWithMap(value) {
-  let text = "";
-  const map = [];
-  let pendingSpace = false;
-  for (let index = 0; index < value.length; index += 1) {
-    const char = value[index];
-    if (/\s/.test(char)) {
-      pendingSpace = text.length > 0;
-      continue;
-    }
-    if (pendingSpace) {
-      text += " ";
-      map.push(index);
-      pendingSpace = false;
-    }
-    text += char.toLowerCase();
-    map.push(index);
-  }
-  return { text: text.trim(), map };
 }
 function collectText(root) {
   const segments = [];
@@ -17253,6 +17253,16 @@ function locateRenderedSelectionInSource(source, selectedText, occurrenceIndex, 
   if (bestExact) {
     return bestExact;
   }
+  const bestFolded = pickBestCandidate(
+    collectFoldedCandidates(source, selectedText),
+    source,
+    renderContext,
+    occurrenceIndex,
+    0.4
+  );
+  if (bestFolded) {
+    return bestFolded;
+  }
   const bestStripped = pickBestCandidate(
     collectStrippedCandidates(source, selectedText),
     source,
@@ -17280,6 +17290,25 @@ function collectExactCandidates(source, selectedText) {
   while (cursor >= 0) {
     candidates.push({ startOffset: cursor, endOffset: cursor + selectedText.length });
     cursor = source.indexOf(selectedText, cursor + 1);
+  }
+  return candidates;
+}
+function collectFoldedCandidates(source, selectedText) {
+  const candidates = [];
+  const foldedSource = foldWhitespaceWithMap(source);
+  const foldedSelected = foldWhitespaceWithMap(selectedText);
+  if (!foldedSelected.text) {
+    return candidates;
+  }
+  let cursor = foldedSource.text.indexOf(foldedSelected.text);
+  while (cursor >= 0) {
+    const endIndex = cursor + foldedSelected.text.length - 1;
+    const start = foldedSource.map[cursor];
+    const end = foldedSource.map[endIndex] + 1;
+    if (start !== void 0 && end !== void 0 && start < end) {
+      candidates.push({ startOffset: start, endOffset: end });
+    }
+    cursor = foldedSource.text.indexOf(foldedSelected.text, cursor + 1);
   }
   return candidates;
 }

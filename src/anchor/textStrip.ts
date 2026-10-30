@@ -29,6 +29,36 @@ export interface StrippedIndex {
   map: number[];
 }
 
+/**
+ * 空白折叠归一化：连续空白折叠为单个空格、统一小写，保留原位置映射。
+ * 用于解决"渲染选区段间一个 \n、源码段间空行 \n\n"这类换行形态差异
+ * ——折叠后两端精确相等，偏移经 map 还原分毫不差。
+ */
+export function foldWhitespaceWithMap(value: string): StrippedIndex {
+  let text = "";
+  const map: number[] = [];
+  let pendingSpace = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (/\s/.test(char)) {
+      pendingSpace = text.length > 0;
+      continue;
+    }
+
+    if (pendingSpace) {
+      text += " ";
+      map.push(index);
+      pendingSpace = false;
+    }
+
+    text += char.toLowerCase();
+    map.push(index);
+  }
+
+  return { text, map };
+}
+
 /** 剥掉空白与 Markdown 装饰字符，返回纯文本内容 */
 export function stripText(text: string): string {
   return stripWithMap(text).text;

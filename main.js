@@ -8643,8 +8643,8 @@ var SelectionToolbar = class {
     this.element.createDiv({ cls: "yh-toolbar-sep" });
     const commentButton = this.iconButton("\u6DFB\u52A0\u4FBF\u7B7E", NOTE_ICON);
     commentButton.addEventListener("click", () => this.options.onComment());
-    const copyButton = this.iconButton("\u590D\u5236", COPY_ICON);
-    copyButton.addEventListener("click", () => this.options.onCopy());
+    const aiButton = this.iconButton("AI \u52A9\u624B", AI_ICON);
+    aiButton.addEventListener("click", () => this.options.onAi());
     const sidebarButton = this.iconButton("\u6253\u5F00\u603B\u89C8", OVERVIEW_ICON);
     sidebarButton.addEventListener("click", () => this.options.onOpenSidebar());
   }
@@ -8685,14 +8685,12 @@ var NOTE_ICON = `
       a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
   </svg>
 `;
-var COPY_ICON = `
+var AI_ICON = `
   <svg width="14" height="14" viewBox="0 0 24 24"
     fill="none" stroke="currentColor" stroke-width="2"
     stroke-linecap="round" stroke-linejoin="round">
-    <rect x="9" y="9" width="13" height="13"
-      rx="2" ry="2"/>
-    <path d="M5 15H4a2 2 0 0 1-2-2V4
-      a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+    <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>
+    <path d="M19 15l.9 2.4L22 18l-2.1.6L19 21l-.9-2.4L16 18l2.1-.6z"/>
   </svg>
 `;
 var OVERVIEW_ICON = `
@@ -16417,7 +16415,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian21.Plugin {
     this.toolbar = new SelectionToolbar({
       onHighlight: (color) => this.createHighlight(color),
       onComment: () => this.createComment(),
-      onCopy: () => this.copySelection(),
+      onAi: () => this.openAiForSelection(),
       onOpenSidebar: () => this.activateSidebar()
     });
     this.popover = new AnnotationPopover({ app: this.app, component: this });
@@ -16944,6 +16942,37 @@ ${lines.slice(0, 8).join("\n")}`);
     if (note === null) {
       return;
     }
+    await this.saveCommentForSnapshot(file, snapshot, note);
+    this.toolbar.hide();
+    this.clearActiveSelection();
+  }
+  /**
+   * 工具栏「AI 助手」入口：复用 EPUB 的 EpubAiModal（解释/翻译/改写/自定义提问）。
+   * 回复不落盘，用户点「存为便签」时预填进 CommentModal，走既有 md 便签流程。
+   */
+  async openAiForSelection() {
+    const snapshot = await this.resolveSelection();
+    if (!snapshot) {
+      new import_obsidian21.Notice("\u8BF7\u5148\u9009\u4E2D\u6587\u672C\u3002");
+      return;
+    }
+    this.toolbar.hide();
+    this.clearActiveSelection();
+    new EpubAiModal(this.app, snapshot.selectedText, this.settings, (note) => {
+      const file = this.app.vault.getAbstractFileByPath(snapshot.filePath);
+      if (!(file instanceof import_obsidian21.TFile)) {
+        return;
+      }
+      void new CommentModal(this.app, "", note).openAndRead().then(async (value) => {
+        if (value === null) {
+          return;
+        }
+        await this.saveCommentForSnapshot(file, snapshot, value);
+      });
+    }).open();
+  }
+  /** 把选区快照 + 用户（或 AI 回复预填后编辑的）笔记保存为 md 便签批注。 */
+  async saveCommentForSnapshot(file, snapshot, note) {
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const comment = {
       id: crypto.randomUUID(),
@@ -16963,8 +16992,6 @@ ${lines.slice(0, 8).join("\n")}`);
     this.forceEditorDecorationsRefresh(file.path);
     await this.refreshActiveReadingViewHighlights(file.path);
     await this.refreshAnnotations();
-    this.toolbar.hide();
-    this.clearActiveSelection();
   }
   /**
    * 收起当前选区与 Android 系统选择操作条（复制/分享/全选/网页搜索）。
@@ -17149,15 +17176,6 @@ ${lines.slice(0, 8).join("\n")}`);
       }
     };
     window.setTimeout(tryNavigate, 200);
-  }
-  copySelection() {
-    const text = window.getSelection()?.toString() || this.activeEditor()?.editor.getSelection() || "";
-    if (text) {
-      navigator.clipboard.writeText(text);
-      new import_obsidian21.Notice("Copied selection");
-      this.toolbar.hide();
-      this.clearActiveSelection();
-    }
   }
   async handleAnnotationClick(event) {
     const target = event.target;

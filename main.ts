@@ -30,6 +30,7 @@ import { ANNOTATION_SIDEBAR_VIEW, AnnotationSidebarView } from "./src/views/side
 import { StickyNoteLane } from "./src/views/stickyNoteLane";
 import { EpubReaderView, EPUB_READER_VIEW_TYPE } from "./src/epub/EpubReaderView";
 import { EpubBookshelfView, EPUB_BOOKSHELF_VIEW_TYPE } from "./src/epub/EpubBookshelfView";
+import { EpubAiModal } from "./src/epub/EpubAiModal";
 import { EpubTocView, EPUB_TOC_VIEW_TYPE } from "./src/epub/EpubTocView";
 import { registerEpubGotoHandler } from "./src/epub/EpubGotoHandler";
 import { MarkdownStatsView, MARKDOWN_STATS_VIEW_TYPE } from "./src/views/markdownStatsView";
@@ -130,7 +131,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     this.toolbar = new SelectionToolbar({
       onHighlight: (color) => this.createHighlight(color),
       onComment: () => this.createComment(),
-      onCopy: () => this.copySelection(),
+      onAi: () => this.openAiForSelection(),
       onOpenSidebar: () => this.activateSidebar(),
     });
     this.popover = new AnnotationPopover({ app: this.app, component: this });
@@ -728,6 +729,45 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       return;
     }
 
+    await this.saveCommentForSnapshot(file, snapshot, note);
+    this.toolbar.hide();
+    this.clearActiveSelection();
+  }
+
+  /**
+   * 工具栏「AI 助手」入口：复用 EPUB 的 EpubAiModal（解释/翻译/改写/自定义提问）。
+   * 回复不落盘，用户点「存为便签」时预填进 CommentModal，走既有 md 便签流程。
+   */
+  private async openAiForSelection(): Promise<void> {
+    const snapshot = await this.resolveSelection();
+    if (!snapshot) {
+      new Notice("请先选中文本。");
+      return;
+    }
+
+    this.toolbar.hide();
+    this.clearActiveSelection();
+
+    new EpubAiModal(this.app, snapshot.selectedText, this.settings, (note) => {
+      const file = this.app.vault.getAbstractFileByPath(snapshot.filePath);
+      if (!(file instanceof TFile)) {
+        return;
+      }
+      void new CommentModal(this.app, "", note).openAndRead().then(async (value) => {
+        if (value === null) {
+          return;
+        }
+        await this.saveCommentForSnapshot(file, snapshot, value);
+      });
+    }).open();
+  }
+
+  /** 把选区快照 + 用户（或 AI 回复预填后编辑的）笔记保存为 md 便签批注。 */
+  private async saveCommentForSnapshot(
+    file: TFile,
+    snapshot: SelectionSnapshot,
+    note: CommentModalValue,
+  ): Promise<void> {
     const now = new Date().toISOString();
     const comment: CommentAnnotation = {
       id: crypto.randomUUID(),
@@ -749,8 +789,6 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     this.forceEditorDecorationsRefresh(file.path);
     await this.refreshActiveReadingViewHighlights(file.path);
     await this.refreshAnnotations();
-    this.toolbar.hide();
-    this.clearActiveSelection();
   }
 
   /**
@@ -957,16 +995,6 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       }
     };
     window.setTimeout(tryNavigate, 200);
-  }
-
-  private copySelection(): void {
-    const text = window.getSelection()?.toString() || this.activeEditor()?.editor.getSelection() || "";
-    if (text) {
-      navigator.clipboard.writeText(text);
-      new Notice("Copied selection");
-      this.toolbar.hide();
-      this.clearActiveSelection();
-    }
   }
 
   private async handleAnnotationClick(event: MouseEvent): Promise<void> {

@@ -11,7 +11,7 @@ import { ANNOTATION_COLORS, AnnotationColor, COLOR_LABELS } from "../storage/typ
 interface SelectionToolbarOptions {
   onHighlight: (color: AnnotationColor) => void;
   onComment: () => void;
-  onCopy: () => void;
+  onAi: () => void;
   onOpenSidebar: () => void;
 }
 
@@ -138,8 +138,10 @@ export class SelectionToolbar {
     const commentButton = this.iconButton("添加便签", NOTE_ICON);
     commentButton.addEventListener("click", () => this.options.onComment());
 
-    const copyButton = this.iconButton("复制", COPY_ICON);
-    copyButton.addEventListener("click", () => this.options.onCopy());
+    // AI 助手入口：复用 EPUB 的 EpubAiModal（解释/翻译/改写/自定义提问），
+    // 未配置 Key 时弹窗内会给出「去设置」指引，故始终显示
+    const aiButton = this.iconButton("AI 助手", AI_ICON);
+    aiButton.addEventListener("click", () => this.options.onAi());
 
     const sidebarButton = this.iconButton("打开总览", OVERVIEW_ICON);
     sidebarButton.addEventListener("click", () => this.options.onOpenSidebar());
@@ -199,14 +201,12 @@ const NOTE_ICON = `
   </svg>
 `;
 
-const COPY_ICON = `
+const AI_ICON = `
   <svg width="14" height="14" viewBox="0 0 24 24"
     fill="none" stroke="currentColor" stroke-width="2"
     stroke-linecap="round" stroke-linejoin="round">
-    <rect x="9" y="9" width="13" height="13"
-      rx="2" ry="2"/>
-    <path d="M5 15H4a2 2 0 0 1-2-2V4
-      a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+    <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>
+    <path d="M19 15l.9 2.4L22 18l-2.1.6L19 21l-.9-2.4L16 18l2.1-.6z"/>
   </svg>
 `;
 

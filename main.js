@@ -9844,6 +9844,7 @@ var AnnotationSettingsTab = class extends import_obsidian7.PluginSettingTab {
     this.renderEpubSettings();
     this.renderAiSettings();
     this.renderMarkdownStatsSettings();
+    this.renderDataMaintenanceSettings();
   }
   /** EPUB 阅读相关设置：字号 / 正文字体 / 主题 / 翻页 / 高亮样式 / 摘录目录 / 段落模式 / 脚注 / 回显 */
   renderEpubSettings() {
@@ -10060,6 +10061,30 @@ var AnnotationSettingsTab = class extends import_obsidian7.PluginSettingTab {
       });
     });
   }
+  /** 批注数据维护：源文件删除后 sidecar 不会自动删，提供手动清理入口 */
+  renderDataMaintenanceSettings() {
+    const { containerEl } = this;
+    containerEl.createEl("h3", { text: "\u6279\u6CE8\u6570\u636E" });
+    const orphanCount = this.plugin.store.countOrphanedDocuments();
+    new import_obsidian7.Setting(containerEl).setName("\u6E05\u7406\u5DF2\u5220\u9664\u6587\u4EF6\u7684\u6279\u6CE8").setDesc(
+      orphanCount > 0 ? `\u5DF2\u5220\u9664\u7684 Markdown / PDF / EPUB \u6587\u4EF6\uFF0C\u5176\u6279\u6CE8\u4ECD\u4FDD\u5B58\u5728 .obsidian-annotations \u4E2D\uFF0C\u5F53\u524D\u6709 ${orphanCount} \u4E2A\u53EF\u6E05\u7406\u3002\u53EA\u5220\u9664\u8FD9\u4E9B\u5B64\u7ACB\u6279\u6CE8\uFF0C\u4E0D\u5F71\u54CD\u73B0\u5B58\u6587\u4EF6\u3002` : "\u6CA1\u6709\u53EF\u6E05\u7406\u7684\u6761\u76EE\u3002\u5220\u9664\u6E90\u6587\u4EF6\u540E\u5176\u6279\u6CE8\u4E0D\u4F1A\u81EA\u52A8\u5220\u9664\uFF0C\u7559\u5728\u6B64\u5904\u624B\u52A8\u6E05\u7406\uFF08\u9632\u6B62\u8BEF\u5220\u6E90\u6587\u4EF6\u540E\u6279\u6CE8\u8DDF\u7740\u4E22\u5931\uFF09\u3002"
+    ).addButton((button) => {
+      button.setButtonText("\u6E05\u7406").setWarning().setDisabled(orphanCount === 0).onClick(async () => {
+        button.setDisabled(true);
+        button.setButtonText("\u6E05\u7406\u4E2D\u2026");
+        try {
+          const removed = await this.plugin.store.cleanupOrphanedDocuments();
+          new import_obsidian7.Notice(removed > 0 ? `\u5DF2\u6E05\u7406 ${removed} \u4E2A\u5DF2\u5220\u9664\u6587\u4EF6\u7684\u6279\u6CE8` : "\u6CA1\u6709\u53EF\u6E05\u7406\u7684\u6279\u6CE8");
+          void this.plugin.refreshAnnotations();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          new import_obsidian7.Notice(`\u6E05\u7406\u5931\u8D25\uFF1A${message}`, 8e3);
+        } finally {
+          this.display();
+        }
+      });
+    });
+  }
 };
 
 // src/storage/annotationStore.ts
@@ -10112,6 +10137,53 @@ var AnnotationStore = class {
       documents.push(await this.getDocument(file));
     }
     return documents;
+  }
+  /** 统计「源文件已删除、批注 sidecar 仍残留」的条目数（只读，不修改数据） */
+  countOrphanedDocuments() {
+    let count = 0;
+    for (const filePath of Object.keys(this.index.files)) {
+      if (!(this.app.vault.getAbstractFileByPath(filePath) instanceof import_obsidian8.TFile)) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+  /**
+   * 清理源文件已删除的批注条目：删除对应 sidecar JSON 与 index 条目，返回清理数量。
+   * 只处理索引中存在、但库中已不存在的文件；现存文件的批注一个都不动。
+   * 由设置页手动触发（不做自动删除，避免误删文件后回收站恢复时批注已被清掉）。
+   */
+  async cleanupOrphanedDocuments() {
+    const nextFiles = { ...this.index.files };
+    let removed = 0;
+    for (const [filePath, entry] of Object.entries(this.index.files)) {
+      if (this.app.vault.getAbstractFileByPath(filePath) instanceof import_obsidian8.TFile) {
+        continue;
+      }
+      try {
+        const candidates = /* @__PURE__ */ new Set([
+          entry?.sidecarPath,
+          this.toSidecarPath(filePath),
+          this.toLegacySidecarPath(filePath)
+        ]);
+        for (const candidate of candidates) {
+          if (candidate) {
+            await this.deleteIfExists(candidate);
+          }
+        }
+      } catch (error) {
+        console.warn("yh-inklight: \u5220\u9664\u5B64\u513F\u6279\u6CE8 sidecar \u5931\u8D25", filePath, error);
+      }
+      delete nextFiles[filePath];
+      this.documents.delete(this.toCacheKey(filePath));
+      removed += 1;
+    }
+    if (removed > 0) {
+      this.index = { ...this.index, files: nextFiles };
+      await this.writeIndex();
+      this.changeVersion += 1;
+    }
+    return removed;
   }
   async getDocument(file) {
     const filePath = this.normalizeVaultPath(file.path);

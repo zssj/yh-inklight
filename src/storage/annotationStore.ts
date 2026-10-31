@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 obsidian App/Vault/Adapter 的文件读写能力，依赖 storage/types 的 sidecar JSON 合约
- * [OUTPUT]: 对外提供 AnnotationStore，负责 Markdown/PDF 的 .obsidian-annotations sidecar 文件、索引、缓存与导出
+ * [OUTPUT]: 对外提供 AnnotationStore，负责 Markdown/PDF/EPUB 的 .obsidian-annotations sidecar 文件、索引、缓存、导出与孤立批注清理
  * [POS]: storage 模块的唯一持久化入口，隔离原始 Markdown 与注释数据
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
@@ -98,6 +98,62 @@ export class AnnotationStore {
     }
 
     return documents;
+  }
+
+  /** 统计「源文件已删除、批注 sidecar 仍残留」的条目数（只读，不修改数据） */
+  countOrphanedDocuments(): number {
+    let count = 0;
+    for (const filePath of Object.keys(this.index.files)) {
+      if (!(this.app.vault.getAbstractFileByPath(filePath) instanceof TFile)) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * 清理源文件已删除的批注条目：删除对应 sidecar JSON 与 index 条目，返回清理数量。
+   * 只处理索引中存在、但库中已不存在的文件；现存文件的批注一个都不动。
+   * 由设置页手动触发（不做自动删除，避免误删文件后回收站恢复时批注已被清掉）。
+   */
+  async cleanupOrphanedDocuments(): Promise<number> {
+    const nextFiles: AnnotationIndex["files"] = { ...this.index.files };
+    let removed = 0;
+
+    for (const [filePath, entry] of Object.entries(this.index.files)) {
+      if (this.app.vault.getAbstractFileByPath(filePath) instanceof TFile) {
+        continue;
+      }
+
+      try {
+        // 索引记录的路径 + 当前命名规则算出的两套路径都尝试删除，
+        // 覆盖历史 legacy/compact 命名差异导致的残留。
+        const candidates = new Set<string>([
+          entry?.sidecarPath,
+          this.toSidecarPath(filePath),
+          this.toLegacySidecarPath(filePath),
+        ]);
+        for (const candidate of candidates) {
+          if (candidate) {
+            await this.deleteIfExists(candidate);
+          }
+        }
+      } catch (error) {
+        console.warn("yh-inklight: 删除孤儿批注 sidecar 失败", filePath, error);
+      }
+
+      delete nextFiles[filePath];
+      this.documents.delete(this.toCacheKey(filePath));
+      removed += 1;
+    }
+
+    if (removed > 0) {
+      this.index = { ...this.index, files: nextFiles };
+      await this.writeIndex();
+      this.changeVersion += 1;
+    }
+
+    return removed;
   }
 
   async getDocument(file: TFile): Promise<FileAnnotationDocument> {

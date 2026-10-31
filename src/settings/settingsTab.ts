@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Obsidian PluginSettingTab/Setting 与 storage/types 的设置模型
- * [OUTPUT]: 对外提供 AnnotationSettingsTab，负责默认颜色、便签栏、窄屏折叠、连接线、作者、备份、重命名迁移设置
+ * [OUTPUT]: 对外提供 AnnotationSettingsTab，负责默认颜色、便签栏、窄屏折叠、连接线、作者、备份、重命名迁移设置与孤立批注清理
  * [POS]: settings 模块的用户配置界面，被 main.ts 注册
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
@@ -123,6 +123,7 @@ export class AnnotationSettingsTab extends PluginSettingTab {
     this.renderEpubSettings();
     this.renderAiSettings();
     this.renderMarkdownStatsSettings();
+    this.renderDataMaintenanceSettings();
   }
 
   /** EPUB 阅读相关设置：字号 / 正文字体 / 主题 / 翻页 / 高亮样式 / 摘录目录 / 段落模式 / 脚注 / 回显 */
@@ -445,6 +446,42 @@ export class AnnotationSettingsTab extends PluginSettingTab {
           await this.plugin.saveMdOpenStats();
           this.plugin.refreshMarkdownStatsViews();
         });
+      });
+  }
+
+  /** 批注数据维护：源文件删除后 sidecar 不会自动删，提供手动清理入口 */
+  private renderDataMaintenanceSettings(): void {
+    const { containerEl } = this;
+    containerEl.createEl("h3", { text: "批注数据" });
+
+    const orphanCount = this.plugin.store.countOrphanedDocuments();
+
+    new Setting(containerEl)
+      .setName("清理已删除文件的批注")
+      .setDesc(
+        orphanCount > 0
+          ? `已删除的 Markdown / PDF / EPUB 文件，其批注仍保存在 .obsidian-annotations 中，当前有 ${orphanCount} 个可清理。只删除这些孤立批注，不影响现存文件。`
+          : "没有可清理的条目。删除源文件后其批注不会自动删除，留在此处手动清理（防止误删源文件后批注跟着丢失）。",
+      )
+      .addButton((button) => {
+        button
+          .setButtonText("清理")
+          .setWarning()
+          .setDisabled(orphanCount === 0)
+          .onClick(async () => {
+            button.setDisabled(true);
+            button.setButtonText("清理中…");
+            try {
+              const removed = await this.plugin.store.cleanupOrphanedDocuments();
+              new Notice(removed > 0 ? `已清理 ${removed} 个已删除文件的批注` : "没有可清理的批注");
+              void this.plugin.refreshAnnotations();
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              new Notice(`清理失败：${message}`, 8000);
+            } finally {
+              this.display();
+            }
+          });
       });
   }
 }

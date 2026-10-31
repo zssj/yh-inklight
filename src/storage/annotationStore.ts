@@ -1,12 +1,13 @@
 /**
  * [INPUT]: 依赖 obsidian App/Vault/Adapter 的文件读写能力，依赖 storage/types 的 sidecar JSON 合约
- * [OUTPUT]: 对外提供 AnnotationStore，负责 Markdown/PDF/EPUB 的 .obsidian-annotations sidecar 文件、索引、缓存、导出与孤立批注清理
+ * [OUTPUT]: 对外提供 AnnotationStore，负责 Markdown/PDF/EPUB 的 .obsidian-annotations sidecar 文件、索引、缓存、导出、孤立批注清理与文件哈希校验迁移
  * [POS]: storage 模块的唯一持久化入口，隔离原始 Markdown 与注释数据
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
 import { App, normalizePath, Notice, TFile } from "obsidian";
 
+import { relocateDocumentAnchors } from "../anchor/textAnchor";
 import {
   AnnotationIndex,
   AnnotationIndexEntry,
@@ -167,8 +168,64 @@ export class AnnotationStore {
     const sidecarPath = this.toSidecarPath(filePath);
     const fallback = await this.createEmptyDocument(file);
     const document = await this.readJson<FileAnnotationDocument>(sidecarPath, fallback);
-    this.documents.set(cacheKey, this.normalizeDocument(document, filePath));
-    return this.documents.get(cacheKey)!;
+    const normalized = await this.reconcileDocumentHash(file, this.normalizeDocument(document, filePath));
+    this.documents.set(cacheKey, normalized);
+    return normalized;
+  }
+
+  /**
+   * 校验 sidecar 记录的文件哈希：源文件被外部修改、同步覆盖，或删除后在同路径
+   * 新建同名文件（旧批注"复活"到无关内容上）时，哈希会与 sidecar 不一致。
+   * 此时按当前正文重新迁移锚点——仍能定位的保留，定位不到的标记 orphaned
+   * （阅读视图不渲染、侧栏置灰仍可见，数据不删），并写入新哈希避免重复计算。
+   * 仅当存在批注且文件 mtime 晚于 sidecar 保存时间时才读全文算哈希，避免每次加载都开销。
+   */
+  private async reconcileDocumentHash(
+    file: TFile,
+    document: FileAnnotationDocument,
+  ): Promise<FileAnnotationDocument> {
+    if (file.extension.toLowerCase() !== "md" || !document.fileHash) {
+      return document;
+    }
+
+    const hasAnnotations = document.highlights.length > 0 || document.comments.length > 0;
+    if (!hasAnnotations) {
+      return document;
+    }
+
+    const savedAt = Date.parse(document.lastModified);
+    // 插件运行期间的正常编辑由 vault modify 监听即时迁移并刷新 lastModified，
+    // mtime 通常早于它；只有文件在插件未运行时被改动（同步/外部编辑/删除重建）
+    // 才会出现 mtime 明显晚于 sidecar 保存时间。留 2s 余量防时钟误差。
+    const fileChanged = Number.isFinite(savedAt) ? file.stat.mtime > savedAt + 2000 : true;
+    if (!fileChanged) {
+      return document;
+    }
+
+    const fileHash = await this.hashFile(file);
+    if (fileHash === document.fileHash) {
+      return document;
+    }
+
+    const source = await this.app.vault.cachedRead(file);
+    const relocated: FileAnnotationDocument = {
+      ...relocateDocumentAnchors(source, document),
+      fileHash,
+      lastModified: new Date().toISOString(),
+    };
+
+    const orphanedCount = [...relocated.highlights, ...relocated.comments].filter((item) => item.orphaned).length;
+    if (orphanedCount > 0) {
+      console.warn(`yh-inklight: ${file.path} 内容已变化，${orphanedCount} 条批注无法定位（已标记失效，数据保留）`);
+    }
+
+    try {
+      await this.saveDocument(relocated);
+    } catch (error) {
+      console.warn("yh-inklight: 保存迁移后的批注失败", error);
+    }
+
+    return relocated;
   }
 
   async saveDocument(document: FileAnnotationDocument): Promise<void> {

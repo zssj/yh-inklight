@@ -10195,8 +10195,50 @@ var AnnotationStore = class {
     const sidecarPath = this.toSidecarPath(filePath);
     const fallback = await this.createEmptyDocument(file);
     const document2 = await this.readJson(sidecarPath, fallback);
-    this.documents.set(cacheKey, this.normalizeDocument(document2, filePath));
-    return this.documents.get(cacheKey);
+    const normalized = await this.reconcileDocumentHash(file, this.normalizeDocument(document2, filePath));
+    this.documents.set(cacheKey, normalized);
+    return normalized;
+  }
+  /**
+   * 校验 sidecar 记录的文件哈希：源文件被外部修改、同步覆盖，或删除后在同路径
+   * 新建同名文件（旧批注"复活"到无关内容上）时，哈希会与 sidecar 不一致。
+   * 此时按当前正文重新迁移锚点——仍能定位的保留，定位不到的标记 orphaned
+   * （阅读视图不渲染、侧栏置灰仍可见，数据不删），并写入新哈希避免重复计算。
+   * 仅当存在批注且文件 mtime 晚于 sidecar 保存时间时才读全文算哈希，避免每次加载都开销。
+   */
+  async reconcileDocumentHash(file, document2) {
+    if (file.extension.toLowerCase() !== "md" || !document2.fileHash) {
+      return document2;
+    }
+    const hasAnnotations = document2.highlights.length > 0 || document2.comments.length > 0;
+    if (!hasAnnotations) {
+      return document2;
+    }
+    const savedAt = Date.parse(document2.lastModified);
+    const fileChanged = Number.isFinite(savedAt) ? file.stat.mtime > savedAt + 2e3 : true;
+    if (!fileChanged) {
+      return document2;
+    }
+    const fileHash = await this.hashFile(file);
+    if (fileHash === document2.fileHash) {
+      return document2;
+    }
+    const source = await this.app.vault.cachedRead(file);
+    const relocated = {
+      ...relocateDocumentAnchors(source, document2),
+      fileHash,
+      lastModified: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    const orphanedCount = [...relocated.highlights, ...relocated.comments].filter((item) => item.orphaned).length;
+    if (orphanedCount > 0) {
+      console.warn(`yh-inklight: ${file.path} \u5185\u5BB9\u5DF2\u53D8\u5316\uFF0C${orphanedCount} \u6761\u6279\u6CE8\u65E0\u6CD5\u5B9A\u4F4D\uFF08\u5DF2\u6807\u8BB0\u5931\u6548\uFF0C\u6570\u636E\u4FDD\u7559\uFF09`);
+    }
+    try {
+      await this.saveDocument(relocated);
+    } catch (error) {
+      console.warn("yh-inklight: \u4FDD\u5B58\u8FC1\u79FB\u540E\u7684\u6279\u6CE8\u5931\u8D25", error);
+    }
+    return relocated;
   }
   async saveDocument(document2) {
     const filePath = this.normalizeVaultPath(document2.filePath);

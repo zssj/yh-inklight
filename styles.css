@@ -2908,20 +2908,34 @@ a.yh-epub-goto-link:hover {
   display: block;
 }
 
+/* 编辑态输入框与只读行高度对齐，减少点 + 时卡片高度抖动 */
+.yh-ov-tags.is-editing .yh-tag-input {
+  padding: 2px 4px;
+}
+
 .yh-ov-tag-add {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 17px;
-  height: 17px;
+  width: 20px;
+  height: 20px;
   border: 0.5px dashed var(--yh-border);
   border-radius: 999px;
   color: var(--text-faint);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1;
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.12s ease;
+}
+
+/* 视觉仍是 20px 圆点，实际命中区约 34px：触屏手指点得中，桌面观感不变 */
+.yh-ov-tag-add::after {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  border-radius: 999px;
 }
 
 .yh-ov-card:hover .yh-ov-tag-add,
@@ -3025,6 +3039,13 @@ a.yh-epub-goto-link:hover {
 }
 
 .yh-tag-suggest-create {
+  border-top: 0.5px solid var(--yh-border);
+  border-radius: 0;
+}
+
+/* 空内容折叠态末尾的「还有 N 个候选」 */
+.yh-tag-suggest-more {
+  color: var(--text-muted);
   border-top: 0.5px solid var(--yh-border);
   border-radius: 0;
 }

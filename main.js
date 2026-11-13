@@ -11594,6 +11594,8 @@ function isCodeAnchor(anchor) {
 
 // src/views/tagInput.ts
 var MAX_SUGGESTIONS = 8;
+var MAX_COMPACT_OTHERS = 5;
+var MAX_EXPANDED_OTHERS = 20;
 var MAX_RECOMMENDATIONS = 3;
 var KIND_LABELS = {
   current: "\u672C\u6587\u6863",
@@ -11654,6 +11656,7 @@ function renderTagInput(parent, options) {
   let tags = normalizeTags(options.tags);
   let matches = [];
   let activeIndex = 0;
+  let showAll = false;
   const showOnOpen = options.showSuggestionsOnOpen === true || options.suggestions.some((item) => item.kind === "recommended");
   let composing = false;
   const emit = (next) => {
@@ -11684,6 +11687,7 @@ function renderTagInput(parent, options) {
     dropdown.empty();
     matches = [];
     activeIndex = 0;
+    showAll = false;
   };
   const renderDropdown = () => {
     const raw = field.value;
@@ -11691,9 +11695,12 @@ function renderTagInput(parent, options) {
     const existing = new Set(tags.map((tag) => tagKey(tag)));
     const seen = /* @__PURE__ */ new Set();
     const query = (suggestion ?? "").toLowerCase();
+    const compact = !query && !showAll;
+    const othersLimit = compact ? MAX_COMPACT_OTHERS : showAll ? MAX_EXPANDED_OTHERS : MAX_SUGGESTIONS;
     const pool = [];
     let recommendedCount = 0;
     let otherCount = 0;
+    let hiddenCount = 0;
     for (const item of options.suggestions) {
       const key = tagKey(item.name);
       if (!key || existing.has(key) || seen.has(key)) {
@@ -11709,16 +11716,14 @@ function renderTagInput(parent, options) {
         }
         recommendedCount += 1;
       } else {
-        if (otherCount >= MAX_SUGGESTIONS) {
+        if (otherCount >= othersLimit) {
+          hiddenCount += 1;
           continue;
         }
         otherCount += 1;
       }
       seen.add(key);
       pool.push(item);
-      if (recommendedCount >= MAX_RECOMMENDATIONS && otherCount >= MAX_SUGGESTIONS) {
-        break;
-      }
     }
     matches = pool;
     const canCreate = Boolean(suggestion) && !existing.has(tagKey(suggestion)) && !pool.some((item) => tagKey(item.name) === tagKey(suggestion));
@@ -11757,6 +11762,16 @@ function renderTagInput(parent, options) {
         commitTag(item.name);
       });
     });
+    if (hiddenCount > 0) {
+      const more = dropdown.createDiv({ cls: "yh-tag-suggest-item yh-tag-suggest-more" });
+      more.createSpan({ cls: "yh-tag-suggest-name", text: `\u8FD8\u6709 ${hiddenCount} \u4E2A\u5019\u9009\u2026` });
+      more.createSpan({ cls: "yh-tag-suggest-kind", text: "\u5C55\u5F00" });
+      more.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        showAll = true;
+        renderDropdown();
+      });
+    }
     if (canCreate) {
       const item = dropdown.createDiv({ cls: "yh-tag-suggest-item yh-tag-suggest-create" });
       item.createSpan({ cls: "yh-tag-suggest-name", text: `\u65B0\u5EFA\u6807\u7B7E\u300C${suggestion}\u300D` });
@@ -11869,7 +11884,7 @@ function renderTagInput(parent, options) {
 function buildTagSuggestions(existingTags, markdownBasenames, obsidianTags = [], currentFileTags = []) {
   const seen = /* @__PURE__ */ new Set();
   const result = [];
-  const pushGroup = (names, kind) => {
+  const pushGroup = (names, kind, sort = true) => {
     const group = [];
     for (const name of names) {
       const cleaned = normalizeTag(name);
@@ -11880,10 +11895,10 @@ function buildTagSuggestions(existingTags, markdownBasenames, obsidianTags = [],
       seen.add(key);
       group.push({ name: cleaned, kind });
     }
-    return group.sort((left, right) => left.name.localeCompare(right.name, "zh-Hans-CN"));
+    return sort ? group.sort((left, right) => left.name.localeCompare(right.name, "zh-Hans-CN")) : group;
   };
   result.push(...pushGroup(currentFileTags, "current"));
-  result.push(...pushGroup(existingTags, "used"));
+  result.push(...pushGroup(existingTags, "used", false));
   result.push(...pushGroup(obsidianTags, "ob"));
   result.push(...pushGroup(markdownBasenames, "page"));
   return result;

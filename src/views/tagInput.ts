@@ -3,6 +3,7 @@
  * [OUTPUT]: 对外提供 renderTagChips（只读 chip 行）、renderTagInput（可编辑 chip + 补全下拉）、
  *           TagSuggestion（带来源的补全候选，含按内容推荐）与 buildTagSuggestions（候选聚合，含 Obsidian 标签）；
  *           推荐项独立配额（最多 3 个），不挤占常规候选；showSuggestionsOnOpen 供侧栏打开即显示候选；
+ *           空内容折叠为「推荐 3 + 常用 5」，其余收进可点开的「还有 N 个候选」，有输入则按输入过滤；
  *           initialQuery / onQueryChange 供调用方在重绘后回填未提交输入；
  *           renderTagInput 处理中文输入法组合态，拼音选词不会误建标签
  * [POS]: views 模块的标签 UI 单点，被 sidebarView、tagBoardView、CommentModal、EpubNoteModal 共用
@@ -12,6 +13,10 @@
 import { MAX_TAGS_PER_ANNOTATION, MAX_VISIBLE_TAG_CHIPS, normalizeTag, normalizeTags, tagKey } from "../storage/tags";
 
 const MAX_SUGGESTIONS = 8;
+/** 空内容折叠态：推荐之外只先给这么多，其余收进「还有 N 个候选」 */
+const MAX_COMPACT_OTHERS = 5;
+/** 点「展开」后常规候选的上限 */
+const MAX_EXPANDED_OTHERS = 20;
 /** 按内容推荐的标签独立配额，不挤占常规候选 */
 const MAX_RECOMMENDATIONS = 3;
 
@@ -123,6 +128,8 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
   let tags = normalizeTags(options.tags);
   let matches: TagSuggestion[] = [];
   let activeIndex = 0;
+  /** 空内容折叠态是否已点开「还有 N 个候选」 */
+  let showAll = false;
   /** 侧栏要求打开即显示；有按内容推荐项时其它调用方也保持打开即显示 */
   const showOnOpen = options.showSuggestionsOnOpen === true
     || options.suggestions.some((item) => item.kind === "recommended");
@@ -162,6 +169,7 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
     dropdown.empty();
     matches = [];
     activeIndex = 0;
+    showAll = false;
   };
 
   const renderDropdown = (): void => {
@@ -171,10 +179,16 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
     const seen = new Set<string>();
     const query = (suggestion ?? "").toLowerCase();
 
-    // 推荐项与常规候选分开计数：推荐最多 3 个，常规仍保留 8 个，避免推荐把下拉占满
+    // 空内容折叠态：推荐最多 3 个 + 其余最多 5 个，剩下的收进「还有 N 个候选」；
+    // 一旦有输入就按输入过滤、不再折叠，搜索能力不受影响
+    const compact = !query && !showAll;
+    const othersLimit = compact
+      ? MAX_COMPACT_OTHERS
+      : (showAll ? MAX_EXPANDED_OTHERS : MAX_SUGGESTIONS);
     const pool: TagSuggestion[] = [];
     let recommendedCount = 0;
     let otherCount = 0;
+    let hiddenCount = 0;
     for (const item of options.suggestions) {
       const key = tagKey(item.name);
       if (!key || existing.has(key) || seen.has(key)) {
@@ -190,16 +204,14 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
         }
         recommendedCount += 1;
       } else {
-        if (otherCount >= MAX_SUGGESTIONS) {
+        if (otherCount >= othersLimit) {
+          hiddenCount += 1;
           continue;
         }
         otherCount += 1;
       }
       seen.add(key);
       pool.push(item);
-      if (recommendedCount >= MAX_RECOMMENDATIONS && otherCount >= MAX_SUGGESTIONS) {
-        break;
-      }
     }
 
     matches = pool;
@@ -243,6 +255,18 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
         commitTag(item.name);
       });
     });
+
+    // 折叠态剩下多少条：点一下展开，固定排在候选末尾、新建项之前
+    if (hiddenCount > 0) {
+      const more = dropdown.createDiv({ cls: "yh-tag-suggest-item yh-tag-suggest-more" });
+      more.createSpan({ cls: "yh-tag-suggest-name", text: `还有 ${hiddenCount} 个候选…` });
+      more.createSpan({ cls: "yh-tag-suggest-kind", text: "展开" });
+      more.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        showAll = true;
+        renderDropdown();
+      });
+    }
 
     if (canCreate) {
       const item = dropdown.createDiv({ cls: "yh-tag-suggest-item yh-tag-suggest-create" });
@@ -388,7 +412,8 @@ export function buildTagSuggestions(
   const seen = new Set<string>();
   const result: TagSuggestion[] = [];
 
-  const pushGroup = (names: readonly string[], kind: TagSuggestionKind): TagSuggestion[] => {
+  /** sort=false 时保留调用方给的顺序：已用标签按使用文件数降序，比字典序更有用 */
+  const pushGroup = (names: readonly string[], kind: TagSuggestionKind, sort = true): TagSuggestion[] => {
     const group: TagSuggestion[] = [];
     for (const name of names) {
       const cleaned = normalizeTag(name);
@@ -399,12 +424,15 @@ export function buildTagSuggestions(
       seen.add(key);
       group.push({ name: cleaned, kind });
     }
-    return group.sort((left, right) => left.name.localeCompare(right.name, "zh-Hans-CN"));
+    return sort
+      ? group.sort((left, right) => left.name.localeCompare(right.name, "zh-Hans-CN"))
+      : group;
   };
 
   // 当前文档标签必须最先占用 seen，才能压过同名的其它来源并置顶
   result.push(...pushGroup(currentFileTags, "current"));
-  result.push(...pushGroup(existingTags, "used"));
+  // 已用标签保持 getTagDictionary 的频率降序：折叠态先露出来的就是最常用的
+  result.push(...pushGroup(existingTags, "used", false));
   result.push(...pushGroup(obsidianTags, "ob"));
   result.push(...pushGroup(markdownBasenames, "page"));
   return result;

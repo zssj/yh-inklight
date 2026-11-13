@@ -1,7 +1,8 @@
 /**
  * [INPUT]: 依赖 Obsidian ItemView、AnnotationStore 数据与插件主类回调
- * [OUTPUT]: 对外提供 AnnotationSidebarView，将当前文件或全库 annotation 合并为可筛选、可跳转、可导出的总览卡片，卡片可挂标签
- * [POS]: views 模块的右侧 Leaf 总览面板，承载搜索、颜色/类型/标签筛选、排序、行内编辑、标签编辑、跳转、删除与导出模板
+ * [OUTPUT]: 对外提供 AnnotationSidebarView，将当前文件或全库 annotation 合并为可筛选、可跳转、可导出的总览卡片，卡片可挂标签；
+ *           标签编辑按内容推荐历史标签，卡片底部折叠展示字面相关的其他批注（受 contentRelations 设置控制）
+ * [POS]: views 模块的右侧 Leaf 总览面板，承载搜索、颜色/类型/标签筛选、排序、行内编辑、标签编辑、跳转、删除、导出模板与字面关联
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
@@ -24,6 +25,7 @@ import {
 } from "../storage/types";
 import { AnnotationKind, AnnotationMode, buildCards, SidebarCard } from "./cardModel";
 import { renderTagChips, renderTagInput, TagSuggestion } from "./tagInput";
+import { RelationModel } from "./relationModel";
 import { openAnnotationTarget } from "./navigation";
 import { tagKey, hasTag } from "../storage/tags";
 import type { TagRef } from "../storage/annotationStore";
@@ -49,9 +51,12 @@ export class AnnotationSidebarView extends ItemView {
    * 编辑态必须记在视图上而不是只挂在 DOM class 上，否则任何一次重绘都会把输入框冲掉。
    */
   private editingTagCardId: string | null = null;
+  /** 字面关联的按需内存快照：随 store.version 自动失效，不落盘 */
+  private readonly relations: RelationModel;
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: OverlayAnnotationsPlugin) {
     super(leaf);
+    this.relations = new RelationModel(plugin.store);
   }
 
   getViewType(): string {
@@ -102,6 +107,12 @@ export class AnnotationSidebarView extends ItemView {
     if (token !== this.renderToken) {
       return;
     }
+    if (this.plugin.settings.contentRelations) {
+      await this.relations.prepare(documents);
+      if (token !== this.renderToken) {
+        return;
+      }
+    }
     const rawCards = documents.flatMap((document) => buildCards(document));
     const cards = this.filterCards(rawCards);
     const highlightCount = rawCards.filter((card) => card.kind === "highlight" && !card.orphaned).length;
@@ -140,6 +151,9 @@ export class AnnotationSidebarView extends ItemView {
       this.annotationScope === "all"
         ? await this.plugin.store.getIndexedDocuments()
         : [await this.plugin.store.getDocument(file!)];
+    if (this.plugin.settings.contentRelations) {
+      await this.relations.prepare(documents);
+    }
     const rawCards = documents.flatMap((document) => buildCards(document));
     const cards = this.filterCards(rawCards);
 
@@ -394,6 +408,10 @@ export class AnnotationSidebarView extends ItemView {
       }
     });
 
+    if (this.plugin.settings.contentRelations) {
+      this.renderRelated(card, cardData);
+    }
+
     const edit = card.createDiv({ cls: "yh-ov-edit hidden" });
     const textarea = edit.createEl("textarea", {
       cls: "yh-ov-textarea",
@@ -402,6 +420,40 @@ export class AnnotationSidebarView extends ItemView {
     const editActions = edit.createDiv({ cls: "yh-ov-edit-actions" });
     editActions.createEl("button", { cls: "yh-ov-save", text: "保存", attr: { type: "button" } });
     editActions.createEl("button", { cls: "yh-ov-cancel", text: "取消", attr: { type: "button" } });
+  }
+
+  /**
+   * 字面相关的其他批注：默认折叠，每条标出命中的词（让 2-gram 的噪音可解释），
+   * 点击跳转到原文。无命中时整个区块不渲染。
+   */
+  private renderRelated(card: HTMLElement, cardData: SidebarCard): void {
+    const hits = this.relations.getRelated(cardData);
+    if (hits.length === 0) {
+      return;
+    }
+
+    const box = card.createEl("details", { cls: "yh-ov-related" });
+    box.createEl("summary", { text: `相关的 ${hits.length} 条` });
+    const list = box.createDiv({ cls: "yh-ov-related-list" });
+
+    for (const hit of hits) {
+      const row = list.createDiv({ cls: "yh-ov-related-row" });
+      const excerpt = hit.card.text.length > 60 ? `${hit.card.text.slice(0, 60)}…` : hit.card.text;
+      row.createDiv({ cls: "yh-ov-related-text", text: excerpt });
+
+      const meta = row.createDiv({ cls: "yh-ov-related-meta" });
+      meta.createSpan({ cls: "yh-ov-related-reason", text: `都提到「${hit.reasons.join("」「")}」` });
+      const source = this.fileForCard(hit.card);
+      meta.createSpan({ cls: "yh-ov-related-file", text: source?.basename ?? hit.card.sourcePath });
+
+      if (source) {
+        row.addClass("is-clickable");
+        row.setAttribute("role", "button");
+        row.addEventListener("click", () => {
+          void this.jumpTo(source, hit.card.startOffset, hit.card.pageNumber, hit.card.mode, hit.card.cfiRange);
+        });
+      }
+    }
   }
 
   /** 标签行：默认只读 chip + 加号；点加号原地切编辑态，不弹窗 */
@@ -447,13 +499,17 @@ export class AnnotationSidebarView extends ItemView {
     this.editingTagCardId = cardData.id;
     row.empty();
     row.addClass("is-editing");
+    // 按当前划线内容推荐用过的标签：只从历史里挑、不发明新词，冷启动或快照未就绪时静默为空
+    const recommended: TagSuggestion[] = this.plugin.settings.contentRelations
+      ? this.relations.getRecommendedTags(cardData).map((name): TagSuggestion => ({ name, kind: "recommended" }))
+      : [];
     const currentTags = this.plugin.settings.obTagBridge ? this.plugin.getFileObsidianTags(file) : [];
     const quickApply = currentTags.length > 0
       ? { label: `沿用本文档标签（${currentTags.length}）`, tags: currentTags }
       : undefined;
     renderTagInput(row, {
       tags: cardData.tags,
-      suggestions,
+      suggestions: [...recommended, ...suggestions],
       quickApply,
       onChange: (tags) => {
         cardData.tags = tags;

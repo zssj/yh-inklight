@@ -229,6 +229,9 @@ export interface AnnotationPluginSettings {
   // --- 与 Obsidian 标签互通 ---
   /** 开启后：标签补全候选并入 OB 标签；导出的笔记写入 OB 可索引的 frontmatter / 正文标签 */
   obTagBridge: boolean;
+  // --- 字面内容关联（不上 AI、不联网、纯内存） ---
+  /** 开启后：打标签时按划线内容推荐用过的标签；卡片底部列出字面相关的其他批注 */
+  contentRelations: boolean;
   // --- EPUB 手机端沉浸式导航栏 ---
   epubHideMobileNavbar: boolean;
   /** EPUB 底部进度条与安卓系统导航条的间距（px），遮挡时调大 */
@@ -289,6 +292,8 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   mdOpenTracking: true,
   // 与 Obsidian 标签互通（默认关，保持既有导出内容不变）
   obTagBridge: false,
+  // 字面内容关联默认开：纯本地计算、零隐私成本，设置页可关
+  contentRelations: true,
   // EPUB 手机端沉浸式导航栏
   epubHideMobileNavbar: true,
   epubMobileBottomInset: 32,

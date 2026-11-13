@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Obsidian PluginSettingTab/Setting 与 storage/types 的设置模型
- * [OUTPUT]: 对外提供 AnnotationSettingsTab，负责默认颜色、便签栏、窄屏折叠、连接线、作者、备份、重命名迁移设置与孤立批注清理
+ * [OUTPUT]: 对外提供 AnnotationSettingsTab，负责默认颜色、便签栏、窄屏折叠、连接线、作者、备份、重命名迁移设置、内容关联开关与孤立批注清理
  * [POS]: settings 模块的用户配置界面，被 main.ts 注册
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
@@ -124,6 +124,7 @@ export class AnnotationSettingsTab extends PluginSettingTab {
     this.renderAiSettings();
     this.renderMarkdownStatsSettings();
     this.renderTagBridgeSettings();
+    this.renderContentRelationSettings();
     this.renderDataMaintenanceSettings();
   }
 
@@ -139,6 +140,23 @@ export class AnnotationSettingsTab extends PluginSettingTab {
         toggle.setValue(this.plugin.settings.obTagBridge).onChange(async (value) => {
           this.plugin.settings.obTagBridge = value;
           await this.plugin.saveSettings();
+        });
+      });
+  }
+
+  /** 字面内容关联：按内容推荐标签 + 相关批注，纯本地计算，不联网不调用 AI */
+  private renderContentRelationSettings(): void {
+    const { containerEl } = this;
+    containerEl.createEl("h3", { text: "内容关联" });
+
+    new Setting(containerEl)
+      .setName("按内容推荐标签与相关批注")
+      .setDesc("纯本地的字面匹配（不联网、不调用 AI）：打标签时按划线内容推荐你用过的标签；卡片底部折叠列出引用了相同词语的其他批注，并标出命中词。换个说法就认不出属正常现象。关闭后完全回到原有行为。")
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.contentRelations).onChange(async (value) => {
+          this.plugin.settings.contentRelations = value;
+          await this.plugin.saveSettings();
+          void this.plugin.refreshAnnotations();
         });
       });
   }

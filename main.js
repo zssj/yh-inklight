@@ -8521,6 +8521,8 @@ var DEFAULT_SETTINGS = {
   mdOpenTracking: true,
   // 与 Obsidian 标签互通（默认关，保持既有导出内容不变）
   obTagBridge: false,
+  // 字面内容关联默认开：纯本地计算、零隐私成本，设置页可关
+  contentRelations: true,
   // EPUB 手机端沉浸式导航栏
   epubHideMobileNavbar: true,
   epubMobileBottomInset: 32,
@@ -9849,6 +9851,7 @@ var AnnotationSettingsTab = class extends import_obsidian7.PluginSettingTab {
     this.renderAiSettings();
     this.renderMarkdownStatsSettings();
     this.renderTagBridgeSettings();
+    this.renderContentRelationSettings();
     this.renderDataMaintenanceSettings();
   }
   /** 与 Obsidian 标签互通：默认关闭，保持既有导出内容逐字不变 */
@@ -9859,6 +9862,18 @@ var AnnotationSettingsTab = class extends import_obsidian7.PluginSettingTab {
       toggle.setValue(this.plugin.settings.obTagBridge).onChange(async (value) => {
         this.plugin.settings.obTagBridge = value;
         await this.plugin.saveSettings();
+      });
+    });
+  }
+  /** 字面内容关联：按内容推荐标签 + 相关批注，纯本地计算，不联网不调用 AI */
+  renderContentRelationSettings() {
+    const { containerEl } = this;
+    containerEl.createEl("h3", { text: "\u5185\u5BB9\u5173\u8054" });
+    new import_obsidian7.Setting(containerEl).setName("\u6309\u5185\u5BB9\u63A8\u8350\u6807\u7B7E\u4E0E\u76F8\u5173\u6279\u6CE8").setDesc("\u7EAF\u672C\u5730\u7684\u5B57\u9762\u5339\u914D\uFF08\u4E0D\u8054\u7F51\u3001\u4E0D\u8C03\u7528 AI\uFF09\uFF1A\u6253\u6807\u7B7E\u65F6\u6309\u5212\u7EBF\u5185\u5BB9\u63A8\u8350\u4F60\u7528\u8FC7\u7684\u6807\u7B7E\uFF1B\u5361\u7247\u5E95\u90E8\u6298\u53E0\u5217\u51FA\u5F15\u7528\u4E86\u76F8\u540C\u8BCD\u8BED\u7684\u5176\u4ED6\u6279\u6CE8\uFF0C\u5E76\u6807\u51FA\u547D\u4E2D\u8BCD\u3002\u6362\u4E2A\u8BF4\u6CD5\u5C31\u8BA4\u4E0D\u51FA\u5C5E\u6B63\u5E38\u73B0\u8C61\u3002\u5173\u95ED\u540E\u5B8C\u5168\u56DE\u5230\u539F\u6709\u884C\u4E3A\u3002").addToggle((toggle) => {
+      toggle.setValue(this.plugin.settings.contentRelations).onChange(async (value) => {
+        this.plugin.settings.contentRelations = value;
+        await this.plugin.saveSettings();
+        void this.plugin.refreshAnnotations();
       });
     });
   }
@@ -11523,11 +11538,13 @@ function isCodeAnchor(anchor) {
 
 // src/views/tagInput.ts
 var MAX_SUGGESTIONS = 8;
+var MAX_RECOMMENDATIONS = 3;
 var KIND_LABELS = {
   current: "\u672C\u6587\u6863",
   used: "\u5DF2\u7528\u6807\u7B7E",
   ob: "OB \u6807\u7B7E",
-  page: "\u6982\u5FF5\u9875"
+  page: "\u6982\u5FF5\u9875",
+  recommended: "\u6309\u5185\u5BB9\u63A8\u8350"
 };
 function renderTagChips(parent, tags, options = {}) {
   const list = normalizeTags(tags);
@@ -11614,6 +11631,8 @@ function renderTagInput(parent, options) {
     const seen = /* @__PURE__ */ new Set();
     const query = (suggestion ?? "").toLowerCase();
     const pool = [];
+    let recommendedCount = 0;
+    let otherCount = 0;
     for (const item of options.suggestions) {
       const key = tagKey(item.name);
       if (!key || existing.has(key) || seen.has(key)) {
@@ -11622,9 +11641,21 @@ function renderTagInput(parent, options) {
       if (query && !item.name.toLowerCase().includes(query)) {
         continue;
       }
+      const isRecommended = item.kind === "recommended";
+      if (isRecommended) {
+        if (recommendedCount >= MAX_RECOMMENDATIONS) {
+          continue;
+        }
+        recommendedCount += 1;
+      } else {
+        if (otherCount >= MAX_SUGGESTIONS) {
+          continue;
+        }
+        otherCount += 1;
+      }
       seen.add(key);
       pool.push(item);
-      if (pool.length >= MAX_SUGGESTIONS) {
+      if (recommendedCount >= MAX_RECOMMENDATIONS && otherCount >= MAX_SUGGESTIONS) {
         break;
       }
     }
@@ -11651,6 +11682,9 @@ function renderTagInput(parent, options) {
     }
     matches.forEach((item, index) => {
       const row = dropdown.createDiv({ cls: "yh-tag-suggest-item" });
+      if (item.kind === "recommended") {
+        row.addClass("is-recommended");
+      }
       row.createSpan({ cls: "yh-tag-suggest-name", text: item.name });
       row.createSpan({ cls: "yh-tag-suggest-kind", text: KIND_LABELS[item.kind] });
       if (index === activeIndex) {
@@ -11734,6 +11768,9 @@ function renderTagInput(parent, options) {
     }
   });
   renderChips();
+  if (options.suggestions.some((item) => item.kind === "recommended")) {
+    renderDropdown();
+  }
   return {
     flush: () => {
       if (field.value.trim()) {
@@ -11765,6 +11802,248 @@ function buildTagSuggestions(existingTags, markdownBasenames, obsidianTags = [],
   result.push(...pushGroup(markdownBasenames, "page"));
   return result;
 }
+
+// src/utils/textTerms.ts
+var MIN_RELATION_TEXT_CHARS = 8;
+var MAX_TEXT_CHARS = 500;
+var MAX_TERMS = 12;
+var RELATED_THRESHOLD = 0.25;
+var STOP_GRAMS = /* @__PURE__ */ new Set([
+  "\u6211\u4EEC",
+  "\u4F60\u4EEC",
+  "\u4ED6\u4EEC",
+  "\u8FD9\u4E2A",
+  "\u90A3\u4E2A",
+  "\u8FD9\u4E9B",
+  "\u90A3\u4E9B",
+  "\u4EC0\u4E48",
+  "\u600E\u4E48",
+  "\u4E3A\u4E86",
+  "\u56E0\u4E3A",
+  "\u6240\u4EE5",
+  "\u4F46\u662F",
+  "\u5982\u679C",
+  "\u53EF\u4EE5",
+  "\u4E00\u4E2A",
+  "\u6CA1\u6709",
+  "\u5C31\u662F",
+  "\u4E0D\u662F",
+  "\u65F6\u5019",
+  "\u8FD9\u6837",
+  "\u90A3\u6837",
+  "\u4EE5\u53CA",
+  "\u5E76\u4E14",
+  "\u800C\u4E14",
+  "\u8FD8\u6709",
+  "\u81EA\u5DF1",
+  "\u5DF2\u7ECF",
+  "\u53EF\u80FD",
+  "\u5E94\u8BE5",
+  "\u9700\u8981",
+  "\u901A\u8FC7",
+  "\u5173\u4E8E",
+  "\u5BF9\u4E8E",
+  "\u5176\u4E2D",
+  "\u4E4B\u540E",
+  "\u4E4B\u524D",
+  "\u4E00\u4E9B",
+  "\u4E00\u79CD",
+  "\u4E00\u76F4",
+  "\u975E\u5E38",
+  "\u66F4\u52A0",
+  "\u4E3B\u8981",
+  "\u65B9\u9762",
+  "\u95EE\u9898",
+  "\u7684\u4E86",
+  "\u662F\u5728",
+  "\u662F\u4E2A",
+  "\u8FD9\u4E2A",
+  "\u8FD9\u79CD"
+]);
+var CJK_RUN = /[\u3400-\u9fff]+/g;
+var ASCII_WORD = /[a-z0-9][a-z0-9_-]*/g;
+function normalize2(text) {
+  return text.replace(/```[\s\S]*?```/g, " ").replace(/!?\[\[[^\]]*\]\]/g, " ").replace(/<[^>]+>/g, " ").replace(/[#>*_`~|]/g, " ").toLowerCase().slice(0, MAX_TEXT_CHARS);
+}
+function extractTerms(text) {
+  const clean = normalize2(text);
+  if (clean.trim().length < MIN_RELATION_TEXT_CHARS) {
+    return [];
+  }
+  const counts = /* @__PURE__ */ new Map();
+  const add = (term) => {
+    if (term.length < 2) {
+      return;
+    }
+    counts.set(term, (counts.get(term) ?? 0) + 1);
+  };
+  for (const word of clean.match(ASCII_WORD) ?? []) {
+    if (!/^\d+$/.test(word)) {
+      add(word);
+    }
+  }
+  for (const run of clean.match(CJK_RUN) ?? []) {
+    for (let i3 = 0; i3 + 1 < run.length; i3 += 1) {
+      const gram = run.slice(i3, i3 + 2);
+      if (!STOP_GRAMS.has(gram)) {
+        add(gram);
+      }
+    }
+  }
+  return Array.from(counts.entries()).sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0])).slice(0, MAX_TERMS).map(([term]) => term);
+}
+function termOverlap(a3, b3) {
+  if (a3.length === 0 || b3.length === 0) {
+    return { score: 0, shared: [] };
+  }
+  const setB = new Set(b3);
+  const shared = a3.filter((term) => setB.has(term));
+  const union = (/* @__PURE__ */ new Set([...a3, ...b3])).size;
+  return { score: union > 0 ? shared.length / union : 0, shared };
+}
+function isRelationEligible(text, isCode) {
+  return !isCode && text.trim().length >= MIN_RELATION_TEXT_CHARS;
+}
+
+// src/views/relationModel.ts
+var RELATED_LIMIT = 5;
+var RECOMMEND_LIMIT = 3;
+var COLD_START_MIN_TAGS = 3;
+var COLD_START_MIN_CARDS = 10;
+var CACHE_TTL_MS = 3e3;
+var MAX_ENTRIES = 800;
+function cardKey(card) {
+  return `${card.sourcePath}#${card.id}`;
+}
+function isAdjacent(a3, b3) {
+  if (a3.sourcePath !== b3.sourcePath) {
+    return false;
+  }
+  if (a3.mode === "md" && b3.mode === "md") {
+    return Math.abs(a3.startOffset - b3.startOffset) < 150;
+  }
+  if (a3.mode === "pdf" && b3.mode === "pdf" && a3.pageNumber !== null && b3.pageNumber !== null) {
+    return a3.pageNumber === b3.pageNumber;
+  }
+  return false;
+}
+var RelationModel = class {
+  constructor(store) {
+    this.store = store;
+    this.entries = [];
+    /** 标签比较键 → 该标签下所有卡片的词频，用于按内容推荐 */
+    this.tagTerms = /* @__PURE__ */ new Map();
+    this.version = -1;
+    this.builtAt = 0;
+  }
+  invalidate() {
+    this.version = -1;
+  }
+  /**
+   * 构建（或复用）快照。documents 是全库时直接复用，当前文件模式则补拉全库——
+   * getIndexedDocuments 走 store 的文档缓存，冷启动后只付一次读盘代价。
+   */
+  async prepare(documents) {
+    const now = Date.now();
+    if (this.version === this.store.version && now - this.builtAt < CACHE_TTL_MS) {
+      return;
+    }
+    const all = documents.length > 1 ? documents : await this.store.getIndexedDocuments();
+    const entries = [];
+    const tagTerms = /* @__PURE__ */ new Map();
+    for (const document2 of all) {
+      for (const card of buildCards(document2)) {
+        if (!isRelationEligible(card.text, card.isCode)) {
+          continue;
+        }
+        const terms = extractTerms(`${card.text} ${card.content}`);
+        if (terms.length === 0) {
+          continue;
+        }
+        entries.push({ card, key: cardKey(card), terms });
+        for (const tag of card.tags) {
+          const key = tagKey(tag);
+          if (!key) {
+            continue;
+          }
+          let counts = tagTerms.get(key);
+          if (!counts) {
+            counts = /* @__PURE__ */ new Map();
+            tagTerms.set(key, counts);
+          }
+          for (const term of terms) {
+            counts.set(term, (counts.get(term) ?? 0) + 1);
+          }
+        }
+        if (entries.length >= MAX_ENTRIES) {
+          break;
+        }
+      }
+      if (entries.length >= MAX_ENTRIES) {
+        break;
+      }
+    }
+    this.entries = entries;
+    this.tagTerms = tagTerms;
+    this.version = this.store.version;
+    this.builtAt = now;
+  }
+  /** 与当前卡片字面相关的其他批注，按重合度降序，带命中理由 */
+  getRelated(card, limit = RELATED_LIMIT) {
+    const selfTerms = extractTerms(`${card.text} ${card.content}`);
+    if (selfTerms.length === 0) {
+      return [];
+    }
+    const self = cardKey(card);
+    const hits = [];
+    for (const entry of this.entries) {
+      if (entry.key === self || isAdjacent(card, entry.card)) {
+        continue;
+      }
+      const overlap = termOverlap(selfTerms, entry.terms);
+      if (overlap.shared.length === 0) {
+        continue;
+      }
+      const score = overlap.score * (entry.card.sourcePath === card.sourcePath ? 0.6 : 1);
+      if (score < RELATED_THRESHOLD) {
+        continue;
+      }
+      hits.push({ card: entry.card, score, reasons: overlap.shared.slice(0, 2) });
+    }
+    return hits.sort((left, right) => right.score - left.score).slice(0, limit);
+  }
+  /**
+   * 按当前划线内容推荐历史标签。只从用户已经用过的标签里挑，
+   * 不发明新词；冷启动或命中词不足 2 个时静默返回空。
+   */
+  getRecommendedTags(card, limit = RECOMMEND_LIMIT) {
+    if (this.tagTerms.size < COLD_START_MIN_TAGS || this.entries.length < COLD_START_MIN_CARDS) {
+      return [];
+    }
+    const terms = extractTerms(`${card.text} ${card.content}`);
+    if (terms.length === 0) {
+      return [];
+    }
+    const existing = new Set(card.tags.map((tag) => tagKey(tag)));
+    const ranked = [];
+    for (const [key, counts] of this.tagTerms) {
+      if (existing.has(key)) {
+        continue;
+      }
+      let hits = 0;
+      for (const term of terms) {
+        if ((counts.get(term) ?? 0) > 0) {
+          hits += 1;
+        }
+      }
+      if (hits < 2) {
+        continue;
+      }
+      ranked.push({ key, score: hits / terms.length });
+    }
+    return ranked.sort((left, right) => right.score - left.score || left.key.localeCompare(right.key)).slice(0, limit).map((item) => this.store.getTagDisplayName(item.key));
+  }
+};
 
 // src/views/navigation.ts
 var import_obsidian10 = require("obsidian");
@@ -11813,6 +12092,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
      * 编辑态必须记在视图上而不是只挂在 DOM class 上，否则任何一次重绘都会把输入框冲掉。
      */
     this.editingTagCardId = null;
+    this.relations = new RelationModel(plugin.store);
   }
   getViewType() {
     return ANNOTATION_SIDEBAR_VIEW;
@@ -11853,6 +12133,12 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     if (token !== this.renderToken) {
       return;
     }
+    if (this.plugin.settings.contentRelations) {
+      await this.relations.prepare(documents);
+      if (token !== this.renderToken) {
+        return;
+      }
+    }
     const rawCards = documents.flatMap((document2) => buildCards(document2));
     const cards = this.filterCards(rawCards);
     const highlightCount = rawCards.filter((card) => card.kind === "highlight" && !card.orphaned).length;
@@ -11885,6 +12171,9 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       return;
     }
     const documents = this.annotationScope === "all" ? await this.plugin.store.getIndexedDocuments() : [await this.plugin.store.getDocument(file)];
+    if (this.plugin.settings.contentRelations) {
+      await this.relations.prepare(documents);
+    }
     const rawCards = documents.flatMap((document2) => buildCards(document2));
     const cards = this.filterCards(rawCards);
     list.empty();
@@ -12111,6 +12400,9 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
         await this.plugin.refreshAnnotations();
       }
     });
+    if (this.plugin.settings.contentRelations) {
+      this.renderRelated(card, cardData);
+    }
     const edit = card.createDiv({ cls: "yh-ov-edit hidden" });
     const textarea = edit.createEl("textarea", {
       cls: "yh-ov-textarea",
@@ -12119,6 +12411,35 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     const editActions = edit.createDiv({ cls: "yh-ov-edit-actions" });
     editActions.createEl("button", { cls: "yh-ov-save", text: "\u4FDD\u5B58", attr: { type: "button" } });
     editActions.createEl("button", { cls: "yh-ov-cancel", text: "\u53D6\u6D88", attr: { type: "button" } });
+  }
+  /**
+   * 字面相关的其他批注：默认折叠，每条标出命中的词（让 2-gram 的噪音可解释），
+   * 点击跳转到原文。无命中时整个区块不渲染。
+   */
+  renderRelated(card, cardData) {
+    const hits = this.relations.getRelated(cardData);
+    if (hits.length === 0) {
+      return;
+    }
+    const box = card.createEl("details", { cls: "yh-ov-related" });
+    box.createEl("summary", { text: `\u76F8\u5173\u7684 ${hits.length} \u6761` });
+    const list = box.createDiv({ cls: "yh-ov-related-list" });
+    for (const hit of hits) {
+      const row = list.createDiv({ cls: "yh-ov-related-row" });
+      const excerpt = hit.card.text.length > 60 ? `${hit.card.text.slice(0, 60)}\u2026` : hit.card.text;
+      row.createDiv({ cls: "yh-ov-related-text", text: excerpt });
+      const meta = row.createDiv({ cls: "yh-ov-related-meta" });
+      meta.createSpan({ cls: "yh-ov-related-reason", text: `\u90FD\u63D0\u5230\u300C${hit.reasons.join("\u300D\u300C")}\u300D` });
+      const source = this.fileForCard(hit.card);
+      meta.createSpan({ cls: "yh-ov-related-file", text: source?.basename ?? hit.card.sourcePath });
+      if (source) {
+        row.addClass("is-clickable");
+        row.setAttribute("role", "button");
+        row.addEventListener("click", () => {
+          void this.jumpTo(source, hit.card.startOffset, hit.card.pageNumber, hit.card.mode, hit.card.cfiRange);
+        });
+      }
+    }
   }
   /** 标签行：默认只读 chip + 加号；点加号原地切编辑态，不弹窗 */
   mountTagRow(row, file, cardData) {
@@ -12158,11 +12479,12 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.editingTagCardId = cardData.id;
     row.empty();
     row.addClass("is-editing");
+    const recommended = this.plugin.settings.contentRelations ? this.relations.getRecommendedTags(cardData).map((name) => ({ name, kind: "recommended" })) : [];
     const currentTags = this.plugin.settings.obTagBridge ? this.plugin.getFileObsidianTags(file) : [];
     const quickApply = currentTags.length > 0 ? { label: `\u6CBF\u7528\u672C\u6587\u6863\u6807\u7B7E\uFF08${currentTags.length}\uFF09`, tags: currentTags } : void 0;
     renderTagInput(row, {
       tags: cardData.tags,
-      suggestions,
+      suggestions: [...recommended, ...suggestions],
       quickApply,
       onChange: (tags) => {
         cardData.tags = tags;

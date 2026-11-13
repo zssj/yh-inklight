@@ -3278,3 +3278,73 @@ a.yh-epub-goto-link:hover {
 .yh-tag-board-btn {
   flex: 0 0 auto;
 }
+
+/* ===== 字面内容关联：推荐标签 + 相关批注折叠区 ===== */
+.yh-tag-suggest-item.is-recommended .yh-tag-suggest-name {
+  font-weight: 600;
+}
+
+.yh-tag-suggest-item.is-recommended .yh-tag-suggest-kind {
+  color: var(--text-accent);
+}
+
+.yh-ov-related {
+  margin: 6px 0 2px;
+  padding-top: 6px;
+  border-top: 0.5px solid var(--yh-border);
+}
+
+.yh-ov-related > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  color: var(--text-accent);
+  font-size: var(--yh-font-sm);
+}
+
+.yh-ov-related > summary::-webkit-details-marker {
+  display: none;
+}
+
+.yh-ov-related > summary::before {
+  content: "▸ ";
+}
+
+.yh-ov-related[open] > summary::before {
+  content: "▾ ";
+}
+
+.yh-ov-related-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 0 2px;
+}
+
+.yh-ov-related-row {
+  border-left: 2px solid var(--yh-border);
+  padding: 2px 0 2px 8px;
+}
+
+.yh-ov-related-row.is-clickable {
+  cursor: pointer;
+}
+
+.yh-ov-related-text {
+  font-size: var(--yh-font-sm);
+  line-height: 1.45;
+  color: var(--text-normal);
+}
+
+.yh-ov-related-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+  font-size: 0.75em;
+  color: var(--text-muted);
+}
+
+.yh-ov-related-reason {
+  color: var(--text-accent);
+}

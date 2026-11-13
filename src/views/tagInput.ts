@@ -1,7 +1,8 @@
 /**
  * [INPUT]: 依赖 storage/tags 的归一化规则与 dom 辅助（Obsidian HTMLElement 扩展）
  * [OUTPUT]: 对外提供 renderTagChips（只读 chip 行）、renderTagInput（可编辑 chip + 补全下拉）、
- *           TagSuggestion（带来源的补全候选）与 buildTagSuggestions（候选聚合，含 Obsidian 标签）
+ *           TagSuggestion（带来源的补全候选，含按内容推荐）与 buildTagSuggestions（候选聚合，含 Obsidian 标签）；
+ *           推荐项独立配额（最多 3 个），不挤占常规候选
  * [POS]: views 模块的标签 UI 单点，被 sidebarView、tagBoardView、CommentModal、EpubNoteModal 共用
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
@@ -9,9 +10,11 @@
 import { MAX_TAGS_PER_ANNOTATION, MAX_VISIBLE_TAG_CHIPS, normalizeTag, normalizeTags, tagKey } from "../storage/tags";
 
 const MAX_SUGGESTIONS = 8;
+/** 按内容推荐的标签独立配额，不挤占常规候选 */
+const MAX_RECOMMENDATIONS = 3;
 
 /** 补全候选的来源，决定下拉右侧的角标文案 */
-export type TagSuggestionKind = "current" | "used" | "ob" | "page";
+export type TagSuggestionKind = "current" | "used" | "ob" | "page" | "recommended";
 
 /** 带来源的补全候选：name 用于写入标签，kind 只用于展示 */
 export interface TagSuggestion {
@@ -24,6 +27,7 @@ const KIND_LABELS: Record<TagSuggestionKind, string> = {
   used: "已用标签",
   ob: "OB 标签",
   page: "概念页",
+  recommended: "按内容推荐",
 };
 
 export interface TagChipOptions {
@@ -148,7 +152,10 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
     const seen = new Set<string>();
     const query = (suggestion ?? "").toLowerCase();
 
+    // 推荐项与常规候选分开计数：推荐最多 3 个，常规仍保留 8 个，避免推荐把下拉占满
     const pool: TagSuggestion[] = [];
+    let recommendedCount = 0;
+    let otherCount = 0;
     for (const item of options.suggestions) {
       const key = tagKey(item.name);
       if (!key || existing.has(key) || seen.has(key)) {
@@ -157,9 +164,21 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
       if (query && !item.name.toLowerCase().includes(query)) {
         continue;
       }
+      const isRecommended = item.kind === "recommended";
+      if (isRecommended) {
+        if (recommendedCount >= MAX_RECOMMENDATIONS) {
+          continue;
+        }
+        recommendedCount += 1;
+      } else {
+        if (otherCount >= MAX_SUGGESTIONS) {
+          continue;
+        }
+        otherCount += 1;
+      }
       seen.add(key);
       pool.push(item);
-      if (pool.length >= MAX_SUGGESTIONS) {
+      if (recommendedCount >= MAX_RECOMMENDATIONS && otherCount >= MAX_SUGGESTIONS) {
         break;
       }
     }
@@ -191,6 +210,9 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
 
     matches.forEach((item, index) => {
       const row = dropdown.createDiv({ cls: "yh-tag-suggest-item" });
+      if (item.kind === "recommended") {
+        row.addClass("is-recommended");
+      }
       row.createSpan({ cls: "yh-tag-suggest-name", text: item.name });
       row.createSpan({ cls: "yh-tag-suggest-kind", text: KIND_LABELS[item.kind] });
       if (index === activeIndex) {
@@ -284,6 +306,11 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
   });
 
   renderChips();
+
+  // 常规候选仍等用户输入再弹（保持弹窗原有交互）；有按内容推荐项时，打开输入框即刻展示
+  if (options.suggestions.some((item) => item.kind === "recommended")) {
+    renderDropdown();
+  }
 
   return {
     flush: () => {

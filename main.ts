@@ -5,7 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
-import { addIcon, Editor, MarkdownPostProcessorContext, MarkdownView, Modal, Notice, Platform, Plugin, TFile } from "obsidian";
+import { addIcon, Editor, MarkdownPostProcessorContext, MarkdownView, Modal, Notice, Platform, Plugin, TFile, WorkspaceLeaf } from "obsidian";
 
 import { createTextAnchor, relocateDocumentAnchors } from "./src/anchor/textAnchor";
 import { foldWhitespaceWithMap, stripWithMap, strippedScore } from "./src/anchor/textStrip";
@@ -977,10 +977,30 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     }
   }
 
+  /**
+   * 找到已经打开该 Markdown 文件的标签页（含延迟加载的），用于复用而非重复新建。
+   * 用 getViewState 而非 view instanceof，能覆盖尚未加载的 deferred 标签页。
+   */
+  private findMarkdownLeaf(file: TFile): WorkspaceLeaf | null {
+    const matches: WorkspaceLeaf[] = [];
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const state = leaf.getViewState();
+      if (state.type === "markdown" && state.state?.file === file.path) {
+        matches.push(leaf);
+      }
+    });
+    return matches[0] ?? null;
+  }
+
   async openMarkdownNote(file: TFile, options?: { forceCount?: boolean }): Promise<void> {
-    const leaf = this.app.workspace.getLeaf("tab");
+    // 优先复用已打开该文件的标签页，避免连点侧栏堆出一排重复 tab
+    const leaf = this.findMarkdownLeaf(file) ?? this.app.workspace.getLeaf("tab");
     await leaf.openFile(file);
     this.app.workspace.revealLeaf(leaf);
+    // 手机端右侧栏是覆盖式抽屉，打开笔记后收起，避免遮挡正文
+    if (Platform.isMobile) {
+      this.app.workspace.rightSplit?.collapse();
+    }
     if (options?.forceCount) {
       this.ensureMarkdownOpenCounted(file);
     }

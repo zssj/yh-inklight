@@ -17436,10 +17436,27 @@ ${lines.slice(0, 8).join("\n")}`);
       view.refresh();
     }
   }
+  /**
+   * 找到已经打开该 Markdown 文件的标签页（含延迟加载的），用于复用而非重复新建。
+   * 用 getViewState 而非 view instanceof，能覆盖尚未加载的 deferred 标签页。
+   */
+  findMarkdownLeaf(file) {
+    const matches = [];
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const state = leaf.getViewState();
+      if (state.type === "markdown" && state.state?.file === file.path) {
+        matches.push(leaf);
+      }
+    });
+    return matches[0] ?? null;
+  }
   async openMarkdownNote(file, options) {
-    const leaf = this.app.workspace.getLeaf("tab");
+    const leaf = this.findMarkdownLeaf(file) ?? this.app.workspace.getLeaf("tab");
     await leaf.openFile(file);
     this.app.workspace.revealLeaf(leaf);
+    if (import_obsidian21.Platform.isMobile) {
+      this.app.workspace.rightSplit?.collapse();
+    }
     if (options?.forceCount) {
       this.ensureMarkdownOpenCounted(file);
     }

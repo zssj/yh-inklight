@@ -14819,8 +14819,14 @@ var EpubAnnotationCard = class {
     if (this.anchor.isMobile) {
       const vv = window.visualViewport;
       const keyboardInset = vv ? Math.max(0, window.innerHeight - vv.height - (vv.offsetTop ?? 0)) : 0;
-      this.el.style.bottom = `${keyboardInset}px`;
-      this.el.style.maxHeight = `min(70vh, ${Math.max(160, (vv?.height ?? window.innerHeight) - 24)}px)`;
+      const visualBottom = window.innerHeight - keyboardInset;
+      const bottomInset = Math.min(
+        window.innerHeight,
+        keyboardInset + this.measureMobileBarInset(visualBottom)
+      );
+      this.el.style.bottom = `${bottomInset}px`;
+      const available = Math.max(160, window.innerHeight - bottomInset - 12);
+      this.el.style.maxHeight = `min(70vh, ${available}px)`;
       return;
     }
     this.el.style.visibility = "hidden";
@@ -14840,6 +14846,26 @@ var EpubAnnotationCard = class {
     this.el.style.maxHeight = `${placement.maxHeight}px`;
     this.el.dataset.side = placement.side;
     this.el.style.visibility = "";
+  }
+  /**
+   * 移动端底部固定栏（Obsidian 导航栏/工具栏）在可视区内实际占用的高度。
+   *
+   * 只认「压在可视区底部」的栏：沉浸式隐藏时导航栏被 translateY 推出屏外
+   * （rect.top ≥ 可视区底边）或 pointer-events:none，此时返回 0，卡片照常贴底。
+   */
+  measureMobileBarInset(visualBottom) {
+    let inset = 0;
+    document.querySelectorAll(".mobile-navbar, .mobile-toolbar").forEach((bar) => {
+      const rect = bar.getBoundingClientRect();
+      if (rect.height <= 0) return;
+      const style2 = getComputedStyle(bar);
+      if (style2.display === "none" || style2.visibility === "hidden" || style2.pointerEvents === "none") {
+        return;
+      }
+      if (rect.top >= visualBottom - 1) return;
+      inset = Math.max(inset, visualBottom - Math.max(0, rect.top));
+    });
+    return Math.ceil(inset);
   }
   schedulePlace() {
     if (this.rafId || this.dismissed) return;

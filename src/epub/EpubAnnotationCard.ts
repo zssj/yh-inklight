@@ -5,6 +5,7 @@
  */
 
 import { AnnotationColor, COLOR_LABELS, EPUB_COLOR_MAP } from "../storage/types";
+import { renderTagChips } from "../views/tagInput";
 
 const NOTE_TYPE_LABELS: Record<string, string> = {
   insight: "💡 洞见",
@@ -16,6 +17,8 @@ export interface EpubAnnotationCardData {
   quote: string;
   note?: string;
   noteType?: "insight" | "question" | "reminder";
+  /** 自由标签；有值时刻画一行只读 chip，便于确认标签已落盘 */
+  tags?: readonly string[];
   color: AnnotationColor;
   chapter?: string;
   createdAt?: string;
@@ -73,6 +76,11 @@ export class EpubAnnotationCard {
       body.createDiv({ cls: "yh-epub-card-note", text: data.note });
     } else {
       body.createDiv({ cls: "yh-epub-card-note is-empty", text: "此高亮暂无笔记" });
+    }
+
+    if (data.tags && data.tags.length > 0) {
+      const tagWrap = body.createDiv({ cls: "yh-epub-card-tags" });
+      renderTagChips(tagWrap, data.tags, { max: 6 });
     }
 
     const metaParts: string[] = [];

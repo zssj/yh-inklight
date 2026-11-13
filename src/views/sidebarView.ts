@@ -44,6 +44,11 @@ export class AnnotationSidebarView extends ItemView {
   private exportFormat: AnnotationExportFormat = "summary";
   private renderToken = 0;
   private renderTimer: number | null = null;
+  /**
+   * 当前处于标签编辑态的卡片 id。
+   * 编辑态必须记在视图上而不是只挂在 DOM class 上，否则任何一次重绘都会把输入框冲掉。
+   */
+  private editingTagCardId: string | null = null;
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: OverlayAnnotationsPlugin) {
     super(leaf);
@@ -317,7 +322,12 @@ export class AnnotationSidebarView extends ItemView {
       });
     }
 
-    this.mountTagRow(card.createDiv({ cls: "yh-ov-tags" }), file, cardData);
+    const tagRow = card.createDiv({ cls: "yh-ov-tags" });
+    if (this.editingTagCardId === cardData.id) {
+      this.mountTagEditor(tagRow, file, cardData, this.plugin.getTagSuggestions());
+    } else {
+      this.mountTagRow(tagRow, file, cardData);
+    }
 
     const source = card.createDiv({ cls: "yh-ov-source" });
     source.createSpan({ cls: "yh-ov-file", text: file?.name ?? cardData.sourcePath });
@@ -410,6 +420,11 @@ export class AnnotationSidebarView extends ItemView {
       text: "+",
       attr: { role: "button", tabindex: "0", "aria-label": "添加标签", title: "添加标签" },
     });
+    // 阻止 + 抢焦点：否则 click 回调里 row.empty() 删掉的是「正持有焦点的节点」，
+    // 浏览器把焦点退回 body，接着挂载的输入框会立刻失焦。
+    add.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+    });
     const open = (event: Event): void => {
       event.stopPropagation();
       this.mountTagEditor(row, file, cardData, suggestions);
@@ -423,7 +438,13 @@ export class AnnotationSidebarView extends ItemView {
     });
   }
 
+  /**
+   * 进入标签编辑态。
+   * 编辑态存于 this.editingTagCardId，关闭只由「点卡片外 / Esc」显式触发；
+   * 不再用 blur + 定时器拆解，避免焦点抖动导致输入框一闪即逝。
+   */
   private mountTagEditor(row: HTMLElement, file: TFile | null, cardData: SidebarCard, suggestions: string[]): void {
+    this.editingTagCardId = cardData.id;
     row.empty();
     row.addClass("is-editing");
     renderTagInput(row, {
@@ -436,14 +457,51 @@ export class AnnotationSidebarView extends ItemView {
     });
 
     const field = row.querySelector<HTMLInputElement>(".yh-tag-input-field");
-    field?.focus();
-    field?.addEventListener("blur", () => {
-      window.setTimeout(() => {
-        if (!row.contains(document.activeElement)) {
-          this.mountTagRow(row, file, cardData);
-        }
-      }, 140);
+    window.requestAnimationFrame(() => {
+      if (row.isConnected) {
+        field?.focus();
+      }
     });
+
+    const listeners = new AbortController();
+    const { signal } = listeners;
+    const close = (): void => {
+      listeners.abort();
+      if (this.editingTagCardId === cardData.id) {
+        this.editingTagCardId = null;
+      }
+      if (row.isConnected) {
+        this.mountTagRow(row, file, cardData);
+      }
+    };
+
+    document.addEventListener(
+      "pointerdown",
+      (event) => {
+        if (!row.isConnected) {
+          listeners.abort();
+          return;
+        }
+        if (event.target instanceof Node && row.contains(event.target)) {
+          return;
+        }
+        close();
+      },
+      { capture: true, signal },
+    );
+
+    row.addEventListener(
+      "keydown",
+      (event) => {
+        // 补全下拉展开时 Esc 由 renderTagInput 自己吃掉（已 preventDefault）
+        if (event.key !== "Escape" || event.defaultPrevented) {
+          return;
+        }
+        event.preventDefault();
+        close();
+      },
+      { signal },
+    );
   }
 
   /** 写入标签：一张卡片可能是高亮 + 笔记，两者写同一份数组 */

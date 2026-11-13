@@ -643,6 +643,21 @@ export class AnnotationStore {
     return nextDocument;
   }
 
+  /**
+   * 原位更新一条 epub 划线（颜色/样式/标签）。
+   * 给「只打标签、不写笔记」的场景用：高亮不必被迫转成 comment。
+   */
+  async updateEpubHighlight(file: TFile, highlight: EpubHighlightAnnotation): Promise<FileAnnotationDocument> {
+    const document = await this.getDocument(file);
+    const nextDocument: FileAnnotationDocument = {
+      ...document,
+      epubHighlights: document.epubHighlights.map((item) => (item.id === highlight.id ? highlight : item)),
+      lastModified: new Date().toISOString(),
+    };
+    await this.saveDocument(nextDocument);
+    return nextDocument;
+  }
+
   // ===== EPUB 进度 =====
 
   async getEpubProgress(file: TFile): Promise<EpubReadingProgress | null> {

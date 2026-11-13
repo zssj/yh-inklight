@@ -1192,17 +1192,43 @@ export class EpubReaderView extends FileView {
 				style: this.pluginSettings.epubHighlightStyle,
 			},
 			async (result: EpubNoteResult) => {
-				if (!result.note.trim()) {
+				const note = result.note.trim();
+				if (!note && result.tags.length === 0) {
 					return;
 				}
 				const now = new Date().toISOString();
+
+				// 只打标签、不写想法：留作划线，避免凭空多出一条内容为空的笔记
+				if (!note) {
+					const highlight: EpubHighlightAnnotation = {
+						id: crypto.randomUUID(),
+						type: "epub-highlight",
+						color: result.color,
+						style: result.style,
+						anchor: { cfiRange, chapter, selectedText: text },
+						createdAt: now,
+						tags: [...result.tags],
+					};
+					try {
+						await this.store.addEpubHighlight(this.file!, highlight);
+						this.renderAnnotationOnRendition(highlight);
+						this.renderSidebar();
+						this.refreshAnnotations();
+						this.clearRenditionSelection();
+					} catch (error) {
+						console.error("yh-inklight: EPUB highlight creation failed", error);
+						new Notice("标注创建失败");
+					}
+					return;
+				}
+
 				const annotation: EpubCommentAnnotation = {
 					id: crypto.randomUUID(),
 					type: "epub-comment",
 					color: result.color,
 					style: result.style,
 					anchor: { cfiRange, chapter, selectedText: text },
-					note: result.note.trim(),
+					note,
 					// 保留用户在 modal 选择的分类（insight/question/reminder），否则字段丢失
 					noteType: result.noteType,
 					createdAt: now,
@@ -1220,12 +1246,7 @@ export class EpubReaderView extends FileView {
 					this.renderSidebar();
 					this.refreshAnnotations();
 					// 清除选区 → 触发 selectionchange → 关闭标注框
-					requestAnimationFrame(() => {
-						const docs = this.foliateView?.renderer?.getContents?.() ?? [];
-						for (const c of docs) {
-							c.doc?.getSelection?.()?.removeAllRanges();
-						}
-					});
+					this.clearRenditionSelection();
 				} catch (error) {
 					console.error("yh-inklight: EPUB comment creation failed", error);
 					new Notice("标注创建失败");
@@ -1234,6 +1255,16 @@ export class EpubReaderView extends FileView {
 			undefined,
 			this.tagSuggestions(),
 		).open();
+	}
+
+	/** 清掉 iframe 内选区 → 触发 selectionchange → 关闭标注框 */
+	private clearRenditionSelection(): void {
+		requestAnimationFrame(() => {
+			const docs = this.foliateView?.renderer?.getContents?.() ?? [];
+			for (const c of docs) {
+				c.doc?.getSelection?.()?.removeAllRanges();
+			}
+		});
 	}
 
 	/**
@@ -2210,6 +2241,7 @@ export class EpubReaderView extends FileView {
 				quote: highlight.anchor.selectedText,
 				note: comment?.note,
 				noteType: comment?.noteType,
+				tags: highlight.tags,
 				color: highlight.color,
 				chapter: highlight.anchor.chapter,
 				createdAt: highlight.createdAt,
@@ -2273,7 +2305,7 @@ export class EpubReaderView extends FileView {
 				tags: comment.tags ?? [],
 			},
 			async (result: EpubNoteResult) => {
-				if (!result.note.trim()) {
+				if (!result.note.trim() && result.tags.length === 0) {
 					return;
 				}
 				const updated: EpubCommentAnnotation = {
@@ -2321,17 +2353,39 @@ export class EpubReaderView extends FileView {
 			highlight.anchor.selectedText,
 			{ color: highlight.color, style: highlight.style, tags: highlight.tags ?? [] },
 			async (result: EpubNoteResult) => {
-				if (!result.note.trim()) {
+				const note = result.note.trim();
+				if (!note && result.tags.length === 0) {
 					return;
 				}
 				const now = new Date().toISOString();
+
+				// 只打标签：保持这条划线本身，不转成 note 为空的想法
+				if (!note) {
+					const updated: EpubHighlightAnnotation = {
+						...highlight,
+						color: result.color,
+						style: result.style,
+						...(result.tags.length > 0 ? { tags: [...result.tags] } : {}),
+					};
+					try {
+						await this.store.updateEpubHighlight(this.file!, updated);
+						this.refreshRenditionAnnotations();
+						this.renderSidebar();
+						this.refreshAnnotations();
+					} catch (error) {
+						console.error("yh-inklight: EPUB highlight tag update failed", error);
+						new Notice("标签保存失败");
+					}
+					return;
+				}
+
 				const comment: EpubCommentAnnotation = {
 					id: highlight.id,
 					type: "epub-comment",
 					color: result.color,
 					style: result.style,
 					anchor: highlight.anchor,
-					note: result.note.trim(),
+					note,
 					noteType: result.noteType,
 					createdAt: highlight.createdAt,
 					collapsed: false,

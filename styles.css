@@ -2843,6 +2843,11 @@ a.yh-epub-goto-link:hover {
   min-width: 0;
 }
 
+/* EPUB 标注卡片里的只读标签行 */
+.yh-epub-card-tags {
+  margin-top: 8px;
+}
+
 .yh-tag-chip {
   display: inline-flex;
   align-items: center;
@@ -2923,6 +2928,13 @@ a.yh-epub-goto-link:hover {
 .yh-ov-tags:focus-within .yh-ov-tag-add,
 .yh-ov-tags.is-editing .yh-ov-tag-add {
   opacity: 1;
+}
+
+/* 触屏没有 hover，加号必须常显，否则手机端根本点不到 */
+@media (hover: none) {
+  .yh-ov-tag-add {
+    opacity: 1;
+  }
 }
 
 .yh-ov-tag-add:hover {

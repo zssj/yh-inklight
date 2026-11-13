@@ -13,7 +13,7 @@ import {
   EpubHighlightStyle,
   EPUB_HIGHLIGHT_STYLES,
 } from "../storage/types";
-import { renderTagInput } from "../views/tagInput";
+import { renderTagInput, TagInputHandle } from "../views/tagInput";
 
 export interface EpubNoteResult {
   note: string;
@@ -44,6 +44,7 @@ export class EpubNoteModal extends Modal {
   private titleText: string;
   private readonly tagSuggestions: string[];
   private keyboardCleanup?: () => void;
+  private tagInput?: TagInputHandle;
 
   constructor(
     app: App,
@@ -73,6 +74,8 @@ export class EpubNoteModal extends Modal {
 
   private submit(ta: HTMLTextAreaElement): void {
     this.note = ta.value.trim();
+    // 输入框里还没回车的标签文本也要收进来（Ctrl+Enter 提交时不会触发 blur）
+    this.tagInput?.flush();
     this.close();
     this.onSubmit({
       note: this.note,
@@ -173,7 +176,7 @@ export class EpubNoteModal extends Modal {
     const tagRow = body.createDiv({ cls: "yh-epub-note-tag-row" });
     tagRow.createEl("span", { cls: "yh-epub-note-label", text: "标签" });
     const tagField = tagRow.createDiv({ cls: "yh-epub-note-tag-field" });
-    renderTagInput(tagField, {
+    this.tagInput = renderTagInput(tagField, {
       tags: this.tags,
       suggestions: this.tagSuggestions,
       placeholder: "输入标签，回车确认",

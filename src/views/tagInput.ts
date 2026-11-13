@@ -66,11 +66,17 @@ export interface TagInputOptions {
   placeholder?: string;
 }
 
+/** renderTagInput 的句柄：弹窗点「保存」时用 flush() 兜住输入框里未回车的文本 */
+export interface TagInputHandle {
+  flush(): void;
+  focus(): void;
+}
+
 /**
  * 可编辑的标签输入：chip + 输入框 + 自定义补全下拉。
  * 自管理状态，任何增删都会立刻回调 onChange 并重绘 chip。
  */
-export function renderTagInput(parent: HTMLElement, options: TagInputOptions): void {
+export function renderTagInput(parent: HTMLElement, options: TagInputOptions): TagInputHandle {
   const wrap = parent.createDiv({ cls: "yh-tag-input" });
   const chipWrap = wrap.createDiv({ cls: "yh-tag-input-chips" });
   const field = wrap.createEl("input", {
@@ -246,6 +252,15 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): v
   });
 
   renderChips();
+
+  return {
+    flush: () => {
+      if (field.value.trim()) {
+        commitTag(field.value);
+      }
+    },
+    focus: () => field.focus(),
+  };
 }
 
 /** 补全候选：已有标签 + 全库 md 文件名（概念页名），去重后按长度升序便于短名优先 */

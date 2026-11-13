@@ -10648,6 +10648,20 @@ var AnnotationStore = class {
     await this.saveDocument(nextDocument);
     return nextDocument;
   }
+  /**
+   * 原位更新一条 epub 划线（颜色/样式/标签）。
+   * 给「只打标签、不写笔记」的场景用：高亮不必被迫转成 comment。
+   */
+  async updateEpubHighlight(file, highlight) {
+    const document2 = await this.getDocument(file);
+    const nextDocument = {
+      ...document2,
+      epubHighlights: document2.epubHighlights.map((item) => item.id === highlight.id ? highlight : item),
+      lastModified: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    await this.saveDocument(nextDocument);
+    return nextDocument;
+  }
   // ===== EPUB 进度 =====
   async getEpubProgress(file) {
     const cacheKey = this.toCacheKey(file.path);
@@ -11583,6 +11597,14 @@ function renderTagInput(parent, options) {
     }
   });
   renderChips();
+  return {
+    flush: () => {
+      if (field.value.trim()) {
+        commitTag(field.value);
+      }
+    },
+    focus: () => field.focus()
+  };
 }
 function buildTagSuggestions(existingTags, markdownBasenames) {
   const seen = /* @__PURE__ */ new Set();
@@ -11640,6 +11662,11 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.exportFormat = "summary";
     this.renderToken = 0;
     this.renderTimer = null;
+    /**
+     * 当前处于标签编辑态的卡片 id。
+     * 编辑态必须记在视图上而不是只挂在 DOM class 上，否则任何一次重绘都会把输入框冲掉。
+     */
+    this.editingTagCardId = null;
   }
   getViewType() {
     return ANNOTATION_SIDEBAR_VIEW;
@@ -11875,7 +11902,12 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
         this.addExpandToggle(content, card);
       });
     }
-    this.mountTagRow(card.createDiv({ cls: "yh-ov-tags" }), file, cardData);
+    const tagRow = card.createDiv({ cls: "yh-ov-tags" });
+    if (this.editingTagCardId === cardData.id) {
+      this.mountTagEditor(tagRow, file, cardData, this.plugin.getTagSuggestions());
+    } else {
+      this.mountTagRow(tagRow, file, cardData);
+    }
     const source = card.createDiv({ cls: "yh-ov-source" });
     source.createSpan({ cls: "yh-ov-file", text: file?.name ?? cardData.sourcePath });
     source.createSpan({
@@ -11956,6 +11988,9 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       text: "+",
       attr: { role: "button", tabindex: "0", "aria-label": "\u6DFB\u52A0\u6807\u7B7E", title: "\u6DFB\u52A0\u6807\u7B7E" }
     });
+    add.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+    });
     const open = (event) => {
       event.stopPropagation();
       this.mountTagEditor(row, file, cardData, suggestions);
@@ -11968,7 +12003,13 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       }
     });
   }
+  /**
+   * 进入标签编辑态。
+   * 编辑态存于 this.editingTagCardId，关闭只由「点卡片外 / Esc」显式触发；
+   * 不再用 blur + 定时器拆解，避免焦点抖动导致输入框一闪即逝。
+   */
   mountTagEditor(row, file, cardData, suggestions) {
+    this.editingTagCardId = cardData.id;
     row.empty();
     row.addClass("is-editing");
     renderTagInput(row, {
@@ -11980,14 +12021,47 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       }
     });
     const field = row.querySelector(".yh-tag-input-field");
-    field?.focus();
-    field?.addEventListener("blur", () => {
-      window.setTimeout(() => {
-        if (!row.contains(document.activeElement)) {
-          this.mountTagRow(row, file, cardData);
-        }
-      }, 140);
+    window.requestAnimationFrame(() => {
+      if (row.isConnected) {
+        field?.focus();
+      }
     });
+    const listeners = new AbortController();
+    const { signal } = listeners;
+    const close = () => {
+      listeners.abort();
+      if (this.editingTagCardId === cardData.id) {
+        this.editingTagCardId = null;
+      }
+      if (row.isConnected) {
+        this.mountTagRow(row, file, cardData);
+      }
+    };
+    document.addEventListener(
+      "pointerdown",
+      (event) => {
+        if (!row.isConnected) {
+          listeners.abort();
+          return;
+        }
+        if (event.target instanceof Node && row.contains(event.target)) {
+          return;
+        }
+        close();
+      },
+      { capture: true, signal }
+    );
+    row.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.key !== "Escape" || event.defaultPrevented) {
+          return;
+        }
+        event.preventDefault();
+        close();
+      },
+      { signal }
+    );
   }
   /** 写入标签：一张卡片可能是高亮 + 笔记，两者写同一份数组 */
   async persistCardTags(file, cardData, tags) {
@@ -13268,6 +13342,7 @@ var EpubNoteModal = class extends import_obsidian15.Modal {
   }
   submit(ta) {
     this.note = ta.value.trim();
+    this.tagInput?.flush();
     this.close();
     this.onSubmit({
       note: this.note,
@@ -13351,7 +13426,7 @@ var EpubNoteModal = class extends import_obsidian15.Modal {
     const tagRow = body.createDiv({ cls: "yh-epub-note-tag-row" });
     tagRow.createEl("span", { cls: "yh-epub-note-label", text: "\u6807\u7B7E" });
     const tagField = tagRow.createDiv({ cls: "yh-epub-note-tag-field" });
-    renderTagInput(tagField, {
+    this.tagInput = renderTagInput(tagField, {
       tags: this.tags,
       suggestions: this.tagSuggestions,
       placeholder: "\u8F93\u5165\u6807\u7B7E\uFF0C\u56DE\u8F66\u786E\u8BA4",
@@ -13690,6 +13765,10 @@ var EpubAnnotationCard = class {
       body.createDiv({ cls: "yh-epub-card-note", text: data.note });
     } else {
       body.createDiv({ cls: "yh-epub-card-note is-empty", text: "\u6B64\u9AD8\u4EAE\u6682\u65E0\u7B14\u8BB0" });
+    }
+    if (data.tags && data.tags.length > 0) {
+      const tagWrap = body.createDiv({ cls: "yh-epub-card-tags" });
+      renderTagChips(tagWrap, data.tags, { max: 6 });
     }
     const metaParts = [];
     if (data.chapter) {
@@ -14826,17 +14905,40 @@ var EpubReaderView = class extends import_obsidian17.FileView {
         style: this.pluginSettings.epubHighlightStyle
       },
       async (result) => {
-        if (!result.note.trim()) {
+        const note = result.note.trim();
+        if (!note && result.tags.length === 0) {
           return;
         }
         const now = (/* @__PURE__ */ new Date()).toISOString();
+        if (!note) {
+          const highlight = {
+            id: crypto.randomUUID(),
+            type: "epub-highlight",
+            color: result.color,
+            style: result.style,
+            anchor: { cfiRange, chapter, selectedText: text },
+            createdAt: now,
+            tags: [...result.tags]
+          };
+          try {
+            await this.store.addEpubHighlight(this.file, highlight);
+            this.renderAnnotationOnRendition(highlight);
+            this.renderSidebar();
+            this.refreshAnnotations();
+            this.clearRenditionSelection();
+          } catch (error) {
+            console.error("yh-inklight: EPUB highlight creation failed", error);
+            new import_obsidian17.Notice("\u6807\u6CE8\u521B\u5EFA\u5931\u8D25");
+          }
+          return;
+        }
         const annotation = {
           id: crypto.randomUUID(),
           type: "epub-comment",
           color: result.color,
           style: result.style,
           anchor: { cfiRange, chapter, selectedText: text },
-          note: result.note.trim(),
+          note,
           // 保留用户在 modal 选择的分类（insight/question/reminder），否则字段丢失
           noteType: result.noteType,
           createdAt: now,
@@ -14852,12 +14954,7 @@ var EpubReaderView = class extends import_obsidian17.FileView {
           this.renderAnnotationOnRendition(annotation);
           this.renderSidebar();
           this.refreshAnnotations();
-          requestAnimationFrame(() => {
-            const docs = this.foliateView?.renderer?.getContents?.() ?? [];
-            for (const c2 of docs) {
-              c2.doc?.getSelection?.()?.removeAllRanges();
-            }
-          });
+          this.clearRenditionSelection();
         } catch (error) {
           console.error("yh-inklight: EPUB comment creation failed", error);
           new import_obsidian17.Notice("\u6807\u6CE8\u521B\u5EFA\u5931\u8D25");
@@ -14866,6 +14963,15 @@ var EpubReaderView = class extends import_obsidian17.FileView {
       void 0,
       this.tagSuggestions()
     ).open();
+  }
+  /** 清掉 iframe 内选区 → 触发 selectionchange → 关闭标注框 */
+  clearRenditionSelection() {
+    requestAnimationFrame(() => {
+      const docs = this.foliateView?.renderer?.getContents?.() ?? [];
+      for (const c2 of docs) {
+        c2.doc?.getSelection?.()?.removeAllRanges();
+      }
+    });
   }
   /**
    * 将单个标注渲染到 foliate 的高亮层。
@@ -15673,6 +15779,7 @@ var EpubReaderView = class extends import_obsidian17.FileView {
         quote: highlight.anchor.selectedText,
         note: comment?.note,
         noteType: comment?.noteType,
+        tags: highlight.tags,
         color: highlight.color,
         chapter: highlight.anchor.chapter,
         createdAt: highlight.createdAt,
@@ -15730,7 +15837,7 @@ var EpubReaderView = class extends import_obsidian17.FileView {
         tags: comment.tags ?? []
       },
       async (result) => {
-        if (!result.note.trim()) {
+        if (!result.note.trim() && result.tags.length === 0) {
           return;
         }
         const updated = {
@@ -15776,17 +15883,36 @@ var EpubReaderView = class extends import_obsidian17.FileView {
       highlight.anchor.selectedText,
       { color: highlight.color, style: highlight.style, tags: highlight.tags ?? [] },
       async (result) => {
-        if (!result.note.trim()) {
+        const note = result.note.trim();
+        if (!note && result.tags.length === 0) {
           return;
         }
         const now = (/* @__PURE__ */ new Date()).toISOString();
+        if (!note) {
+          const updated = {
+            ...highlight,
+            color: result.color,
+            style: result.style,
+            ...result.tags.length > 0 ? { tags: [...result.tags] } : {}
+          };
+          try {
+            await this.store.updateEpubHighlight(this.file, updated);
+            this.refreshRenditionAnnotations();
+            this.renderSidebar();
+            this.refreshAnnotations();
+          } catch (error) {
+            console.error("yh-inklight: EPUB highlight tag update failed", error);
+            new import_obsidian17.Notice("\u6807\u7B7E\u4FDD\u5B58\u5931\u8D25");
+          }
+          return;
+        }
         const comment = {
           id: highlight.id,
           type: "epub-comment",
           color: result.color,
           style: result.style,
           anchor: highlight.anchor,
-          note: result.note.trim(),
+          note,
           noteType: result.noteType,
           createdAt: highlight.createdAt,
           collapsed: false,

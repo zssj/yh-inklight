@@ -28,6 +28,38 @@ export type SidebarSide = "left" | "right";
 export type AnnotationSortMode = "newest" | "oldest" | "document";
 export type AnnotationExportFormat = "summary" | "by-color" | "notes-only" | "reading-notes";
 
+/** 笔记类型。Markdown/PDF 存 PascalCase，EPUB 存 camelCase，读取时统一走 NOTE_TYPE_LABELS */
+export type NoteTypeKey = "insight" | "question" | "reminder";
+
+/** 类型展示文案的唯一真相源；键同时接受 camelCase 与 PascalCase */
+export const NOTE_TYPE_LABELS: Record<string, string> = {
+  insight: "洞见",
+  question: "疑问",
+  reminder: "提醒",
+  Insight: "洞见",
+  Question: "疑问",
+  Reminder: "提醒",
+};
+
+/** 带图标版本，用于下拉选项与卡片角标 */
+export const NOTE_TYPE_LABELS_WITH_ICON: Record<string, string> = {
+  insight: "💡 洞见",
+  question: "❓ 疑问",
+  reminder: "🔔 提醒",
+  Insight: "💡 洞见",
+  Question: "❓ 疑问",
+  Reminder: "🔔 提醒",
+};
+
+/** 把任意写法的笔记类型转成小写键；未知值返回 undefined */
+export function toNoteTypeKey(raw: string | null | undefined): NoteTypeKey | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const lower = raw.toLowerCase();
+  return lower === "insight" || lower === "question" || lower === "reminder" ? lower : undefined;
+}
+
 export interface TextAnchor {
   startOffset: number;
   endOffset: number;
@@ -49,6 +81,8 @@ export interface HighlightAnnotation {
   anchor: TextAnchor;
   createdAt: string;
   orphaned?: boolean;
+  /** 自由标签；空数组在序列化时被清成 undefined，与老数据完全一致 */
+  tags?: string[];
 }
 
 export interface PdfRectAnchor {
@@ -71,6 +105,8 @@ export interface PdfHighlightAnnotation {
   anchor: PdfAnchor;
   createdAt: string;
   orphaned?: boolean;
+  /** 自由标签；空数组在序列化时被清成 undefined */
+  tags?: string[];
 }
 
 export interface ReplyAnnotation {
@@ -99,6 +135,8 @@ export interface CommentAnnotation {
   replies: ReplyAnnotation[];
   resolved: boolean;
   orphaned?: boolean;
+  /** 自由标签；空数组在序列化时被清成 undefined */
+  tags?: string[];
 }
 
 export interface PdfCommentAnnotation {
@@ -116,6 +154,8 @@ export interface PdfCommentAnnotation {
   replies: ReplyAnnotation[];
   resolved: boolean;
   orphaned?: boolean;
+  /** 自由标签；空数组在序列化时被清成 undefined */
+  tags?: string[];
 }
 
 export interface FileAnnotationDocument {
@@ -145,11 +185,16 @@ export interface AnnotationIndexEntry {
   epubCommentCount: number;
   bookmarkCount: number;
   updatedAt: string;
+  /** 该文件内出现过的标签比较键（小写、去重、已排序）；无标签时省略该字段 */
+  tags?: string[];
 }
 
 export interface AnnotationIndex {
+  /** 1 = 无标签索引；2 = 含 files[].tags 与 tagNames */
   version: number;
   files: Record<string, AnnotationIndexEntry>;
+  /** 标签比较键 → 展示名（保留用户最初写法的那个） */
+  tagNames?: Record<string, string>;
 }
 
 export interface AnnotationPluginSettings {
@@ -255,8 +300,9 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
 };
 
 export const EMPTY_INDEX: AnnotationIndex = {
-  version: 1,
+  version: 2,
   files: {},
+  tagNames: {},
 };
 
 // ===== EPUB / 电子书锚点与标注 =====
@@ -277,6 +323,8 @@ export interface EpubHighlightAnnotation {
   anchor: EpubCfiAnchor;
   createdAt: string;
   orphaned?: boolean;
+  /** 自由标签；空数组在序列化时被清成 undefined */
+  tags?: string[];
 }
 
 export interface EpubCommentAnnotation {
@@ -294,6 +342,8 @@ export interface EpubCommentAnnotation {
   replies: ReplyAnnotation[];
   resolved: boolean;
   orphaned?: boolean;
+  /** 自由标签；空数组在序列化时被清成 undefined */
+  tags?: string[];
 }
 
 export interface EpubReadingProgress {

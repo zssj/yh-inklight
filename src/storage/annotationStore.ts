@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 obsidian App/Vault/Adapter 的文件读写能力，依赖 storage/types 的 sidecar JSON 合约
- * [OUTPUT]: 对外提供 AnnotationStore，负责 Markdown/PDF/EPUB 的 .obsidian-annotations sidecar 文件、索引、缓存、导出、孤立批注清理与文件哈希校验迁移
+ * [OUTPUT]: 对外提供 AnnotationStore，负责 Markdown/PDF/EPUB 的 .obsidian-annotations sidecar 文件、索引、标签索引与标签字典、缓存、导出、孤立批注清理与文件哈希校验迁移
  * [POS]: storage 模块的唯一持久化入口，隔离原始 Markdown 与注释数据
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
@@ -25,6 +25,7 @@ import {
   EpubReadingProgress,
   ReadingBookmark,
 } from "./types";
+import { normalizeTags, sortTagKeys, tagKey } from "./tags";
 
 const STORE_DIR = ".obsidian-annotations";
 const INDEX_PATH = normalizePath(`${STORE_DIR}/index.json`);
@@ -49,6 +50,27 @@ interface ExportEntry {
   chapter?: string;
   cfiRange?: string;
   startOffset: number;
+}
+
+/** 一条待改标签的批注定位（跨文档批量操作用） */
+export interface TagRef {
+  filePath: string;
+  annotationId: string;
+}
+
+/** 标签字典项：key 用于比较，name 用于展示 */
+export interface TagDictionaryEntry {
+  key: string;
+  name: string;
+  /** 含该标签的文件数（来自索引，O(文件数) 即可得出） */
+  fileCount: number;
+}
+
+/** 某个标签命中的文件 */
+export interface TaggedFileEntry {
+  filePath: string;
+  /** 该文件内的批注总数，用于排序与展示 */
+  totalAnnotations: number;
 }
 
 export class AnnotationStoreReadError extends Error {
@@ -232,12 +254,14 @@ export class AnnotationStore {
     const filePath = this.normalizeVaultPath(document.filePath);
     const sidecarPath = this.toSidecarPath(filePath);
     const normalized = this.normalizeDocument(document, filePath);
+    const entry = this.toIndexEntry(normalized, sidecarPath);
     const nextIndex: AnnotationIndex = {
-      ...this.index,
+      version: 2,
       files: {
         ...this.index.files,
-        [normalized.filePath]: this.toIndexEntry(normalized, sidecarPath),
+        [normalized.filePath]: entry,
       },
+      tagNames: this.mergeTagNames(normalized, entry),
     };
 
     try {
@@ -393,6 +417,128 @@ export class AnnotationStore {
     };
     await this.saveDocument(nextDocument);
     return nextDocument;
+  }
+
+  /**
+   * 给一组批注写入同一份标签（覆盖式）。
+   * 按 filePath 分组，每个文件只 saveDocument 一次，避免重复落盘。
+   * tags 为空数组时删除字段，使数据回到「无标签」状态。
+   */
+  async setTags(refs: readonly TagRef[], tags: readonly string[]): Promise<void> {
+    if (refs.length === 0) {
+      return;
+    }
+
+    const nextTags = normalizeTags(tags);
+    const grouped = new Map<string, Set<string>>();
+    for (const ref of refs) {
+      const path = this.normalizeVaultPath(ref.filePath);
+      const ids = grouped.get(path) ?? new Set<string>();
+      ids.add(ref.annotationId);
+      grouped.set(path, ids);
+    }
+
+    for (const [path, ids] of grouped) {
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (!(file instanceof TFile)) {
+        continue;
+      }
+
+      const document = await this.getDocument(file);
+      const applyTags = <T extends { id: string; tags?: string[] }>(item: T): T => {
+        if (!ids.has(item.id)) {
+          return item;
+        }
+        const clone: T = { ...item };
+        if (nextTags.length > 0) {
+          clone.tags = [...nextTags];
+        } else {
+          delete clone.tags;
+        }
+        return clone;
+      };
+
+      const nextDocument: FileAnnotationDocument = {
+        ...document,
+        highlights: document.highlights.map(applyTags),
+        comments: document.comments.map(applyTags),
+        pdfHighlights: document.pdfHighlights.map(applyTags),
+        pdfComments: document.pdfComments.map(applyTags),
+        epubHighlights: document.epubHighlights.map(applyTags),
+        epubComments: document.epubComments.map(applyTags),
+        lastModified: new Date().toISOString(),
+      };
+      await this.saveDocument(nextDocument);
+    }
+  }
+
+  /**
+   * 标签字典（含文件数），按文件数降序；数据来自内存索引，不读磁盘。
+   * 会过滤掉源文件已删除的条目，保证「字典里的数字」与「点进去看到的文件」一致
+   * （否则删除文件后左栏仍显示该标签，点进去却是空的）。
+   */
+  getTagDictionary(): TagDictionaryEntry[] {
+    const counts = new Map<string, number>();
+    for (const [filePath, entry] of Object.entries(this.index.files)) {
+      if (!(this.app.vault.getAbstractFileByPath(filePath) instanceof TFile)) {
+        continue;
+      }
+      for (const key of entry.tags ?? []) {
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+    }
+
+    const names = this.index.tagNames ?? {};
+    return Array.from(counts.entries())
+      .map(([key, fileCount]) => ({ key, name: names[key] ?? key, fileCount }))
+      .sort((left, right) => right.fileCount - left.fileCount || left.name.localeCompare(right.name));
+  }
+
+  /** 某标签命中的文件（已过滤掉源文件已删除的条目），按批注总数降序 */
+  getFilesForTag(key: string): TaggedFileEntry[] {
+    const result: TaggedFileEntry[] = [];
+    for (const [filePath, entry] of Object.entries(this.index.files)) {
+      if (!(entry.tags ?? []).includes(key)) {
+        continue;
+      }
+      if (!(this.app.vault.getAbstractFileByPath(filePath) instanceof TFile)) {
+        continue;
+      }
+      result.push({
+        filePath,
+        totalAnnotations:
+          entry.highlightCount + entry.commentCount + entry.epubHighlightCount + entry.epubCommentCount,
+      });
+    }
+
+    return result.sort(
+      (left, right) =>
+        right.totalAnnotations - left.totalAnnotations || left.filePath.localeCompare(right.filePath),
+    );
+  }
+
+  /** 标签比较键 → 展示名，未登记时回退到 key 本身 */
+  getTagDisplayName(key: string): string {
+    return this.index.tagNames?.[key] ?? key;
+  }
+
+  /**
+   * v1 → v2 索引升级。
+   * 标签是 v2 新增字段，v1 数据不可能含标签，因此无需扫描 sidecar，
+   * 只推进版本号并落盘即可，实测零耗时。
+   */
+  async ensureTagIndex(): Promise<boolean> {
+    if (this.index.version >= 2) {
+      return false;
+    }
+
+    this.index = {
+      version: 2,
+      files: this.index.files,
+      tagNames: this.index.tagNames ?? {},
+    };
+    await this.writeIndex(this.index);
+    return true;
   }
 
   async migrateFilePath(oldPath: string, file: TFile): Promise<void> {
@@ -672,12 +818,12 @@ export class AnnotationStore {
       filePath,
       fileHash: document.fileHash ?? "",
       lastModified: document.lastModified ?? new Date().toISOString(),
-      highlights: document.highlights ?? [],
-      comments: document.comments ?? [],
-      pdfHighlights: document.pdfHighlights ?? [],
-      pdfComments: document.pdfComments ?? [],
-      epubHighlights: document.epubHighlights ?? [],
-      epubComments: document.epubComments ?? [],
+      highlights: (document.highlights ?? []).map((item) => this.sanitizeTags(item)),
+      comments: (document.comments ?? []).map((item) => this.sanitizeTags(item)),
+      pdfHighlights: (document.pdfHighlights ?? []).map((item) => this.sanitizeTags(item)),
+      pdfComments: (document.pdfComments ?? []).map((item) => this.sanitizeTags(item)),
+      epubHighlights: (document.epubHighlights ?? []).map((item) => this.sanitizeTags(item)),
+      epubComments: (document.epubComments ?? []).map((item) => this.sanitizeTags(item)),
       epubProgress: document.epubProgress,
       pdfProgress: document.pdfProgress,
       bookmarks: document.bookmarks ?? [],
@@ -686,7 +832,66 @@ export class AnnotationStore {
     };
   }
 
+  /**
+   * 标签清洗：归一化 + 去重 + 截断；结果为空时删掉字段，
+   * 使「无标签」与「老数据」在 JSON 层面完全一致（无需迁移脚本）。
+   */
+  private sanitizeTags<T extends { tags?: string[] }>(item: T): T {
+    if (!item || item.tags === undefined) {
+      return item;
+    }
+
+    const tags = normalizeTags(item.tags);
+    if (tags.length > 0) {
+      return { ...item, tags };
+    }
+
+    const clone = { ...item };
+    delete clone.tags;
+    return clone;
+  }
+
+  /** 汇总一份文档里出现过的标签：比较键 → 用户最初写法的展示名 */
+  private collectTagDisplayNames(document: FileAnnotationDocument): Map<string, string> {
+    const names = new Map<string, string>();
+    const push = (tags?: string[]) => {
+      for (const tag of tags ?? []) {
+        const key = tagKey(tag);
+        if (key && !names.has(key)) {
+          names.set(key, tag);
+        }
+      }
+    };
+
+    for (const item of document.highlights) push(item.tags);
+    for (const item of document.comments) push(item.tags);
+    for (const item of document.pdfHighlights) push(item.tags);
+    for (const item of document.pdfComments) push(item.tags);
+    for (const item of document.epubHighlights) push(item.tags);
+    for (const item of document.epubComments) push(item.tags);
+
+    return names;
+  }
+
+  /** 把本文档的标签并入全局标签字典，保留最早出现的展示名 */
+  private mergeTagNames(document: FileAnnotationDocument, entry: AnnotationIndexEntry): Record<string, string> {
+    const names: Record<string, string> = { ...(this.index.tagNames ?? {}) };
+    const keys = entry.tags ?? [];
+    if (keys.length === 0) {
+      return names;
+    }
+
+    const displayNames = this.collectTagDisplayNames(document);
+    for (const key of keys) {
+      if (!names[key]) {
+        names[key] = displayNames.get(key) ?? key;
+      }
+    }
+    return names;
+  }
+
   private toIndexEntry(document: FileAnnotationDocument, sidecarPath: string): AnnotationIndexEntry {
+    const tagKeys = sortTagKeys(Array.from(this.collectTagDisplayNames(document).keys()));
     return {
       filePath: document.filePath,
       sidecarPath,
@@ -697,6 +902,7 @@ export class AnnotationStore {
       epubCommentCount: document.epubComments.length,
       bookmarkCount: document.bookmarks.length,
       updatedAt: document.lastModified,
+      ...(tagKeys.length > 0 ? { tags: tagKeys } : {}),
     };
   }
 

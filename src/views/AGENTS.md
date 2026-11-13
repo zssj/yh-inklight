@@ -3,8 +3,12 @@
 
 成员清单
 annotationPopover.ts: 点击高亮后的弹层视图，在窄屏或阅读模式显示高亮原文与 Markdown 便签。
+cardModel.ts: 卡片模型纯函数，把一份 sidecar 文档拍平成 SidebarCard（高亮挂笔记、孤儿笔记单独成卡、标签取并集），无 IO。
 markdownStatsView.ts: 笔记使用统计视图，列出全库 md 笔记并支持跳转/删除；顶部提供 1 天复习（openCount==1）/ 7 天复习（openCount>=2）/ 上月今日 / 去年今日 四张卡片（各 Top 5，日差精确匹配，空卡隐藏）。
-sidebarView.ts: 右侧 Leaf 总览面板，将 highlight 与关联 note 合并为同一卡片并支持搜索、筛选、排序、跳转、删除与导出。
+navigation.ts: 三端跳转单点（md 偏移 / pdf 页码 / epub CFI），侧栏与标签总览共用。
+sidebarView.ts: 右侧 Leaf 总览面板，将 highlight 与关联 note 合并为同一卡片并支持搜索、标签筛选、排序、跳转、删除与导出。
+tagBoardView.ts: 标签总览视图，按「标签 → 文档 → 批注」三栏主从跨文档聚合，窄屏降级为单栏 + 面包屑。
+tagInput.ts: 标签 UI 组件，renderTagChips（只读 chip 行）与 renderTagInput（chip + 自定义补全下拉），三端共用。
 stickyNoteLane.ts: 编辑/阅读模式的便签泳道，基于 positioning 布局算法渲染可编辑便签条，支持窄屏自适应。
 stickyNoteView.ts: 兼容型便签卡片组件，保留 Markdown 渲染、折叠、删除、编辑动作。
 

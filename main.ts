@@ -35,10 +35,13 @@ import { EpubAiModal } from "./src/epub/EpubAiModal";
 import { EpubTocView, EPUB_TOC_VIEW_TYPE } from "./src/epub/EpubTocView";
 import { registerEpubGotoHandler } from "./src/epub/EpubGotoHandler";
 import { MarkdownStatsView, MARKDOWN_STATS_VIEW_TYPE } from "./src/views/markdownStatsView";
+import { buildTagSuggestions, renderTagInput } from "./src/views/tagInput";
+import { TagBoardView, TAG_BOARD_VIEW_TYPE } from "./src/views/tagBoardView";
 
 interface CommentModalValue {
   title: string;
   content: string;
+  tags: string[];
 }
 
 const NOTE_TITLE_OPTIONS = [
@@ -91,6 +94,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     await this.loadMdOpenStats();
 
     this.registerView(ANNOTATION_SIDEBAR_VIEW, (leaf) => new AnnotationSidebarView(leaf, this));
+    this.registerView(TAG_BOARD_VIEW_TYPE, (leaf) => new TagBoardView(leaf, this));
     this.registerView(EPUB_READER_VIEW_TYPE, (leaf) => new EpubReaderView({
       leaf,
       store: this.store,
@@ -98,6 +102,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       refreshAnnotations: () => this.refreshAnnotations(),
       saveSettings: () => this.saveSettings(),
       onTocChanged: () => this.refreshEpubToc(),
+      tagSuggestions: () => this.getTagSuggestions(),
     }));
     // 把 foliate 支持的所有电子书格式绑定到阅读器视图：registerView 只注册视图工厂，
     // 还需要 registerExtensions 告诉 Obsidian「.epub/.mobi/... 用本视图打开」。
@@ -287,6 +292,13 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     if (activeFile && activeFile.extension === "md") {
       await this.refreshActiveReadingViewHighlights(activeFile.path);
     }
+    // 标签总览：标签增删改后重绘（内部按需读文档，成本可接受）
+    for (const leaf of this.app.workspace.getLeavesOfType(TAG_BOARD_VIEW_TYPE)) {
+      const view = leaf.view;
+      if (view instanceof TagBoardView) {
+        void view.render();
+      }
+    }
     await this.stickyLane.render();
   }
 
@@ -422,6 +434,12 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       id: "open-markdown-stats",
       name: "打开笔记使用统计",
       callback: () => this.activateMarkdownStats(),
+    });
+
+    this.addCommand({
+      id: "open-tag-board",
+      name: "打开标签总览",
+      callback: () => this.activateTagBoard(),
     });
 
     // Phase 5 P3：PDF 目录
@@ -712,13 +730,14 @@ export default class OverlayAnnotationsPlugin extends Plugin {
 
   private async createComment(): Promise<void> {
     if (this.pdfLayer.isPdfActive()) {
-      const note = await new CommentModal(this.app, "", "").openAndRead();
+      const note = await new CommentModal(this.app, "", "", [], this.getTagSuggestions()).openAndRead();
       if (note !== null) {
         await this.pdfLayer.createComment(
           this.settings.defaultHighlightColor,
           note.content,
           this.settings.defaultAuthor,
           note.title,
+          note.tags,
         );
       }
       this.toolbar.hide();
@@ -736,7 +755,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       return;
     }
 
-    const note = await new CommentModal(this.app, "", "").openAndRead();
+    const note = await new CommentModal(this.app, "", "", [], this.getTagSuggestions()).openAndRead();
     if (note === null) {
       return;
     }
@@ -765,7 +784,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       if (!(file instanceof TFile)) {
         return;
       }
-      void new CommentModal(this.app, "", note).openAndRead().then(async (value) => {
+      void new CommentModal(this.app, "", note, [], this.getTagSuggestions()).openAndRead().then(async (value) => {
         if (value === null) {
           return;
         }
@@ -794,6 +813,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       updatedAt: now,
       replies: [],
       resolved: false,
+      ...(note.tags.length > 0 ? { tags: [...note.tags] } : {}),
     };
 
     await this.store.addComment(file, comment);
@@ -978,6 +998,29 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   }
 
   /**
+   * 打开标签总览（主区域标签页）。传 tagKey 时定位到该标签。
+   * 已打开则直接切过去并重绘，不重复开 tab。
+   */
+  async activateTagBoard(tagKey?: string): Promise<void> {
+    let leaf = this.app.workspace.getLeavesOfType(TAG_BOARD_VIEW_TYPE)[0];
+    if (!leaf) {
+      leaf = this.app.workspace.getLeaf("tab");
+      await leaf.setViewState({ type: TAG_BOARD_VIEW_TYPE, active: true });
+    }
+    this.app.workspace.revealLeaf(leaf);
+
+    const view = leaf.view;
+    if (!(view instanceof TagBoardView)) {
+      return;
+    }
+    if (tagKey) {
+      view.focusTag(tagKey);
+    } else {
+      await view.render();
+    }
+  }
+
+  /**
    * 找到已经打开该 Markdown 文件的标签页（含延迟加载的），用于复用而非重复新建。
    * 用 getViewState 而非 view instanceof，能覆盖尚未加载的 deferred 标签页。
    */
@@ -990,6 +1033,16 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       }
     });
     return matches[0] ?? null;
+  }
+
+  /**
+   * 标签补全候选：已用过的标签 ∪ 全库 md 文件名（概念页名）。
+   * 走内存索引 + vault 文件列表，不读磁盘内容，212 篇量级耗时可忽略。
+   */
+  getTagSuggestions(): string[] {
+    const existing = this.store.getTagDictionary().map((item) => item.name);
+    const basenames = this.app.vault.getMarkdownFiles().map((file) => file.basename);
+    return buildTagSuggestions(existing, basenames);
   }
 
   async openMarkdownNote(file: TFile, options?: { forceCount?: boolean }): Promise<void> {
@@ -1549,13 +1602,17 @@ function nthIndexOf(source: string, target: string, occurrenceIndex: number): nu
 class CommentModal extends Modal {
   private value: CommentModalValue | null = null;
   private resolve!: (value: CommentModalValue | null) => void;
+  private tags: string[];
 
   constructor(
     app: OverlayAnnotationsPlugin["app"],
     private readonly initialTitle: string,
     private readonly initialContent: string,
+    initialTags: string[] = [],
+    private readonly tagSuggestions: string[] = [],
   ) {
     super(app);
+    this.tags = initialTags;
   }
 
   openAndRead(): Promise<CommentModalValue | null> {
@@ -1585,6 +1642,18 @@ class CommentModal extends Modal {
     });
     input.value = this.initialContent;
 
+    const tagRow = this.contentEl.createDiv({ cls: "yh-modal-row yh-modal-tags" });
+    tagRow.createEl("label", { cls: "yh-modal-label", text: "标签" });
+    const tagField = tagRow.createDiv({ cls: "yh-modal-tag-field" });
+    renderTagInput(tagField, {
+      tags: this.tags,
+      suggestions: this.tagSuggestions,
+      placeholder: "输入标签，回车确认",
+      onChange: (tags) => {
+        this.tags = tags;
+      },
+    });
+
     const actions = this.contentEl.createDiv({ cls: "yh-modal-actions" });
     const cancel = actions.createEl("button", { text: "取消", cls: "yh-modal-cancel", attr: { type: "button" } });
     const save = actions.createEl("button", { text: "保存", cls: "yh-modal-save", attr: { type: "button" } });
@@ -1596,6 +1665,7 @@ class CommentModal extends Modal {
       this.value = {
         title: title.value.trim(),
         content: input.value.trim(),
+        tags: [...this.tags],
       };
       this.close();
     };

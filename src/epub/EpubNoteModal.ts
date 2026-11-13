@@ -13,12 +13,15 @@ import {
   EpubHighlightStyle,
   EPUB_HIGHLIGHT_STYLES,
 } from "../storage/types";
+import { renderTagInput } from "../views/tagInput";
 
 export interface EpubNoteResult {
   note: string;
   color: AnnotationColor;
   style: EpubHighlightStyle;
   noteType: "insight" | "question" | "reminder";
+  /** 自由标签，未填时为空数组 */
+  tags: string[];
 }
 
 const NOTE_TYPE_OPTIONS = [
@@ -36,8 +39,10 @@ export class EpubNoteModal extends Modal {
   private color: AnnotationColor;
   private style: EpubHighlightStyle;
   private noteType: "insight" | "question" | "reminder";
+  private tags: string[];
   private onSubmit: (result: EpubNoteResult) => void;
   private titleText: string;
+  private readonly tagSuggestions: string[];
   private keyboardCleanup?: () => void;
 
   constructor(
@@ -48,9 +53,11 @@ export class EpubNoteModal extends Modal {
       color?: AnnotationColor;
       style?: EpubHighlightStyle;
       noteType?: "insight" | "question" | "reminder";
+      tags?: string[];
     },
     onSubmit: (result: EpubNoteResult) => void,
     titleText = "写下你的想法",
+    tagSuggestions: string[] = [],
   ) {
     super(app);
     this.selectedText = selectedText;
@@ -58,8 +65,10 @@ export class EpubNoteModal extends Modal {
     this.color = initial.color ?? "yellow";
     this.style = initial.style ?? "fill";
     this.noteType = initial.noteType ?? "insight";
+    this.tags = initial.tags ?? [];
     this.onSubmit = onSubmit;
     this.titleText = titleText;
+    this.tagSuggestions = tagSuggestions;
   }
 
   private submit(ta: HTMLTextAreaElement): void {
@@ -70,6 +79,7 @@ export class EpubNoteModal extends Modal {
       color: this.color,
       style: this.style,
       noteType: this.note ? this.noteType : "insight",
+      tags: [...this.tags],
     });
   }
 
@@ -158,6 +168,20 @@ export class EpubNoteModal extends Modal {
     ta.placeholder = "在这里写下你的想法、疑问或联想…";
     ta.value = this.note;
     ta.rows = Platform.isMobile ? 4 : 6;
+
+    // 标签行（可选，留空即无标签）
+    const tagRow = body.createDiv({ cls: "yh-epub-note-tag-row" });
+    tagRow.createEl("span", { cls: "yh-epub-note-label", text: "标签" });
+    const tagField = tagRow.createDiv({ cls: "yh-epub-note-tag-field" });
+    renderTagInput(tagField, {
+      tags: this.tags,
+      suggestions: this.tagSuggestions,
+      placeholder: "输入标签，回车确认",
+      onChange: (tags) => {
+        this.tags = tags;
+      },
+    });
+
     window.setTimeout(() => ta.focus(), 30);
 
     // 按钮行（放入可滚动主体，测量失败时也能下滑到按钮）

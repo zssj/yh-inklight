@@ -183,6 +183,8 @@ export interface EpubReaderViewOptions {
 	saveSettings: () => Promise<void>;
 	/** 目录内容或当前高亮条目变化时通知 main.ts 刷新左侧栏目录视图 */
 	onTocChanged: () => void;
+	/** 标签补全候选（已有标签 ∪ 概念页名），由 main.ts 注入 */
+	tagSuggestions?: () => string[];
 }
 
 /**
@@ -207,6 +209,7 @@ export class EpubReaderView extends FileView {
 	private readonly refreshAnnotations: () => void;
 	private readonly saveSettings: () => Promise<void>;
 	private readonly onTocChanged: () => void;
+	private readonly tagSuggestions: () => string[];
 
 	// ---- foliate 实例 ----
 
@@ -335,6 +338,7 @@ export class EpubReaderView extends FileView {
 		this.refreshAnnotations = options.refreshAnnotations;
 		this.saveSettings = options.saveSettings;
 		this.onTocChanged = options.onTocChanged;
+		this.tagSuggestions = options.tagSuggestions ?? (() => []);
 		this.themeManager = new EpubThemeManager();
 		this.currentFlowMode = options.settings.epubDefaultFlow;
 		this.currentFontSize = options.settings.epubFontSize;
@@ -1207,6 +1211,7 @@ export class EpubReaderView extends FileView {
 					updatedAt: now,
 					replies: [],
 					resolved: false,
+					...(result.tags.length > 0 ? { tags: [...result.tags] } : {}),
 				};
 
 				try {
@@ -1226,6 +1231,8 @@ export class EpubReaderView extends FileView {
 					new Notice("标注创建失败");
 				}
 			},
+			undefined,
+			this.tagSuggestions(),
 		).open();
 	}
 
@@ -2263,6 +2270,7 @@ export class EpubReaderView extends FileView {
 				color: comment.color,
 				style: comment.style,
 				noteType: comment.noteType,
+				tags: comment.tags ?? [],
 			},
 			async (result: EpubNoteResult) => {
 				if (!result.note.trim()) {
@@ -2274,6 +2282,7 @@ export class EpubReaderView extends FileView {
 					style: result.style,
 					noteType: result.noteType,
 					note: result.note.trim(),
+					tags: result.tags.length > 0 ? [...result.tags] : undefined,
 					updatedAt: new Date().toISOString(),
 				};
 				try {
@@ -2287,6 +2296,7 @@ export class EpubReaderView extends FileView {
 				}
 			},
 			"编辑想法",
+			this.tagSuggestions(),
 		).open();
 	}
 
@@ -2309,7 +2319,7 @@ export class EpubReaderView extends FileView {
 		new EpubNoteModal(
 			this.app,
 			highlight.anchor.selectedText,
-			{ color: highlight.color, style: highlight.style },
+			{ color: highlight.color, style: highlight.style, tags: highlight.tags ?? [] },
 			async (result: EpubNoteResult) => {
 				if (!result.note.trim()) {
 					return;
@@ -2329,6 +2339,7 @@ export class EpubReaderView extends FileView {
 					updatedAt: now,
 					replies: [],
 					resolved: false,
+					...(result.tags.length > 0 ? { tags: [...result.tags] } : {}),
 				};
 				try {
 					await this.store.removeAnnotation(this.file!, highlight.id);
@@ -2342,6 +2353,8 @@ export class EpubReaderView extends FileView {
 					new Notice("标注创建失败");
 				}
 			},
+			undefined,
+			this.tagSuggestions(),
 		).open();
 	}
 

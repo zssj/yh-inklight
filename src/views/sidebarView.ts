@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 Obsidian ItemView、AnnotationStore 数据与插件主类回调
- * [OUTPUT]: 对外提供 AnnotationSidebarView，将当前文件或全库 annotation 合并为可筛选、可跳转、可导出的总览卡片
- * [POS]: views 模块的右侧 Leaf 总览面板，承载搜索、筛选、排序、行内编辑、跳转、删除与导出模板
+ * [OUTPUT]: 对外提供 AnnotationSidebarView，将当前文件或全库 annotation 合并为可筛选、可跳转、可导出的总览卡片，卡片可挂标签
+ * [POS]: views 模块的右侧 Leaf 总览面板，承载搜索、颜色/类型/标签筛选、排序、行内编辑、标签编辑、跳转、删除与导出模板
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
@@ -18,56 +18,20 @@ import {
   CommentAnnotation,
   EpubCommentAnnotation,
   EpubHighlightAnnotation,
-  FileAnnotationDocument,
   HighlightAnnotation,
   PdfCommentAnnotation,
   PdfHighlightAnnotation,
 } from "../storage/types";
+import { AnnotationKind, AnnotationMode, buildCards, SidebarCard } from "./cardModel";
+import { buildTagSuggestions, renderTagChips, renderTagInput } from "./tagInput";
+import { openAnnotationTarget } from "./navigation";
+import { tagKey, hasTag } from "../storage/tags";
+import type { TagRef } from "../storage/annotationStore";
 
 export const ANNOTATION_SIDEBAR_VIEW = "yh-inklight-sidebar";
 
-type AnnotationKind = "highlight" | "note";
-type AnnotationMode = "md" | "pdf" | "epub";
 type AnnotationScope = "current" | "all";
 type TypeFilter = "all" | AnnotationKind;
-
-type SidebarCard =
-  | {
-      id: string;
-      kind: "highlight";
-      mode: AnnotationMode;
-      sourcePath: string;
-      color: AnnotationColor;
-      text: string;
-      content: string;
-      createdAt: string;
-      startOffset: number;
-      pageNumber: number | null;
-      cfiRange?: string;
-      chapter?: string;
-      orphaned?: boolean;
-      isCode: boolean;
-      highlight: HighlightAnnotation | PdfHighlightAnnotation | EpubHighlightAnnotation;
-      note: CommentAnnotation | PdfCommentAnnotation | EpubCommentAnnotation | null;
-    }
-  | {
-      id: string;
-      kind: "note";
-      mode: AnnotationMode;
-      sourcePath: string;
-      color: AnnotationColor;
-      text: string;
-      content: string;
-      createdAt: string;
-      startOffset: number;
-      pageNumber: number | null;
-      cfiRange?: string;
-      chapter?: string;
-      orphaned?: boolean;
-      isCode: boolean;
-      highlight: null;
-      note: CommentAnnotation | PdfCommentAnnotation | EpubCommentAnnotation;
-    };
 
 export class AnnotationSidebarView extends ItemView {
   private annotationScope: AnnotationScope = "current";
@@ -75,6 +39,8 @@ export class AnnotationSidebarView extends ItemView {
   private color: AnnotationColor | "all" = "all";
   private type: TypeFilter = "all";
   private sort: AnnotationSortMode = "document";
+  /** 标签筛选的比较键；空字符串表示不筛选 */
+  private tagFilter = "";
   private exportFormat: AnnotationExportFormat = "summary";
   private renderToken = 0;
   private renderTimer: number | null = null;
@@ -131,7 +97,7 @@ export class AnnotationSidebarView extends ItemView {
     if (token !== this.renderToken) {
       return;
     }
-    const rawCards = documents.flatMap((document) => this.buildCards(document));
+    const rawCards = documents.flatMap((document) => buildCards(document));
     const cards = this.filterCards(rawCards);
     const highlightCount = rawCards.filter((card) => card.kind === "highlight" && !card.orphaned).length;
     const noteCount = rawCards.filter((card) => card.note && !card.orphaned).length;
@@ -169,7 +135,7 @@ export class AnnotationSidebarView extends ItemView {
       this.annotationScope === "all"
         ? await this.plugin.store.getIndexedDocuments()
         : [await this.plugin.store.getDocument(file!)];
-    const rawCards = documents.flatMap((document) => this.buildCards(document));
+    const rawCards = documents.flatMap((document) => buildCards(document));
     const cards = this.filterCards(rawCards);
 
     list.empty();
@@ -188,192 +154,6 @@ export class AnnotationSidebarView extends ItemView {
       const scopeLabel = this.annotationScope === "all" ? `${documents.length} files` : "current file";
       countEl.textContent = `${scopeLabel} · ${highlightCount} highlights · ${noteCount} notes`;
     }
-  }
-
-  private buildCards(document: FileAnnotationDocument): SidebarCard[] {
-    const usedNotes = new Set<string>();
-    const cards: SidebarCard[] = [];
-
-    for (const highlight of document.highlights) {
-      const note = this.findAttachedMarkdownNote(highlight, document.comments, usedNotes);
-      if (note) {
-        usedNotes.add(note.id);
-      }
-      cards.push({
-        id: highlight.id,
-        kind: "highlight",
-        mode: "md",
-        sourcePath: document.filePath,
-        color: highlight.color,
-        text: highlight.anchor.selectedText,
-        content: note?.content ?? "",
-        createdAt: highlight.createdAt,
-        startOffset: highlight.anchor.startOffset,
-        pageNumber: null,
-        orphaned: highlight.orphaned || note?.orphaned,
-        isCode: isCodeAnchor(highlight.anchor),
-        highlight,
-        note,
-      });
-    }
-
-    for (const highlight of document.pdfHighlights) {
-      const note = this.findAttachedPdfNote(highlight, document.pdfComments, usedNotes);
-      if (note) {
-        usedNotes.add(note.id);
-      }
-      cards.push({
-        id: highlight.id,
-        kind: "highlight",
-        mode: "pdf",
-        sourcePath: document.filePath,
-        color: highlight.color,
-        text: highlight.anchor.selectedText,
-        content: note?.content ?? "",
-        createdAt: highlight.createdAt,
-        startOffset: Number.MAX_SAFE_INTEGER,
-        pageNumber: highlight.anchor.pageNumber,
-        orphaned: highlight.orphaned || note?.orphaned,
-        isCode: false,
-        highlight,
-        note,
-      });
-    }
-
-    for (const highlight of document.epubHighlights) {
-      const note = this.findAttachedEpubNote(highlight, document.epubComments, usedNotes);
-      if (note) {
-        usedNotes.add(note.id);
-      }
-      cards.push({
-        id: highlight.id,
-        kind: "highlight",
-        mode: "epub",
-        sourcePath: document.filePath,
-        color: highlight.color,
-        text: highlight.anchor.selectedText,
-        content: note?.note ?? "",
-        createdAt: highlight.createdAt,
-        startOffset: Number.MAX_SAFE_INTEGER,
-        pageNumber: null,
-        cfiRange: highlight.anchor.cfiRange,
-        chapter: highlight.anchor.chapter,
-        orphaned: highlight.orphaned || note?.orphaned,
-        isCode: false,
-        highlight,
-        note,
-      });
-    }
-
-    for (const note of document.comments.filter((item) => !usedNotes.has(item.id))) {
-      cards.push({
-        id: note.id,
-        kind: "note",
-        mode: "md",
-        sourcePath: document.filePath,
-        color: note.color,
-        text: note.anchor.selectedText,
-        content: note.content,
-        createdAt: note.createdAt,
-        startOffset: note.anchor.startOffset,
-        pageNumber: null,
-        orphaned: note.orphaned,
-        isCode: isCodeAnchor(note.anchor),
-        highlight: null,
-        note,
-      });
-    }
-
-    for (const note of document.pdfComments.filter((item) => !usedNotes.has(item.id))) {
-      cards.push({
-        id: note.id,
-        kind: "note",
-        mode: "pdf",
-        sourcePath: document.filePath,
-        color: note.color,
-        text: note.anchor.selectedText,
-        content: note.content,
-        createdAt: note.createdAt,
-        startOffset: Number.MAX_SAFE_INTEGER,
-        pageNumber: note.anchor.pageNumber,
-        orphaned: note.orphaned,
-        isCode: false,
-        highlight: null,
-        note,
-      });
-    }
-
-    for (const note of document.epubComments.filter((item) => !usedNotes.has(item.id))) {
-      cards.push({
-        id: note.id,
-        kind: "note",
-        mode: "epub",
-        sourcePath: document.filePath,
-        color: note.color,
-        text: note.anchor.selectedText,
-        content: note.note,
-        createdAt: note.createdAt,
-        startOffset: Number.MAX_SAFE_INTEGER,
-        pageNumber: null,
-        cfiRange: note.anchor.cfiRange,
-        chapter: note.anchor.chapter,
-        orphaned: note.orphaned,
-        isCode: false,
-        highlight: null,
-        note,
-      });
-    }
-
-    return cards;
-  }
-
-  private findAttachedMarkdownNote(
-    highlight: HighlightAnnotation,
-    comments: CommentAnnotation[],
-    usedNotes: Set<string>,
-  ): CommentAnnotation | null {
-    return (
-      comments.find((note) => !usedNotes.has(note.id) && note.highlightId === highlight.id) ??
-      comments.find((note) => {
-        return (
-          !usedNotes.has(note.id) &&
-          !note.highlightId &&
-          note.anchor.startOffset === highlight.anchor.startOffset &&
-          note.anchor.selectedText === highlight.anchor.selectedText
-        );
-      }) ??
-      null
-    );
-  }
-
-  private findAttachedPdfNote(
-    highlight: PdfHighlightAnnotation,
-    comments: PdfCommentAnnotation[],
-    usedNotes: Set<string>,
-  ): PdfCommentAnnotation | null {
-    return (
-      comments.find((note) => !usedNotes.has(note.id) && note.highlightId === highlight.id) ??
-      comments.find((note) => {
-        return (
-          !usedNotes.has(note.id) &&
-          !note.highlightId &&
-          note.anchor.pageNumber === highlight.anchor.pageNumber &&
-          note.anchor.selectedText === highlight.anchor.selectedText
-        );
-      }) ??
-      null
-    );
-  }
-
-  private findAttachedEpubNote(
-    highlight: EpubHighlightAnnotation,
-    comments: EpubCommentAnnotation[],
-    usedNotes: Set<string>,
-  ): EpubCommentAnnotation | null {
-    return (
-      comments.find((note) => !usedNotes.has(note.id) && note.anchor.cfiRange === highlight.anchor.cfiRange) ??
-      null
-    );
   }
 
   private renderHeader(container: Element): void {
@@ -461,6 +241,39 @@ export class AnnotationSidebarView extends ItemView {
       this.sort = sort.value as AnnotationSortMode;
       await this.render();
     });
+
+    // 标签筛选：选项来自内存索引，按文件数降序；选中后自动切全库，否则当前文件里常为空
+    const tagSelect = filterRow.createEl("select", {
+      cls: "yh-filter-select yh-tag-filter",
+      attr: { title: "按标签筛选" },
+    });
+    tagSelect.createEl("option", { text: "全部标签", value: "" });
+    const dictionary = this.plugin.store.getTagDictionary();
+    const currentKey = this.tagFilter;
+    const visibleTags = dictionary.filter((item, index) => index < 20 || item.key === currentKey);
+    for (const item of visibleTags) {
+      tagSelect.createEl("option", { text: `${item.name} (${item.fileCount})`, value: item.key });
+    }
+    if (currentKey && !dictionary.some((item) => item.key === currentKey)) {
+      tagSelect.createEl("option", { text: currentKey, value: currentKey });
+    }
+    tagSelect.value = currentKey;
+    tagSelect.addEventListener("change", async () => {
+      this.tagFilter = tagSelect.value;
+      if (this.tagFilter) {
+        this.annotationScope = "all";
+      }
+      await this.render();
+    });
+
+    const boardButton = filterRow.createEl("button", {
+      cls: "yh-icon-btn yh-tag-board-btn",
+      attr: { type: "button", title: "在标签总览中查看" },
+    });
+    setIcon(boardButton, "layout-grid");
+    boardButton.addEventListener("click", () => {
+      void this.plugin.activateTagBoard(this.tagFilter || undefined);
+    });
   }
 
   private renderCard(list: Element, cardData: SidebarCard): void {
@@ -503,6 +316,8 @@ export class AnnotationSidebarView extends ItemView {
         this.addExpandToggle(content, card);
       });
     }
+
+    this.mountTagRow(card.createDiv({ cls: "yh-ov-tags" }), file, cardData);
 
     const source = card.createDiv({ cls: "yh-ov-source" });
     source.createSpan({ cls: "yh-ov-file", text: file?.name ?? cardData.sourcePath });
@@ -577,6 +392,93 @@ export class AnnotationSidebarView extends ItemView {
     const editActions = edit.createDiv({ cls: "yh-ov-edit-actions" });
     editActions.createEl("button", { cls: "yh-ov-save", text: "保存", attr: { type: "button" } });
     editActions.createEl("button", { cls: "yh-ov-cancel", text: "取消", attr: { type: "button" } });
+  }
+
+  /** 标签行：默认只读 chip + 加号；点加号原地切编辑态，不弹窗 */
+  private mountTagRow(row: HTMLElement, file: TFile | null, cardData: SidebarCard): void {
+    row.empty();
+    row.removeClass("is-editing");
+
+    const suggestions = this.plugin.getTagSuggestions();
+    renderTagChips(row, cardData.tags, {
+      onChipClick: (tag) => this.focusTag(tagKey(tag)),
+      onOverflowClick: () => this.mountTagEditor(row, file, cardData, suggestions),
+    });
+
+    const add = row.createSpan({
+      cls: "yh-ov-tag-add",
+      text: "+",
+      attr: { role: "button", tabindex: "0", "aria-label": "添加标签", title: "添加标签" },
+    });
+    const open = (event: Event): void => {
+      event.stopPropagation();
+      this.mountTagEditor(row, file, cardData, suggestions);
+    };
+    add.addEventListener("click", open);
+    add.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        open(event);
+      }
+    });
+  }
+
+  private mountTagEditor(row: HTMLElement, file: TFile | null, cardData: SidebarCard, suggestions: string[]): void {
+    row.empty();
+    row.addClass("is-editing");
+    renderTagInput(row, {
+      tags: cardData.tags,
+      suggestions,
+      onChange: (tags) => {
+        cardData.tags = tags;
+        void this.persistCardTags(file, cardData, tags);
+      },
+    });
+
+    const field = row.querySelector<HTMLInputElement>(".yh-tag-input-field");
+    field?.focus();
+    field?.addEventListener("blur", () => {
+      window.setTimeout(() => {
+        if (!row.contains(document.activeElement)) {
+          this.mountTagRow(row, file, cardData);
+        }
+      }, 140);
+    });
+  }
+
+  /** 写入标签：一张卡片可能是高亮 + 笔记，两者写同一份数组 */
+  private async persistCardTags(file: TFile | null, cardData: SidebarCard, tags: string[]): Promise<void> {
+    if (!file) {
+      return;
+    }
+
+    const refs: TagRef[] = [];
+    if (cardData.highlight) {
+      refs.push({ filePath: cardData.sourcePath, annotationId: cardData.highlight.id });
+    }
+    if (cardData.note) {
+      refs.push({ filePath: cardData.sourcePath, annotationId: cardData.note.id });
+    }
+    if (refs.length === 0) {
+      return;
+    }
+
+    try {
+      await this.plugin.store.setTags(refs, tags);
+    } catch (error) {
+      console.warn("yh-inklight: 保存标签失败", error);
+      new Notice("标签保存失败，请检查写入权限或同步状态");
+    }
+  }
+
+  /** 把侧栏切到「只看该标签」：跨文档，并同步更新筛选下拉 */
+  focusTag(key: string): void {
+    if (!key) {
+      return;
+    }
+    this.tagFilter = key;
+    this.annotationScope = "all";
+    void this.render();
   }
 
   private cardAttributes(card: SidebarCard): Record<string, string> {
@@ -776,8 +678,9 @@ export class AnnotationSidebarView extends ItemView {
         }
         return Boolean(card.note);
       })
+      .filter((card) => !this.tagFilter || hasTag(card.tags, this.tagFilter))
       .filter((card) => {
-        const haystack = `${card.sourcePath} ${card.text} ${card.content}`.toLowerCase();
+        const haystack = `${card.sourcePath} ${card.text} ${card.content} ${card.tags.join(" ")}`.toLowerCase();
         return haystack.includes(this.query.toLowerCase());
       })
       .sort((a, b) => {
@@ -827,32 +730,9 @@ export class AnnotationSidebarView extends ItemView {
     mode: AnnotationMode = "md",
     cfiRange?: string,
   ): Promise<void> {
-    const leaf = this.app.workspace.getLeaf(false);
-    await leaf.openFile(file);
-
-    if (mode === "epub" && cfiRange) {
-      // 统一走 plugin 的跳转入口（含轮询重试），不再自行 setTimeout 查 leaf
-      this.plugin.navigateEpubToCfi(file, cfiRange);
-      return;
-    }
-
-    if (file.extension.toLowerCase() === "pdf") {
-      window.setTimeout(() => {
-        document.dispatchEvent(new CustomEvent("yh-pdf-goto-page", { detail: { page: pageNumber } }));
-      }, 120);
-      return;
-    }
-
-    const view = leaf.view instanceof MarkdownView ? leaf.view : this.app.workspace.getActiveViewOfType(MarkdownView);
-    if (!view) {
-      return;
-    }
-
-    const pos = view.editor.offsetToPos(offset);
-    view.editor.setCursor(pos);
-    view.editor.scrollIntoView({ from: pos, to: pos }, true);
-    view.containerEl.addClass("yh-flash-target");
-    window.setTimeout(() => view.containerEl.removeClass("yh-flash-target"), 850);
+    await openAnnotationTarget(this.app, { file, offset, pageNumber, mode, cfiRange }, (target, cfi) =>
+      this.plugin.navigateEpubToCfi(target, cfi),
+    );
   }
 }
 
@@ -865,9 +745,6 @@ function getTitleLabel(title: string): string {
   return labels[title] ?? title;
 }
 
-function isCodeAnchor(anchor: HighlightAnnotation["anchor"] | PdfHighlightAnnotation["anchor"]): boolean {
-  return "isCode" in anchor && Boolean(anchor.isCode);
-}
 
 function isCodeLikeText(text: string): boolean {
   return /^[ \t]{2,}/m.test(text) || /\n[ \t]{2,}\S/.test(text);

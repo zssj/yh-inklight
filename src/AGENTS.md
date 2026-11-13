@@ -11,10 +11,15 @@ editor/selectionToolbar.ts: 选中文本后的浮动工具栏，提供颜色、�
 pdf/pdfAnnotationLayer.ts: PDF 注释控制器，使用页码与矩形百分比坐标绘制非侵入式高亮和右侧便签栏。
 pdf/pdfViewerAdapter.ts: Obsidian 原生 PDF viewer 适配层，封装当前页、跳转、pdf.js eventBus 与页面生命周期。
 storage/types.ts: sidecar JSON、设置、锚点、高亮、便签、代码选区标记、索引的类型真相源。
-storage/annotationStore.ts: .obsidian-annotations 持久化后端，读写文件 JSON 与全局 index。
+storage/annotationStore.ts: .obsidian-annotations 持久化后端，读写文件 JSON 与全局 index，维护标签索引与标签字典。
+storage/tags.ts: 标签归一化纯函数（去 #、折叠空白、剥离非法字符、大小写无关去重、并集），无 IO。
 views/annotationPopover.ts: 窄屏与阅读模式弹层，点击高亮后展示 sidecar 中的高亮和便签内容。
+views/cardModel.ts: 卡片模型纯函数，把 sidecar 文档拍平成 SidebarCard（高亮挂笔记、孤儿笔记独立成卡、标签取并集）。
 views/markdownStatsView.ts: 笔记使用统计视图，列出全库 md 笔记并支持跳转/删除；顶部提供 1 天复习（openCount==1）/ 7 天复习（openCount>=2）/ 上月今日 / 去年今日 四张卡片，日差精确匹配、各 Top 5。
-views/sidebarView.ts: 右侧总览面板，使用彩色卡片合并 highlight 与关联 note，并承载搜索、过滤、排序、导出、跳转与内联编辑。
+views/navigation.ts: 三端跳转单点（md 偏移 / pdf 页码 / epub CFI），侧栏与标签总览共用。
+views/sidebarView.ts: 右侧总览面板，使用彩色卡片合并 highlight 与关联 note，并承载搜索、标签筛选、过滤、排序、导出、跳转与内联编辑。
+views/tagBoardView.ts: 标签总览视图，按「标签 → 文档 → 批注」三栏主从跨文档聚合批注，窄屏降级为单栏 + 面包屑。
+views/tagInput.ts: 标签 UI 组件（只读 chip 行 + chip 编辑器与补全下拉），侧栏、标签总览与两个弹窗共用。
 views/stickyNoteLane.ts: 编辑/阅读模式的便签泳道，基于 positioning 布局算法渲染可编辑便签条，支持窄屏自适应。
 views/stickyNoteView.ts: 兼容型便利贴卡片组件，保留 Markdown 渲染、折叠与编辑。
 settings/settingsTab.ts: 插件设置页，管理默认颜色、便签栏、窄屏折叠、连接线、作者和迁移策略。

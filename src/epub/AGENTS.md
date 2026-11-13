@@ -10,7 +10,8 @@ EpubBookshelfView.ts: 书架视图（ItemView），扫描 vault 内电子书文�
 EpubTocView.ts: 目录侧栏，构建 TOC 树、随阅读位置高亮当前章节、点击跳转 CFI。
 EpubChapterResolver.ts: TOC/spine 章节解析，把 TOC 链接解析为 spine index，规范化 CFI 与进度百分比（0–1）。
 EpubProgressManager.ts: 死代码——全仓无引用，勿改动勿依赖（进度恢复逻辑已在 EpubReaderView 内实现）。
-EpubAnnotationCard.ts: 点击高亮/便签后弹出的标注卡片，展示原文、想法、只读标签 chip 与删除动作。
+EpubAnnotationCard.ts: 点击高亮弹出的标注详情浮层；按选区外接矩形四侧择优定位（避开划线、工具栏、屏幕边界与安全区），展示原文/想法/标签，提供「添加笔记或编辑 + 添加标签 + 删除」，标签内联编辑态存类字段（savedTags/draftTags/tagEditing），提交走 onTagsChange。
+EpubPopoverPlacement.ts: 纯函数定位器，输入选区矩形 + 浮层实测尺寸 + 可用区域，输出 left/top/width/maxHeight/side；四侧都放不下时压缩 maxHeight 由卡片内部滚动，绝不压到选区上。
 EpubNoteModal.ts: 便签/想法输入弹窗，移动端用 visualViewport 定位避开键盘；提交前 flush 标签输入框里未回车的文本；补全候选为 TagSuggestion[]（带来源）。
 EpubAiModal.ts: AI 解释/翻译/改写弹窗，内置动作预设与自定义提问，回复可存为便签。
 EpubImageViewer.ts: EPUB 内图片全屏放大查看器，点击放大、再点/Esc 关闭。
@@ -27,6 +28,7 @@ EpubFoliateLoader.ts.bak / EpubReaderView.ts.bak2: 历史备份文件（*.bak2 �
 ·CFI 是唯一坐标: EPUB 批注/书签/进度一律用 CFI（或 spine+百分比），禁止用 DOM 路径。
 ·沉浸式导航栏（隐藏 Obsidian .mobile-navbar）由滚动方向迟滞累加器驱动: 上滑净累计 ≥30px 显示、下滑净累计 ≥45px 隐藏（NAV_SHOW/HIDE_SCROLL_THRESHOLD），方向反转立即清零反向累计——这是消除"回滑时导航栏闪现又消失"的关键，勿改回单向判定；200ms 事件门限防翻页回弹闪烁；恢复进度等程序化滚动后必须调用 baselineReaderScroll 基线化；视图卸载必须 setNavHidden(false) 恢复全局 body 类。
 ·不可改 .yh-epub-reader 的 padding: 会改变阅读区高度触发 foliate ResizeObserver 重新分页，导致阅读位置错乱/进度不准。
+·标注卡片定位禁止用估算高度与单点 anchor: 必须用选区全部行矩形的并集（createSelectionAvoidRect）+ 浮层实测尺寸，可用区域取「视口 ∩ 阅读区 − --yh-safe-* 安全区」。卡片标签按 annotationId 走 store.setTags 关联并重建 index.json 的 tags/tagNames，只调 refreshAnnotations 同步全局侧栏，卡片内不得再主动触发 refreshRenditionAnnotations（标签不影响 foliate 绘制）。浮层类名固定 .yh-epub-annotation-popover，勿复用历史同名 .yh-epub-annotation-card 规则。
 ·翻页竞态: 点击翻页需吞掉 foliate snap 的双重翻页与动画竞态（v0.17.72 修复），改动翻页逻辑后必须真机回归。
 ·foliate 版本升级: 升级 foliate-js 前先确认 EpubFoliatePatches 与 Guard 的补丁点未失效。
 

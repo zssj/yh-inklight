@@ -48,8 +48,14 @@ export class AnnotationSidebarView extends ItemView {
   /** 标签筛选的比较键；空字符串表示不筛选 */
   private tagFilter = "";
   private exportFormat: AnnotationExportFormat = "summary";
-  /** 顶部折叠菜单的展开态；必须存在视图字段上，重绘后仍保持用户上一次的选择 */
+  /**
+   * 顶部折叠菜单的展开态；必须存在视图字段上，重绘后仍保持用户上一次的选择。
+   * 展开/收起以 panel.hidden 为唯一硬状态（见 applyMenuVisibility），class 只用于样式。
+   */
   private menuOpen = false;
+  /** 菜单面板与触发按钮的直连引用：render 时登记，点击时直接操作，不再靠 querySelector 二次查找 */
+  private menuPanel: HTMLElement | null = null;
+  private menuButton: HTMLElement | null = null;
   private renderToken = 0;
   private renderTimer: number | null = null;
   /**
@@ -87,10 +93,15 @@ export class AnnotationSidebarView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.containerEl.addClass("yh-sidebar");
+    // 点击委托挂在视图根节点上：header 每次重绘都会重建按钮，
+    // 绑在按钮自身上的监听会随节点一起消失，委托则始终有效。
+    this.registerDomEvent(this.containerEl, "click", (event) => this.handleViewClick(event));
     await this.render();
   }
 
   async onClose(): Promise<void> {
+    this.menuPanel = null;
+    this.menuButton = null;
     this.keyboardCleanup?.();
     this.keyboardCleanup = null;
     this.pendingRender = false;
@@ -225,14 +236,8 @@ export class AnnotationSidebarView extends ItemView {
       },
     });
     setIcon(menu, "sliders-horizontal");
-    menu.toggleClass("is-open", this.menuOpen);
-    menu.toggleClass("is-active", this.hasActiveFilters());
-    menu.addEventListener("click", () => {
-      this.menuOpen = !this.menuOpen;
-      menu.toggleClass("is-open", this.menuOpen);
-      menu.setAttribute("aria-expanded", String(this.menuOpen));
-      container.querySelector<HTMLElement>(".yh-ov-menu")?.toggleClass("is-open", this.menuOpen);
-    });
+    this.menuButton = menu;
+    this.applyMenuVisibility();
 
     const refresh = actions.createEl("button", {
       cls: "yh-icon-btn yh-ov-refresh",
@@ -249,6 +254,41 @@ export class AnnotationSidebarView extends ItemView {
     close.addEventListener("click", () => {
       void this.leaf.detach();
     });
+  }
+
+  /** 视图级点击委托：目前只处理顶部菜单按钮，避免按钮被重绘重建后丢失监听 */
+  private handleViewClick(event: MouseEvent): void {
+    const target = event.target;
+    if (!(target instanceof HTMLElement) || !target.closest(".yh-ov-menu-btn")) {
+      return;
+    }
+    // 阻断冒泡：插件在 document 上还有批注点击处理，侧栏点击不应触发它
+    event.preventDefault();
+    event.stopPropagation();
+    this.setMenuOpen(!this.menuOpen);
+  }
+
+  /**
+   * 唯一的菜单开合入口：字段 + 面板 hidden + 按钮 aria/样式一次写齐。
+   * hidden 是硬开关（CSS 用 [hidden] 兜底），不依赖 is-open 类是否被正确移除。
+   */
+  private setMenuOpen(open: boolean): void {
+    this.menuOpen = open;
+    this.applyMenuVisibility();
+  }
+
+  private applyMenuVisibility(): void {
+    const panel = this.menuPanel;
+    if (panel) {
+      panel.toggleClass("is-open", this.menuOpen);
+      panel.hidden = !this.menuOpen;
+    }
+    const button = this.menuButton;
+    if (button) {
+      button.toggleClass("is-open", this.menuOpen);
+      button.setAttribute("aria-expanded", String(this.menuOpen));
+      button.toggleClass("is-active", this.hasActiveFilters());
+    }
   }
 
   /** 有任一筛选/搜索/范围生效时，菜单按钮点亮小圆点，收起态也能看出列表被过滤过 */
@@ -268,8 +308,10 @@ export class AnnotationSidebarView extends ItemView {
    * 展开/收起只切菜单自身的 class，不重绘列表，因此列表内容与滚动位置都不受影响。
    */
   private renderMenu(container: Element, file: TFile | null): void {
-    const panel = container.createDiv({ cls: "yh-ov-menu" });
-    panel.toggleClass("is-open", this.menuOpen);
+    // 默认按收起态创建（带 hidden），再由 applyMenuVisibility 按 menuOpen 校正，避免首帧闪开
+    const panel = container.createDiv({ cls: "yh-ov-menu", attr: { hidden: "hidden" } });
+    this.menuPanel = panel;
+    this.applyMenuVisibility();
 
     // 搜索批注
     const search = panel.createEl("input", {
@@ -281,7 +323,7 @@ export class AnnotationSidebarView extends ItemView {
     search.addEventListener("input", () => {
       this.query = search.value;
       // 搜索只走 refreshList（不整表重建），徽标点手动同步，收起后仍能看出列表被过滤
-      container.querySelector<HTMLElement>(".yh-ov-menu-btn")?.toggleClass("is-active", this.hasActiveFilters());
+      this.menuButton?.toggleClass("is-active", this.hasActiveFilters());
       if (searchTimer !== null) {
         window.clearTimeout(searchTimer);
       }

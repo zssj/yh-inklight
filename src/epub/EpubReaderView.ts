@@ -5,7 +5,7 @@
  *          EpubThemeManager 的主题颜色解析
  * [OUTPUT]: 对外提供 EpubReaderView，将 foliate-js 渲染引擎嵌入 Obsidian leaf，
  *          承载工具栏、侧边栏（目录/标注）、阅读区（iframe）、进度条、
- *          选区上下文菜单、点击高亮弹出标注详情卡片、标注 CRUD、进度持久化与阅读时间追踪
+ *          选区上下文菜单、点击高亮弹出标注详情卡片（含标签关联）、标注 CRUD、进度持久化与阅读时间追踪
  * [POS]: epub 模块的唯一视图入口，由插件主类通过 registerView 注册
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
@@ -46,8 +46,10 @@ import {
 } from "./EpubFoliateLoader";
 import { EpubNoteModal, EpubNoteResult } from "./EpubNoteModal";
 import type { TagSuggestion } from "../views/tagInput";
+import { normalizeTags } from "../storage/tags";
 import { EpubAiModal } from "./EpubAiModal";
-import { EpubAnnotationCard } from "./EpubAnnotationCard";
+import { EpubAnnotationCard, EpubAnnotationCardAnchor } from "./EpubAnnotationCard";
+import { EpubRect } from "./EpubPopoverPlacement";
 import { EpubImageViewer } from "./EpubImageViewer";
 
 // ---- 常量 ----
@@ -2260,13 +2262,12 @@ export class EpubReaderView extends FileView {
 
 		this.annotationCardEl?.dismiss();
 
-		const anchor = this.resolveAnnotationCardAnchor(index, range);
 		const card = new EpubAnnotationCard(
 			{
 				quote: highlight.anchor.selectedText,
 				note: comment?.note,
 				noteType: comment?.noteType,
-				tags: highlight.tags,
+				tags: normalizeTags(highlight.tags),
 				color: highlight.color,
 				chapter: highlight.anchor.chapter,
 				createdAt: highlight.createdAt,
@@ -2278,30 +2279,80 @@ export class EpubReaderView extends FileView {
 				onDelete: () => {
 					void this.deleteAnnotation(highlight.id);
 				},
+				onTagsChange: (tags) => this.saveAnnotationTags(highlight.id, tags),
+				tagSuggestions: this.tagSuggestions,
+				onDismiss: () => {
+					// 外部点击关闭后清掉引用，避免翻页护栏误判「卡片还开着」
+					if (this.annotationCardEl === card) {
+						this.annotationCardEl = null;
+					}
+				},
 			},
 		);
-		card.show(anchor, Platform.isMobile);
+		card.show(this.resolveAnnotationCardAnchor(index, range));
 		this.annotationCardEl = card;
 	}
 
-	private resolveAnnotationCardAnchor(index?: number, range?: Range): { left: number; top: number } {
-		if (range) {
-			const doc =
-				index != null
-					? this.foliateView?.renderer?.getContents?.().find((c) => c.index === index)?.doc
-					: undefined;
-			if (doc) {
-				const rect = this.createSelectionViewportRect(doc, range);
-				if (rect) {
-					return { left: rect.left + rect.width / 2, top: rect.bottom };
-				}
-			}
+	/**
+	 * 把标签按 annotationId 关联到 sidecar 里的这条标注。
+	 * setTags 顺带重建 index.json 的 tags/tagNames；refreshAnnotations 同步全局侧栏与标签板。
+	 * 卡片内不主动调 refreshRenditionAnnotations（标签不影响 foliate 高亮绘制）。
+	 */
+	private async saveAnnotationTags(annotationId: string, tags: readonly string[]): Promise<void> {
+		if (!this.file) {
+			return;
 		}
-		const area = this.readerContainerEl?.getBoundingClientRect();
+		try {
+			await this.store.setTags([{ filePath: this.file.path, annotationId }], tags);
+			this.refreshAnnotations();
+		} catch (error) {
+			console.error("yh-inklight: EPUB annotation tags update failed", error);
+			new Notice("标签保存失败");
+			throw error;
+		}
+	}
+
+	/**
+	 * 卡片定位参数：划线外接矩形（多行取并集）+ 可用区域（视口 ∩ 阅读区 − 安全区）。
+	 */
+	private resolveAnnotationCardAnchor(index?: number, range?: Range): EpubAnnotationCardAnchor {
+		const doc =
+			index != null
+				? this.foliateView?.renderer?.getContents?.().find((c) => c.index === index)?.doc
+				: undefined;
+		const avoid = doc && range ? this.createSelectionAvoidRect(doc, range) : null;
+		const bounds = this.resolveCardBounds();
+		const centerX = bounds.left + (bounds.right - bounds.left) / 2;
 		return {
-			left: area ? area.left + area.width / 2 : window.innerWidth / 2,
-			top: area ? area.top + 16 : 16,
+			avoid: avoid ?? { left: centerX, top: bounds.top + 16, right: centerX, bottom: bounds.top + 32 },
+			bounds,
+			isMobile: Platform.isMobile,
 		};
+	}
+
+	/** 可用区域：阅读区与视口的交集，再扣掉移动端安全区（状态栏/导航栏）。 */
+	private resolveCardBounds(): EpubRect {
+		const style = getComputedStyle(this.containerEl);
+		const safeTop = parseInt(style.getPropertyValue("--yh-safe-top")) || 0;
+		const safeBottom = parseInt(style.getPropertyValue("--yh-safe-bottom")) || 0;
+		const viewport: EpubRect = {
+			left: 8,
+			top: 8 + safeTop,
+			right: window.innerWidth - 8,
+			bottom: window.innerHeight - 8 - safeBottom,
+		};
+		const area = this.readerContainerEl?.getBoundingClientRect();
+		if (!area) {
+			return viewport;
+		}
+		const bounds: EpubRect = {
+			left: Math.max(viewport.left, area.left),
+			top: Math.max(viewport.top, area.top),
+			right: Math.min(viewport.right, area.right),
+			bottom: Math.min(viewport.bottom, area.bottom),
+		};
+		// 分屏/折叠态阅读区过窄过矮时退回视口，避免浮层被挤成一条
+		return bounds.right - bounds.left < 240 || bounds.bottom - bounds.top < 200 ? viewport : bounds;
 	}
 
 	/**
@@ -2935,6 +2986,37 @@ export class EpubReaderView extends FileView {
 			rawRect.width,
 			rawRect.height,
 		);
+	}
+
+	/**
+	 * 选区所有行矩形的外接框（视口坐标）。
+	 * 上下文菜单只需最后一行，标注卡片必须整块避开，否则跨行划线会被浮层压住中间几行。
+	 */
+	private createSelectionAvoidRect(doc: Document, range: Range): EpubRect | null {
+		const rects = Array.from(range.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
+		const fallback = range.getBoundingClientRect();
+		const list = rects.length > 0
+			? rects
+			: fallback.width > 0 && fallback.height > 0
+				? [fallback]
+				: [];
+		if (list.length === 0) {
+			return null;
+		}
+		const frameRect = this.findIframeForDocument(doc)?.getBoundingClientRect();
+		const offX = frameRect?.left ?? 0;
+		const offY = frameRect?.top ?? 0;
+		let left = Infinity;
+		let top = Infinity;
+		let right = -Infinity;
+		let bottom = -Infinity;
+		for (const r of list) {
+			left = Math.min(left, r.left);
+			top = Math.min(top, r.top);
+			right = Math.max(right, r.right);
+			bottom = Math.max(bottom, r.bottom);
+		}
+		return { left: left + offX, top: top + offY, right: right + offX, bottom: bottom + offY };
 	}
 
 	private extractVisibleRangeRect(range: Range): DOMRect | null {

@@ -12239,8 +12239,14 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     /** 标签筛选的比较键；空字符串表示不筛选 */
     this.tagFilter = "";
     this.exportFormat = "summary";
-    /** 顶部折叠菜单的展开态；必须存在视图字段上，重绘后仍保持用户上一次的选择 */
+    /**
+     * 顶部折叠菜单的展开态；必须存在视图字段上，重绘后仍保持用户上一次的选择。
+     * 展开/收起以 panel.hidden 为唯一硬状态（见 applyMenuVisibility），class 只用于样式。
+     */
     this.menuOpen = false;
+    /** 菜单面板与触发按钮的直连引用：render 时登记，点击时直接操作，不再靠 querySelector 二次查找 */
+    this.menuPanel = null;
+    this.menuButton = null;
     this.renderToken = 0;
     this.renderTimer = null;
     /**
@@ -12269,9 +12275,12 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
   }
   async onOpen() {
     this.containerEl.addClass("yh-sidebar");
+    this.registerDomEvent(this.containerEl, "click", (event) => this.handleViewClick(event));
     await this.render();
   }
   async onClose() {
+    this.menuPanel = null;
+    this.menuButton = null;
     this.keyboardCleanup?.();
     this.keyboardCleanup = null;
     this.pendingRender = false;
@@ -12387,14 +12396,8 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       }
     });
     (0, import_obsidian11.setIcon)(menu, "sliders-horizontal");
-    menu.toggleClass("is-open", this.menuOpen);
-    menu.toggleClass("is-active", this.hasActiveFilters());
-    menu.addEventListener("click", () => {
-      this.menuOpen = !this.menuOpen;
-      menu.toggleClass("is-open", this.menuOpen);
-      menu.setAttribute("aria-expanded", String(this.menuOpen));
-      container.querySelector(".yh-ov-menu")?.toggleClass("is-open", this.menuOpen);
-    });
+    this.menuButton = menu;
+    this.applyMenuVisibility();
     const refresh = actions.createEl("button", {
       cls: "yh-icon-btn yh-ov-refresh",
       attr: { type: "button", title: "Refresh", "aria-label": "Refresh annotations" }
@@ -12410,6 +12413,37 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       void this.leaf.detach();
     });
   }
+  /** 视图级点击委托：目前只处理顶部菜单按钮，避免按钮被重绘重建后丢失监听 */
+  handleViewClick(event) {
+    const target = event.target;
+    if (!(target instanceof HTMLElement) || !target.closest(".yh-ov-menu-btn")) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    this.setMenuOpen(!this.menuOpen);
+  }
+  /**
+   * 唯一的菜单开合入口：字段 + 面板 hidden + 按钮 aria/样式一次写齐。
+   * hidden 是硬开关（CSS 用 [hidden] 兜底），不依赖 is-open 类是否被正确移除。
+   */
+  setMenuOpen(open) {
+    this.menuOpen = open;
+    this.applyMenuVisibility();
+  }
+  applyMenuVisibility() {
+    const panel = this.menuPanel;
+    if (panel) {
+      panel.toggleClass("is-open", this.menuOpen);
+      panel.hidden = !this.menuOpen;
+    }
+    const button = this.menuButton;
+    if (button) {
+      button.toggleClass("is-open", this.menuOpen);
+      button.setAttribute("aria-expanded", String(this.menuOpen));
+      button.toggleClass("is-active", this.hasActiveFilters());
+    }
+  }
   /** 有任一筛选/搜索/范围生效时，菜单按钮点亮小圆点，收起态也能看出列表被过滤过 */
   hasActiveFilters() {
     return this.query.trim().length > 0 || this.annotationScope !== "current" || this.color !== "all" || this.type !== "all" || this.tagFilter !== "";
@@ -12420,8 +12454,9 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
    * 展开/收起只切菜单自身的 class，不重绘列表，因此列表内容与滚动位置都不受影响。
    */
   renderMenu(container, file) {
-    const panel = container.createDiv({ cls: "yh-ov-menu" });
-    panel.toggleClass("is-open", this.menuOpen);
+    const panel = container.createDiv({ cls: "yh-ov-menu", attr: { hidden: "hidden" } });
+    this.menuPanel = panel;
+    this.applyMenuVisibility();
     const search2 = panel.createEl("input", {
       cls: "yh-ov-search",
       attr: { type: "search", placeholder: "\u641C\u7D22\u6279\u6CE8..." }
@@ -12430,7 +12465,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     let searchTimer = null;
     search2.addEventListener("input", () => {
       this.query = search2.value;
-      container.querySelector(".yh-ov-menu-btn")?.toggleClass("is-active", this.hasActiveFilters());
+      this.menuButton?.toggleClass("is-active", this.hasActiveFilters());
       if (searchTimer !== null) {
         window.clearTimeout(searchTimer);
       }
@@ -14460,119 +14495,395 @@ var EpubAiModal = class extends import_obsidian16.Modal {
   }
 };
 
+// src/epub/EpubPopoverPlacement.ts
+var GAP2 = 10;
+var EDGE = 8;
+var MIN_WIDTH = 200;
+var MIN_HEIGHT = 120;
+var MIN_TIGHT_HEIGHT = 56;
+function clamp2(value, min, max) {
+  const hi = Math.max(min, max);
+  return Math.max(min, Math.min(value, hi));
+}
+function intersectionArea(a3, b3) {
+  const w2 = Math.min(a3.right, b3.right) - Math.max(a3.left, b3.left);
+  const h3 = Math.min(a3.bottom, b3.bottom) - Math.max(a3.top, b3.top);
+  return w2 > 0 && h3 > 0 ? w2 * h3 : 0;
+}
+function computePopoverPlacement(avoid, size, bounds) {
+  const boundsWidth = Math.max(MIN_WIDTH + 2 * EDGE, bounds.right - bounds.left);
+  const width = clamp2(size.width, MIN_WIDTH, boundsWidth - 2 * EDGE);
+  const height = Math.max(MIN_HEIGHT, size.height);
+  const boundsHeight = Math.max(MIN_HEIGHT, bounds.bottom - bounds.top - 2 * EDGE);
+  const minLeft = bounds.left + EDGE;
+  const maxLeft = Math.max(minLeft, bounds.right - EDGE - width);
+  const minTop = bounds.top + EDGE;
+  const a3 = {
+    left: clamp2(avoid.left, bounds.left, bounds.right),
+    top: clamp2(avoid.top, bounds.top, bounds.bottom),
+    right: clamp2(avoid.right, bounds.left, bounds.right),
+    bottom: clamp2(avoid.bottom, bounds.top, bounds.bottom)
+  };
+  if (a3.right <= a3.left) a3.right = a3.left + 1;
+  if (a3.bottom <= a3.top) a3.bottom = a3.top + 1;
+  const centerLeft = clamp2((a3.left + a3.right) / 2 - width / 2, minLeft, maxLeft);
+  const candidates = [];
+  const push = (side, left, top, h3) => {
+    candidates.push({
+      side,
+      left,
+      top,
+      height: h3,
+      overlap: intersectionArea({ left, top, right: left + width, bottom: top + h3 }, a3)
+    });
+  };
+  const belowTop = a3.bottom + GAP2;
+  const belowSpace = bounds.bottom - EDGE - belowTop;
+  if (belowSpace >= MIN_HEIGHT) {
+    push("below", centerLeft, belowTop, Math.min(height, belowSpace));
+  }
+  const aboveBottom = a3.top - GAP2;
+  const aboveSpace = aboveBottom - minTop;
+  if (aboveSpace >= MIN_HEIGHT) {
+    const h3 = Math.min(height, aboveSpace);
+    push("above", centerLeft, aboveBottom - h3, h3);
+  }
+  const sideHeight = Math.min(height, boundsHeight);
+  const sideTop = clamp2(a3.top, minTop, Math.max(minTop, bounds.bottom - EDGE - sideHeight));
+  const endLeft = a3.right + GAP2;
+  if (endLeft + width <= bounds.right - EDGE) {
+    push("end", endLeft, sideTop, sideHeight);
+  }
+  const startLeft = a3.left - GAP2 - width;
+  if (startLeft >= minLeft) {
+    push("start", startLeft, sideTop, sideHeight);
+  }
+  if (candidates.length === 0) {
+    const belowAny = Math.max(0, bounds.bottom - EDGE - belowTop);
+    const aboveAny = Math.max(0, aboveBottom - minTop);
+    const tight = Math.max(belowAny, aboveAny);
+    if (tight >= MIN_TIGHT_HEIGHT) {
+      const useBelow = belowAny >= aboveAny;
+      const h3 = useBelow ? belowAny : aboveAny;
+      return {
+        left: centerLeft,
+        top: useBelow ? belowTop : aboveBottom - h3,
+        width,
+        maxHeight: Math.min(boundsHeight, h3),
+        side: useBelow ? "below" : "above"
+      };
+    }
+  }
+  const free = candidates.filter((c2) => c2.overlap === 0);
+  const full = free.find((c2) => c2.height >= height - 1);
+  if (full) {
+    return { left: full.left, top: full.top, width, maxHeight: boundsHeight, side: full.side };
+  }
+  const shrunk = free.slice().sort((x3, y3) => y3.height - x3.height)[0];
+  if (shrunk) {
+    return {
+      left: shrunk.left,
+      top: shrunk.top,
+      width,
+      maxHeight: Math.max(MIN_HEIGHT, Math.min(boundsHeight, shrunk.height)),
+      side: shrunk.side
+    };
+  }
+  const overlayTop = clamp2(belowTop, minTop, Math.max(minTop, bounds.bottom - EDGE - MIN_HEIGHT));
+  return {
+    left: centerLeft,
+    top: overlayTop,
+    width,
+    maxHeight: clamp2(bounds.bottom - EDGE - overlayTop, MIN_HEIGHT, boundsHeight),
+    side: "overlay"
+  };
+}
+
 // src/epub/EpubAnnotationCard.ts
 var NOTE_TYPE_LABELS = {
   insight: "\u{1F4A1} \u6D1E\u89C1",
   question: "\u2753 \u7591\u95EE",
   reminder: "\u{1F514} \u63D0\u9192"
 };
+function sameTags(a3, b3) {
+  return a3.length === b3.length && a3.every((tag, index) => tag === b3[index]);
+}
 var EpubAnnotationCard = class {
   constructor(data, options = {}) {
+    this.tagQuery = "";
+    this.tagEditing = false;
+    this.saving = false;
+    this.dismissPending = false;
+    this.dismissed = false;
+    this.tagInput = null;
+    this.anchor = null;
     this.outsideHandler = null;
+    this.keydownHandler = null;
+    this.rafId = 0;
+    this.handleViewportChange = () => this.schedulePlace();
     this.options = options;
-    this.el = document.body.createDiv({ cls: "yh-epub-annotation-card" });
-    this.build(data);
-  }
-  build(data) {
+    this.data = data;
+    this.savedTags = normalizeTags(data.tags);
+    this.draftTags = [...this.savedTags];
+    this.el = document.body.createDiv({ cls: "yh-epub-annotation-popover" });
     const accent = this.el.createDiv({ cls: "yh-epub-card-accent" });
     accent.style.background = EPUB_COLOR_MAP[data.color];
-    const body = this.el.createDiv({ cls: "yh-epub-card-body" });
-    const top = body.createDiv({ cls: "yh-epub-card-top" });
-    const badgeText = data.noteType && NOTE_TYPE_LABELS[data.noteType] ? NOTE_TYPE_LABELS[data.noteType] : "\u{1F4DD} \u753B\u7EBF";
+    this.bodyEl = this.el.createDiv({ cls: "yh-epub-card-body" });
+    this.buildHeader();
+    this.bodyEl.createDiv({ cls: "yh-epub-card-quote", text: data.quote });
+    if (data.hasNote && data.note) {
+      this.bodyEl.createDiv({ cls: "yh-epub-card-note", text: data.note });
+      this.emptyHintEl = this.bodyEl.createDiv({ cls: "yh-hidden" });
+    } else {
+      this.bodyEl.createDiv({ cls: "yh-hidden" });
+      this.emptyHintEl = this.bodyEl.createDiv({ cls: "yh-epub-card-note is-empty", text: "\u6B64\u9AD8\u4EAE\u6682\u65E0\u7B14\u8BB0" });
+    }
+    this.tagsRowEl = this.bodyEl.createDiv({ cls: "yh-epub-card-tags" });
+    this.bodyEl.createDiv({ cls: "yh-epub-card-meta", text: this.buildMeta() });
+    this.renderTagRow();
+    this.buildActions();
+  }
+  buildHeader() {
+    const top = this.bodyEl.createDiv({ cls: "yh-epub-card-top" });
+    const badgeText = this.data.noteType && NOTE_TYPE_LABELS[this.data.noteType] ? NOTE_TYPE_LABELS[this.data.noteType] : "\u{1F4DD} \u753B\u7EBF";
     top.createSpan({ cls: "yh-epub-card-badge", text: badgeText });
-    top.createSpan({ cls: "yh-epub-card-color-label", text: COLOR_LABELS[data.color] });
+    top.createSpan({ cls: "yh-epub-card-color-label", text: COLOR_LABELS[this.data.color] });
     const closeBtn = top.createEl("button", {
       cls: "yh-epub-card-close",
       attr: { type: "button", title: "\u5173\u95ED", "aria-label": "\u5173\u95ED" },
       text: "\u2715"
     });
-    closeBtn.addEventListener("click", () => this.dismiss());
-    body.createDiv({ cls: "yh-epub-card-quote", text: data.quote });
-    if (data.hasNote && data.note) {
-      body.createDiv({ cls: "yh-epub-card-note", text: data.note });
-    } else {
-      body.createDiv({ cls: "yh-epub-card-note is-empty", text: "\u6B64\u9AD8\u4EAE\u6682\u65E0\u7B14\u8BB0" });
-    }
-    if (data.tags && data.tags.length > 0) {
-      const tagWrap = body.createDiv({ cls: "yh-epub-card-tags" });
-      renderTagChips(tagWrap, data.tags, { max: 6 });
-    }
-    const metaParts = [];
-    if (data.chapter) {
-      metaParts.push(data.chapter);
-    }
-    if (data.createdAt) {
-      metaParts.push(this.formatDate(data.createdAt));
-    }
-    if (metaParts.length > 0) {
-      body.createDiv({ cls: "yh-epub-card-meta", text: metaParts.join(" \xB7 ") });
-    }
-    const actions = body.createDiv({ cls: "yh-epub-card-actions" });
-    if (data.hasNote) {
-      const editBtn = actions.createEl("button", {
-        cls: "yh-epub-card-btn is-edit",
-        attr: { type: "button" },
-        text: "\u7F16\u8F91"
+    closeBtn.addEventListener("click", () => this.requestDismiss());
+  }
+  buildMeta() {
+    const parts = [];
+    if (this.data.chapter) parts.push(this.data.chapter);
+    if (this.data.createdAt) parts.push(this.formatDate(this.data.createdAt));
+    return parts.join(" \xB7 ");
+  }
+  buildActions() {
+    const actions = this.bodyEl.createDiv({ cls: "yh-epub-card-actions" });
+    const primary = actions.createEl("button", {
+      cls: "yh-epub-card-btn is-edit",
+      attr: { type: "button" },
+      text: this.data.hasNote ? "\u7F16\u8F91" : "\u6DFB\u52A0\u7B14\u8BB0"
+    });
+    primary.addEventListener("click", () => {
+      this.runAfterCommit(() => {
+        if (this.data.hasNote) this.options.onEdit?.();
+        else this.options.onAddNote?.();
       });
-      editBtn.addEventListener("click", () => {
-        this.options.onEdit?.();
-        this.dismiss();
-      });
-    } else {
-      const addBtn = actions.createEl("button", {
-        cls: "yh-epub-card-btn is-edit",
-        attr: { type: "button" },
-        text: "\u6DFB\u52A0\u7B14\u8BB0"
-      });
-      addBtn.addEventListener("click", () => {
-        this.options.onAddNote?.();
-        this.dismiss();
-      });
-    }
+    });
+    const tagBtn = actions.createEl("button", {
+      cls: "yh-epub-card-btn is-tag",
+      attr: { type: "button", title: "\u7ED9\u8FD9\u6761\u6807\u6CE8\u6DFB\u52A0\u6216\u7F16\u8F91\u6807\u7B7E" },
+      text: "\u6DFB\u52A0\u6807\u7B7E"
+    });
+    tagBtn.addEventListener("click", () => this.enterTagEditing());
     const delBtn = actions.createEl("button", {
       cls: "yh-epub-card-btn is-delete",
       attr: { type: "button" },
       text: "\u5220\u9664"
     });
     delBtn.addEventListener("click", () => {
-      this.options.onDelete?.();
-      this.dismiss();
+      this.runAfterCommit(() => this.options.onDelete?.());
     });
   }
-  show(anchor, isMobile) {
-    if (isMobile) {
+  /** 「添加笔记 / 删除」等跳转动作：先落盘正在编辑的标签，失败就留在卡片里 */
+  runAfterCommit(action) {
+    if (!this.tagEditing) {
+      this.dismiss();
+      action();
+      return;
+    }
+    void this.commitTagEditing().then((ok) => {
+      if (!ok) return;
+      this.dismiss();
+      action();
+    });
+  }
+  /** 标签行：只读 chip ↔ 内联编辑器，两态都由类字段驱动，可反复重绘 */
+  renderTagRow() {
+    this.tagsRowEl.empty();
+    this.tagInput = null;
+    this.emptyHintEl.toggleClass("yh-hidden", this.savedTags.length > 0);
+    if (!this.tagEditing) {
+      if (this.savedTags.length === 0) return;
+      this.tagsRowEl.createSpan({ cls: "yh-epub-card-tags-label", text: "\u6807\u7B7E" });
+      renderTagChips(this.tagsRowEl, this.savedTags, {
+        max: 6,
+        onChipClick: () => this.enterTagEditing(),
+        onOverflowClick: () => this.enterTagEditing()
+      });
+      return;
+    }
+    const editor = this.tagsRowEl.createDiv({ cls: "yh-epub-card-tag-editor" });
+    editor.createSpan({ cls: "yh-epub-card-tags-label", text: "\u6807\u7B7E" });
+    const field = editor.createDiv({ cls: "yh-epub-card-tag-field" });
+    this.tagInput = renderTagInput(field, {
+      tags: this.draftTags,
+      suggestions: this.options.tagSuggestions?.() ?? [],
+      initialQuery: this.tagQuery,
+      placeholder: "\u8F93\u5165\u6807\u7B7E\uFF0C\u56DE\u8F66\u786E\u8BA4",
+      showSuggestionsOnOpen: true,
+      onQueryChange: (value) => {
+        this.tagQuery = value;
+      },
+      onChange: (tags) => {
+        this.draftTags = tags;
+      }
+    });
+    const buttons = editor.createDiv({ cls: "yh-epub-card-tag-actions" });
+    const cancel = buttons.createEl("button", {
+      cls: "yh-epub-card-btn",
+      attr: { type: "button" },
+      text: "\u53D6\u6D88"
+    });
+    const done = buttons.createEl("button", {
+      cls: "yh-epub-card-btn is-primary",
+      attr: { type: "button" },
+      text: "\u5B8C\u6210"
+    });
+    cancel.addEventListener("click", () => this.cancelTagEditing());
+    done.addEventListener("click", () => void this.commitTagEditing());
+    this.tagInput.focus();
+  }
+  enterTagEditing() {
+    if (this.tagEditing || this.dismissed) return;
+    this.draftTags = [...this.savedTags];
+    this.tagQuery = "";
+    this.tagEditing = true;
+    this.renderTagRow();
+    this.schedulePlace();
+  }
+  cancelTagEditing() {
+    this.tagEditing = false;
+    this.draftTags = [...this.savedTags];
+    this.tagQuery = "";
+    this.renderTagRow();
+    this.schedulePlace();
+  }
+  /** 提交标签；返回是否已收起编辑态。保存失败保留编辑态与草稿，绝不静默吞掉用户输入 */
+  async commitTagEditing() {
+    if (!this.tagEditing || this.saving) return false;
+    this.tagInput?.flush();
+    const next = normalizeTags(this.draftTags);
+    if (!this.options.onTagsChange || sameTags(next, this.savedTags)) {
+      this.savedTags = next;
+      this.draftTags = [...next];
+      this.tagEditing = false;
+      this.renderTagRow();
+      this.schedulePlace();
+      return true;
+    }
+    this.saving = true;
+    try {
+      await this.options.onTagsChange(next);
+      this.savedTags = next;
+      this.draftTags = [...next];
+      this.tagEditing = false;
+      this.renderTagRow();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      this.saving = false;
+      this.schedulePlace();
+    }
+  }
+  /** 关闭前先把正在编辑的标签落盘；失败则留在编辑态，不吞输入 */
+  requestDismiss() {
+    if (this.dismissed || this.dismissPending) return;
+    if (!this.tagEditing) {
+      this.dismiss();
+      return;
+    }
+    this.dismissPending = true;
+    void this.commitTagEditing().then((ok) => {
+      if (ok) this.dismiss();
+      else this.dismissPending = false;
+    });
+  }
+  show(anchor) {
+    this.anchor = anchor;
+    if (anchor.isMobile) {
       this.el.addClass("is-mobile");
-    } else {
-      const width = Math.min(320, window.innerWidth - 24);
-      const left = Math.max(8, Math.min(anchor.left - width / 2, window.innerWidth - width - 8));
-      const estimatedHeight = 260;
-      const top = Math.max(8, Math.min(anchor.top + 10, window.innerHeight - estimatedHeight - 8));
-      this.el.style.left = `${left}px`;
-      this.el.style.top = `${top}px`;
     }
     document.body.appendChild(this.el);
-    this.registerOutsideClick();
+    this.place();
+    this.registerListeners();
   }
-  registerOutsideClick() {
+  /** 实测尺寸后再定位，不用估算高度；视口/软键盘变化会重新计算 */
+  place() {
+    if (this.dismissed || !this.anchor) return;
+    if (this.anchor.isMobile) {
+      const vv = window.visualViewport;
+      const keyboardInset = vv ? Math.max(0, window.innerHeight - vv.height - (vv.offsetTop ?? 0)) : 0;
+      this.el.style.bottom = `${keyboardInset}px`;
+      this.el.style.maxHeight = `min(70vh, ${Math.max(160, (vv?.height ?? window.innerHeight) - 24)}px)`;
+      return;
+    }
+    this.el.style.visibility = "hidden";
+    this.el.style.maxHeight = "";
+    this.el.style.width = "";
+    const rect = this.el.getBoundingClientRect();
+    const bounds = this.anchor.bounds ?? {
+      left: 8,
+      top: 8,
+      right: window.innerWidth - 8,
+      bottom: window.innerHeight - 8
+    };
+    const placement = computePopoverPlacement(this.anchor.avoid, { width: rect.width, height: rect.height }, bounds);
+    this.el.style.width = `${placement.width}px`;
+    this.el.style.left = `${placement.left}px`;
+    this.el.style.top = `${placement.top}px`;
+    this.el.style.maxHeight = `${placement.maxHeight}px`;
+    this.el.dataset.side = placement.side;
+    this.el.style.visibility = "";
+  }
+  schedulePlace() {
+    if (this.rafId || this.dismissed) return;
+    this.rafId = window.requestAnimationFrame(() => {
+      this.rafId = 0;
+      this.place();
+    });
+  }
+  registerListeners() {
     this.outsideHandler = (ev) => {
-      if (this.el.isConnected && ev.target instanceof Node && !this.el.contains(ev.target)) {
-        this.dismiss();
-      }
+      if (this.dismissed || this.dismissPending || !this.el.isConnected) return;
+      if (ev.target instanceof Node && this.el.contains(ev.target)) return;
+      this.requestDismiss();
     };
     window.setTimeout(() => {
-      if (this.outsideHandler) {
+      if (!this.dismissed && this.outsideHandler) {
         document.addEventListener("pointerdown", this.outsideHandler, true);
       }
     }, 0);
+    this.keydownHandler = (ev) => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (this.tagEditing) this.cancelTagEditing();
+      else this.requestDismiss();
+    };
+    document.addEventListener("keydown", this.keydownHandler, true);
+    window.addEventListener("resize", this.handleViewportChange);
+    window.visualViewport?.addEventListener("resize", this.handleViewportChange);
+    window.visualViewport?.addEventListener("scroll", this.handleViewportChange);
   }
   dismiss() {
-    if (this.outsideHandler) {
-      document.removeEventListener("pointerdown", this.outsideHandler, true);
-      this.outsideHandler = null;
+    if (this.dismissed) return;
+    this.dismissed = true;
+    if (this.outsideHandler) document.removeEventListener("pointerdown", this.outsideHandler, true);
+    if (this.keydownHandler) document.removeEventListener("keydown", this.keydownHandler, true);
+    window.removeEventListener("resize", this.handleViewportChange);
+    window.visualViewport?.removeEventListener("resize", this.handleViewportChange);
+    window.visualViewport?.removeEventListener("scroll", this.handleViewportChange);
+    if (this.rafId) {
+      window.cancelAnimationFrame(this.rafId);
+      this.rafId = 0;
     }
-    if (this.el.isConnected) {
-      this.el.remove();
-    }
+    this.el.remove();
     this.options.onDismiss?.();
   }
   formatDate(iso) {
@@ -16517,13 +16828,12 @@ var EpubReaderView = class extends import_obsidian17.FileView {
       return;
     }
     this.annotationCardEl?.dismiss();
-    const anchor = this.resolveAnnotationCardAnchor(index, range);
     const card = new EpubAnnotationCard(
       {
         quote: highlight.anchor.selectedText,
         note: comment?.note,
         noteType: comment?.noteType,
-        tags: highlight.tags,
+        tags: normalizeTags(highlight.tags),
         color: highlight.color,
         chapter: highlight.anchor.chapter,
         createdAt: highlight.createdAt,
@@ -16534,27 +16844,73 @@ var EpubReaderView = class extends import_obsidian17.FileView {
         onAddNote: () => this.addNoteToHighlight(cfiRange),
         onDelete: () => {
           void this.deleteAnnotation(highlight.id);
+        },
+        onTagsChange: (tags) => this.saveAnnotationTags(highlight.id, tags),
+        tagSuggestions: this.tagSuggestions,
+        onDismiss: () => {
+          if (this.annotationCardEl === card) {
+            this.annotationCardEl = null;
+          }
         }
       }
     );
-    card.show(anchor, import_obsidian17.Platform.isMobile);
+    card.show(this.resolveAnnotationCardAnchor(index, range));
     this.annotationCardEl = card;
   }
-  resolveAnnotationCardAnchor(index, range) {
-    if (range) {
-      const doc = index != null ? this.foliateView?.renderer?.getContents?.().find((c2) => c2.index === index)?.doc : void 0;
-      if (doc) {
-        const rect = this.createSelectionViewportRect(doc, range);
-        if (rect) {
-          return { left: rect.left + rect.width / 2, top: rect.bottom };
-        }
-      }
+  /**
+   * 把标签按 annotationId 关联到 sidecar 里的这条标注。
+   * setTags 顺带重建 index.json 的 tags/tagNames；refreshAnnotations 同步全局侧栏与标签板。
+   * 卡片内不主动调 refreshRenditionAnnotations（标签不影响 foliate 高亮绘制）。
+   */
+  async saveAnnotationTags(annotationId, tags) {
+    if (!this.file) {
+      return;
     }
-    const area = this.readerContainerEl?.getBoundingClientRect();
+    try {
+      await this.store.setTags([{ filePath: this.file.path, annotationId }], tags);
+      this.refreshAnnotations();
+    } catch (error) {
+      console.error("yh-inklight: EPUB annotation tags update failed", error);
+      new import_obsidian17.Notice("\u6807\u7B7E\u4FDD\u5B58\u5931\u8D25");
+      throw error;
+    }
+  }
+  /**
+   * 卡片定位参数：划线外接矩形（多行取并集）+ 可用区域（视口 ∩ 阅读区 − 安全区）。
+   */
+  resolveAnnotationCardAnchor(index, range) {
+    const doc = index != null ? this.foliateView?.renderer?.getContents?.().find((c2) => c2.index === index)?.doc : void 0;
+    const avoid = doc && range ? this.createSelectionAvoidRect(doc, range) : null;
+    const bounds = this.resolveCardBounds();
+    const centerX = bounds.left + (bounds.right - bounds.left) / 2;
     return {
-      left: area ? area.left + area.width / 2 : window.innerWidth / 2,
-      top: area ? area.top + 16 : 16
+      avoid: avoid ?? { left: centerX, top: bounds.top + 16, right: centerX, bottom: bounds.top + 32 },
+      bounds,
+      isMobile: import_obsidian17.Platform.isMobile
     };
+  }
+  /** 可用区域：阅读区与视口的交集，再扣掉移动端安全区（状态栏/导航栏）。 */
+  resolveCardBounds() {
+    const style2 = getComputedStyle(this.containerEl);
+    const safeTop = parseInt(style2.getPropertyValue("--yh-safe-top")) || 0;
+    const safeBottom = parseInt(style2.getPropertyValue("--yh-safe-bottom")) || 0;
+    const viewport = {
+      left: 8,
+      top: 8 + safeTop,
+      right: window.innerWidth - 8,
+      bottom: window.innerHeight - 8 - safeBottom
+    };
+    const area = this.readerContainerEl?.getBoundingClientRect();
+    if (!area) {
+      return viewport;
+    }
+    const bounds = {
+      left: Math.max(viewport.left, area.left),
+      top: Math.max(viewport.top, area.top),
+      right: Math.min(viewport.right, area.right),
+      bottom: Math.min(viewport.bottom, area.bottom)
+    };
+    return bounds.right - bounds.left < 240 || bounds.bottom - bounds.top < 200 ? viewport : bounds;
   }
   /**
    * 编辑已有标注（epub-comment）：用现有内容预填弹窗，保存后原位更新。
@@ -17008,6 +17364,32 @@ var EpubReaderView = class extends import_obsidian17.FileView {
       rawRect.width,
       rawRect.height
     );
+  }
+  /**
+   * 选区所有行矩形的外接框（视口坐标）。
+   * 上下文菜单只需最后一行，标注卡片必须整块避开，否则跨行划线会被浮层压住中间几行。
+   */
+  createSelectionAvoidRect(doc, range) {
+    const rects = Array.from(range.getClientRects()).filter((r3) => r3.width > 0 && r3.height > 0);
+    const fallback = range.getBoundingClientRect();
+    const list = rects.length > 0 ? rects : fallback.width > 0 && fallback.height > 0 ? [fallback] : [];
+    if (list.length === 0) {
+      return null;
+    }
+    const frameRect = this.findIframeForDocument(doc)?.getBoundingClientRect();
+    const offX = frameRect?.left ?? 0;
+    const offY = frameRect?.top ?? 0;
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    for (const r3 of list) {
+      left = Math.min(left, r3.left);
+      top = Math.min(top, r3.top);
+      right = Math.max(right, r3.right);
+      bottom = Math.max(bottom, r3.bottom);
+    }
+    return { left: left + offX, top: top + offY, right: right + offX, bottom: bottom + offY };
   }
   extractVisibleRangeRect(range) {
     const rects = Array.from(range.getClientRects()).filter((rect2) => rect2.width > 0 && rect2.height > 0);

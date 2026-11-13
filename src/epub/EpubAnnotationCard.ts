@@ -1,11 +1,16 @@
 /**
- * [INPUT]: 依赖 storage/types 的标注颜色/想法类型定义
- * [OUTPUT]: 提供 EpubAnnotationCard，EPUB 阅读器中点击高亮弹出的标注详情卡片
- * [POS]: EPUB 标注详情 UI，负责展示引用文本/笔记/分类/颜色并提供编辑、删除操作
+ * [INPUT]: storage/types 的颜色类型、storage/tags 的归一化、views/tagInput 的 chip/输入组件、
+ *          EpubPopoverPlacement 的定位算法、EpubReaderView 传入的选区矩形与回调
+ * [OUTPUT]: EpubAnnotationCard —— 点击 EPUB 高亮后弹出的标注详情浮层
+ * [POS]: EPUB 标注详情 UI；展示原文/想法/标签，提供「添加笔记 / 添加标签 / 删除」，
+ *        并按选区矩形定位，避开划线文本、工具栏与屏幕边界
+ * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
 import { AnnotationColor, COLOR_LABELS, EPUB_COLOR_MAP } from "../storage/types";
-import { renderTagChips } from "../views/tagInput";
+import { normalizeTags } from "../storage/tags";
+import { renderTagChips, renderTagInput, TagInputHandle, TagSuggestion } from "../views/tagInput";
+import { computePopoverPlacement, EpubRect } from "./EpubPopoverPlacement";
 
 const NOTE_TYPE_LABELS: Record<string, string> = {
   insight: "💡 洞见",
@@ -17,8 +22,8 @@ export interface EpubAnnotationCardData {
   quote: string;
   note?: string;
   noteType?: "insight" | "question" | "reminder";
-  /** 自由标签；有值时刻画一行只读 chip，便于确认标签已落盘 */
-  tags?: readonly string[];
+  /** 已落盘的标签；卡片内编辑后由 onTagsChange 回写 */
+  tags: readonly string[];
   color: AnnotationColor;
   chapter?: string;
   createdAt?: string;
@@ -30,139 +35,348 @@ export interface EpubAnnotationCardOptions {
   onAddNote?: () => void;
   onDelete?: () => void;
   onDismiss?: () => void;
+  /** 标签与标注的关联入口：由视图按 annotationId 持久化，失败时抛错以保留编辑态 */
+  onTagsChange?: (tags: string[]) => Promise<void> | void;
+  /** 标签补全候选（已有标签 ∪ 概念页名等），由视图注入 */
+  tagSuggestions?: () => readonly TagSuggestion[];
 }
 
 export interface EpubAnnotationCardAnchor {
-  left: number;
-  top: number;
+  /** 划线/选区在视口坐标下的外接矩形（多行取并集），定位时整块避开 */
+  avoid: EpubRect;
+  /** 可用区域：视口 ∩ 阅读区 − 安全区；不传时退化为视口 */
+  bounds?: EpubRect;
+  isMobile?: boolean;
+}
+
+function sameTags(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((tag, index) => tag === b[index]);
 }
 
 /**
  * 点击 EPUB 高亮后弹出的标注详情卡片。
- * 桌面端浮在高亮位置附近，移动端为底部弹出卡片。
+ * 桌面端按选区四侧择优定位，移动端为底部弹出卡片（跟随软键盘上移）。
  */
 export class EpubAnnotationCard {
-  private el: HTMLElement;
+  private readonly el: HTMLElement;
+  private readonly bodyEl: HTMLElement;
+  private readonly tagsRowEl: HTMLElement;
+  private readonly emptyHintEl: HTMLElement;
+  private readonly data: EpubAnnotationCardData;
+  private readonly options: EpubAnnotationCardOptions;
+
+  // 视图状态一律存类字段，任何重绘都不丢编辑态
+  private savedTags: string[];
+  private draftTags: string[];
+  private tagQuery = "";
+  private tagEditing = false;
+  private saving = false;
+  private dismissPending = false;
+  private dismissed = false;
+  private tagInput: TagInputHandle | null = null;
+  private anchor: EpubAnnotationCardAnchor | null = null;
+
   private outsideHandler: ((ev: PointerEvent) => void) | null = null;
-  private options: EpubAnnotationCardOptions;
+  private keydownHandler: ((ev: KeyboardEvent) => void) | null = null;
+  private rafId = 0;
+  private readonly handleViewportChange = (): void => this.schedulePlace();
 
   constructor(data: EpubAnnotationCardData, options: EpubAnnotationCardOptions = {}) {
     this.options = options;
-    this.el = document.body.createDiv({ cls: "yh-epub-annotation-card" });
-    this.build(data);
-  }
+    this.data = data;
+    this.savedTags = normalizeTags(data.tags);
+    this.draftTags = [...this.savedTags];
 
-  private build(data: EpubAnnotationCardData): void {
+    this.el = document.body.createDiv({ cls: "yh-epub-annotation-popover" });
     const accent = this.el.createDiv({ cls: "yh-epub-card-accent" });
     accent.style.background = EPUB_COLOR_MAP[data.color];
 
-    const body = this.el.createDiv({ cls: "yh-epub-card-body" });
+    this.bodyEl = this.el.createDiv({ cls: "yh-epub-card-body" });
+    this.buildHeader();
+    this.bodyEl.createDiv({ cls: "yh-epub-card-quote", text: data.quote });
 
-    const top = body.createDiv({ cls: "yh-epub-card-top" });
+    if (data.hasNote && data.note) {
+      this.bodyEl.createDiv({ cls: "yh-epub-card-note", text: data.note });
+      this.emptyHintEl = this.bodyEl.createDiv({ cls: "yh-hidden" });
+    } else {
+      this.bodyEl.createDiv({ cls: "yh-hidden" });
+      this.emptyHintEl = this.bodyEl.createDiv({ cls: "yh-epub-card-note is-empty", text: "此高亮暂无笔记" });
+    }
+
+    this.tagsRowEl = this.bodyEl.createDiv({ cls: "yh-epub-card-tags" });
+    this.bodyEl.createDiv({ cls: "yh-epub-card-meta", text: this.buildMeta() });
+    this.renderTagRow();
+    this.buildActions();
+  }
+
+  private buildHeader(): void {
+    const top = this.bodyEl.createDiv({ cls: "yh-epub-card-top" });
     const badgeText =
-      data.noteType && NOTE_TYPE_LABELS[data.noteType] ? NOTE_TYPE_LABELS[data.noteType] : "📝 画线";
+      this.data.noteType && NOTE_TYPE_LABELS[this.data.noteType] ? NOTE_TYPE_LABELS[this.data.noteType] : "📝 画线";
     top.createSpan({ cls: "yh-epub-card-badge", text: badgeText });
-    top.createSpan({ cls: "yh-epub-card-color-label", text: COLOR_LABELS[data.color] });
+    top.createSpan({ cls: "yh-epub-card-color-label", text: COLOR_LABELS[this.data.color] });
     const closeBtn = top.createEl("button", {
       cls: "yh-epub-card-close",
       attr: { type: "button", title: "关闭", "aria-label": "关闭" },
       text: "✕",
     });
-    closeBtn.addEventListener("click", () => this.dismiss());
+    closeBtn.addEventListener("click", () => this.requestDismiss());
+  }
 
-    body.createDiv({ cls: "yh-epub-card-quote", text: data.quote });
+  private buildMeta(): string {
+    const parts: string[] = [];
+    if (this.data.chapter) parts.push(this.data.chapter);
+    if (this.data.createdAt) parts.push(this.formatDate(this.data.createdAt));
+    return parts.join(" · ");
+  }
 
-    if (data.hasNote && data.note) {
-      body.createDiv({ cls: "yh-epub-card-note", text: data.note });
-    } else {
-      body.createDiv({ cls: "yh-epub-card-note is-empty", text: "此高亮暂无笔记" });
-    }
+  private buildActions(): void {
+    const actions = this.bodyEl.createDiv({ cls: "yh-epub-card-actions" });
 
-    if (data.tags && data.tags.length > 0) {
-      const tagWrap = body.createDiv({ cls: "yh-epub-card-tags" });
-      renderTagChips(tagWrap, data.tags, { max: 6 });
-    }
-
-    const metaParts: string[] = [];
-    if (data.chapter) {
-      metaParts.push(data.chapter);
-    }
-    if (data.createdAt) {
-      metaParts.push(this.formatDate(data.createdAt));
-    }
-    if (metaParts.length > 0) {
-      body.createDiv({ cls: "yh-epub-card-meta", text: metaParts.join(" · ") });
-    }
-
-    const actions = body.createDiv({ cls: "yh-epub-card-actions" });
-    if (data.hasNote) {
-      const editBtn = actions.createEl("button", {
-        cls: "yh-epub-card-btn is-edit",
-        attr: { type: "button" },
-        text: "编辑",
+    const primary = actions.createEl("button", {
+      cls: "yh-epub-card-btn is-edit",
+      attr: { type: "button" },
+      text: this.data.hasNote ? "编辑" : "添加笔记",
+    });
+    primary.addEventListener("click", () => {
+      this.runAfterCommit(() => {
+        if (this.data.hasNote) this.options.onEdit?.();
+        else this.options.onAddNote?.();
       });
-      editBtn.addEventListener("click", () => {
-        this.options.onEdit?.();
-        this.dismiss();
-      });
-    } else {
-      const addBtn = actions.createEl("button", {
-        cls: "yh-epub-card-btn is-edit",
-        attr: { type: "button" },
-        text: "添加笔记",
-      });
-      addBtn.addEventListener("click", () => {
-        this.options.onAddNote?.();
-        this.dismiss();
-      });
-    }
+    });
+
+    const tagBtn = actions.createEl("button", {
+      cls: "yh-epub-card-btn is-tag",
+      attr: { type: "button", title: "给这条标注添加或编辑标签" },
+      text: "添加标签",
+    });
+    tagBtn.addEventListener("click", () => this.enterTagEditing());
+
     const delBtn = actions.createEl("button", {
       cls: "yh-epub-card-btn is-delete",
       attr: { type: "button" },
       text: "删除",
     });
     delBtn.addEventListener("click", () => {
-      this.options.onDelete?.();
-      this.dismiss();
+      this.runAfterCommit(() => this.options.onDelete?.());
     });
   }
 
-  show(anchor: EpubAnnotationCardAnchor, isMobile: boolean): void {
-    if (isMobile) {
-      this.el.addClass("is-mobile");
-    } else {
-      const width = Math.min(320, window.innerWidth - 24);
-      const left = Math.max(8, Math.min(anchor.left - width / 2, window.innerWidth - width - 8));
-      const estimatedHeight = 260;
-      const top = Math.max(8, Math.min(anchor.top + 10, window.innerHeight - estimatedHeight - 8));
-      this.el.style.left = `${left}px`;
-      this.el.style.top = `${top}px`;
+  /** 「添加笔记 / 删除」等跳转动作：先落盘正在编辑的标签，失败就留在卡片里 */
+  private runAfterCommit(action: () => void): void {
+    if (!this.tagEditing) {
+      this.dismiss();
+      action();
+      return;
     }
-    document.body.appendChild(this.el);
-    this.registerOutsideClick();
+    void this.commitTagEditing().then((ok) => {
+      if (!ok) return;
+      this.dismiss();
+      action();
+    });
   }
 
-  private registerOutsideClick(): void {
+  /** 标签行：只读 chip ↔ 内联编辑器，两态都由类字段驱动，可反复重绘 */
+  private renderTagRow(): void {
+    this.tagsRowEl.empty();
+    this.tagInput = null;
+    this.emptyHintEl.toggleClass("yh-hidden", this.savedTags.length > 0);
+
+    if (!this.tagEditing) {
+      if (this.savedTags.length === 0) return;
+      this.tagsRowEl.createSpan({ cls: "yh-epub-card-tags-label", text: "标签" });
+      renderTagChips(this.tagsRowEl, this.savedTags, {
+        max: 6,
+        onChipClick: () => this.enterTagEditing(),
+        onOverflowClick: () => this.enterTagEditing(),
+      });
+      return;
+    }
+
+    const editor = this.tagsRowEl.createDiv({ cls: "yh-epub-card-tag-editor" });
+    editor.createSpan({ cls: "yh-epub-card-tags-label", text: "标签" });
+    const field = editor.createDiv({ cls: "yh-epub-card-tag-field" });
+    this.tagInput = renderTagInput(field, {
+      tags: this.draftTags,
+      suggestions: this.options.tagSuggestions?.() ?? [],
+      initialQuery: this.tagQuery,
+      placeholder: "输入标签，回车确认",
+      showSuggestionsOnOpen: true,
+      onQueryChange: (value) => {
+        this.tagQuery = value;
+      },
+      onChange: (tags) => {
+        this.draftTags = tags;
+      },
+    });
+
+    const buttons = editor.createDiv({ cls: "yh-epub-card-tag-actions" });
+    const cancel = buttons.createEl("button", {
+      cls: "yh-epub-card-btn",
+      attr: { type: "button" },
+      text: "取消",
+    });
+    const done = buttons.createEl("button", {
+      cls: "yh-epub-card-btn is-primary",
+      attr: { type: "button" },
+      text: "完成",
+    });
+    cancel.addEventListener("click", () => this.cancelTagEditing());
+    done.addEventListener("click", () => void this.commitTagEditing());
+    this.tagInput.focus();
+  }
+
+  private enterTagEditing(): void {
+    if (this.tagEditing || this.dismissed) return;
+    this.draftTags = [...this.savedTags];
+    this.tagQuery = "";
+    this.tagEditing = true;
+    this.renderTagRow();
+    this.schedulePlace();
+  }
+
+  private cancelTagEditing(): void {
+    this.tagEditing = false;
+    this.draftTags = [...this.savedTags];
+    this.tagQuery = "";
+    this.renderTagRow();
+    this.schedulePlace();
+  }
+
+  /** 提交标签；返回是否已收起编辑态。保存失败保留编辑态与草稿，绝不静默吞掉用户输入 */
+  private async commitTagEditing(): Promise<boolean> {
+    if (!this.tagEditing || this.saving) return false;
+    this.tagInput?.flush(); // 兜住输入框里未回车的文本
+    const next = normalizeTags(this.draftTags);
+    if (!this.options.onTagsChange || sameTags(next, this.savedTags)) {
+      this.savedTags = next;
+      this.draftTags = [...next];
+      this.tagEditing = false;
+      this.renderTagRow();
+      this.schedulePlace();
+      return true;
+    }
+
+    this.saving = true;
+    try {
+      await this.options.onTagsChange(next);
+      this.savedTags = next;
+      this.draftTags = [...next];
+      this.tagEditing = false;
+      this.renderTagRow();
+      return true;
+    } catch {
+      // 视图侧已给出 Notice；这里保持编辑态，草稿不回滚
+      return false;
+    } finally {
+      this.saving = false;
+      this.schedulePlace();
+    }
+  }
+
+  /** 关闭前先把正在编辑的标签落盘；失败则留在编辑态，不吞输入 */
+  private requestDismiss(): void {
+    if (this.dismissed || this.dismissPending) return;
+    if (!this.tagEditing) {
+      this.dismiss();
+      return;
+    }
+    this.dismissPending = true;
+    void this.commitTagEditing().then((ok) => {
+      if (ok) this.dismiss();
+      else this.dismissPending = false;
+    });
+  }
+
+  show(anchor: EpubAnnotationCardAnchor): void {
+    this.anchor = anchor;
+    if (anchor.isMobile) {
+      this.el.addClass("is-mobile");
+    }
+    document.body.appendChild(this.el);
+    this.place();
+    this.registerListeners();
+  }
+
+  /** 实测尺寸后再定位，不用估算高度；视口/软键盘变化会重新计算 */
+  private place(): void {
+    if (this.dismissed || !this.anchor) return;
+
+    if (this.anchor.isMobile) {
+      const vv = window.visualViewport;
+      const keyboardInset = vv ? Math.max(0, window.innerHeight - vv.height - (vv.offsetTop ?? 0)) : 0;
+      this.el.style.bottom = `${keyboardInset}px`;
+      this.el.style.maxHeight = `min(70vh, ${Math.max(160, (vv?.height ?? window.innerHeight) - 24)}px)`;
+      return;
+    }
+
+    this.el.style.visibility = "hidden";
+    this.el.style.maxHeight = "";
+    this.el.style.width = "";
+    const rect = this.el.getBoundingClientRect();
+    const bounds: EpubRect = this.anchor.bounds ?? {
+      left: 8,
+      top: 8,
+      right: window.innerWidth - 8,
+      bottom: window.innerHeight - 8,
+    };
+    const placement = computePopoverPlacement(this.anchor.avoid, { width: rect.width, height: rect.height }, bounds);
+    this.el.style.width = `${placement.width}px`;
+    this.el.style.left = `${placement.left}px`;
+    this.el.style.top = `${placement.top}px`;
+    this.el.style.maxHeight = `${placement.maxHeight}px`;
+    this.el.dataset.side = placement.side;
+    this.el.style.visibility = "";
+  }
+
+  private schedulePlace(): void {
+    if (this.rafId || this.dismissed) return;
+    this.rafId = window.requestAnimationFrame(() => {
+      this.rafId = 0;
+      this.place();
+    });
+  }
+
+  private registerListeners(): void {
+    // 延迟一个 tick 注册，避免「打开卡片的那一下 pointerdown」把自己关掉
     this.outsideHandler = (ev: PointerEvent) => {
-      if (this.el.isConnected && ev.target instanceof Node && !this.el.contains(ev.target)) {
-        this.dismiss();
-      }
+      if (this.dismissed || this.dismissPending || !this.el.isConnected) return;
+      if (ev.target instanceof Node && this.el.contains(ev.target)) return;
+      this.requestDismiss();
     };
     window.setTimeout(() => {
-      if (this.outsideHandler) {
+      if (!this.dismissed && this.outsideHandler) {
         document.addEventListener("pointerdown", this.outsideHandler, true);
       }
     }, 0);
+
+    this.keydownHandler = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (this.tagEditing) this.cancelTagEditing();
+      else this.requestDismiss();
+    };
+    document.addEventListener("keydown", this.keydownHandler, true);
+
+    window.addEventListener("resize", this.handleViewportChange);
+    window.visualViewport?.addEventListener("resize", this.handleViewportChange);
+    window.visualViewport?.addEventListener("scroll", this.handleViewportChange);
   }
 
   dismiss(): void {
-    if (this.outsideHandler) {
-      document.removeEventListener("pointerdown", this.outsideHandler, true);
-      this.outsideHandler = null;
+    if (this.dismissed) return;
+    this.dismissed = true;
+    if (this.outsideHandler) document.removeEventListener("pointerdown", this.outsideHandler, true);
+    if (this.keydownHandler) document.removeEventListener("keydown", this.keydownHandler, true);
+    window.removeEventListener("resize", this.handleViewportChange);
+    window.visualViewport?.removeEventListener("resize", this.handleViewportChange);
+    window.visualViewport?.removeEventListener("scroll", this.handleViewportChange);
+    if (this.rafId) {
+      window.cancelAnimationFrame(this.rafId);
+      this.rafId = 0;
     }
-    if (this.el.isConnected) {
-      this.el.remove();
-    }
+    this.el.remove();
     this.options.onDismiss?.();
   }
 

@@ -288,8 +288,9 @@
 }
 
 /* ===== 顶部折叠菜单：搜索 / 范围 / 颜色 / 类型 / 排序 / 标签 / 导出 ===== */
+/* 开合由 hidden 属性决定，不依赖 is-open 类是否被移除；is-open 仅作样式钩子 */
 .yh-ov-menu {
-  display: none;
+  display: flex;
   flex-direction: column;
   gap: 6px;
   padding: 8px;
@@ -300,8 +301,8 @@
   overflow-y: auto;
 }
 
-.yh-ov-menu.is-open {
-  display: flex;
+.yh-ov-menu[hidden] {
+  display: none;
 }
 
 .yh-ov-menu-row {
@@ -1470,19 +1471,8 @@ body.yh-epub-nav-hidden .mobile-navbar {
   gap: 6px;
 }
 
-.yh-epub-annotation-card {
-  padding: 8px 10px;
-  border: 1px solid var(--yh-border);
-  border-radius: var(--yh-radius);
-  background: var(--background-primary);
-  cursor: pointer;
-  transition: border-color 0.12s, box-shadow 0.12s;
-}
-
-.yh-epub-annotation-card:hover {
-  border-color: var(--yh-yellow);
-  box-shadow: var(--yh-shadow-sm);
-}
+/* 注：点击划线弹出的详情浮层已独立为 .yh-epub-annotation-popover。
+   历史上此处的同名规则会同时命中浮层（cursor:pointer / padding / hover 描边），已移除。 */
 
 .yh-epub-annotation-header {
   display: flex;
@@ -1693,10 +1683,11 @@ body.yh-epub-nav-hidden .mobile-navbar {
 }
 
 /* ============================================================
-   EPUB — 标注详情卡片（点击高亮弹出，EpubAnnotationCard）
+   EPUB — 标注详情浮层（点击高亮弹出，EpubAnnotationCard）
+   位置/宽度/max-height 由 EpubPopoverPlacement 计算后写成行内样式
    ============================================================ */
 
-.yh-epub-annotation-card {
+.yh-epub-annotation-popover {
   position: fixed;
   z-index: var(--layer-popover, 100000);
   display: flex;
@@ -1707,6 +1698,7 @@ body.yh-epub-nav-hidden .mobile-navbar {
   background: var(--background-primary);
   box-shadow: var(--yh-shadow-lg);
   overflow: hidden;
+  cursor: default;
 }
 
 .yh-epub-card-accent {
@@ -1717,7 +1709,11 @@ body.yh-epub-nav-hidden .mobile-navbar {
 .yh-epub-card-body {
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   padding: 12px 14px 12px 12px;
+  /* 浮层被 max-height 压缩时只滚动内容，整体仍留在可视区内 */
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .yh-epub-card-top {
@@ -1791,8 +1787,56 @@ body.yh-epub-nav-hidden .mobile-navbar {
   font-style: italic;
 }
 
+/* 标签行：只读 chip 与内联编辑器共用一个容器 */
+.yh-epub-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.yh-epub-card-tags:empty {
+  display: none;
+}
+
+.yh-epub-card-tags-label {
+  flex-shrink: 0;
+  padding-top: 1px;
+  font-size: var(--yh-font-xs);
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+.yh-epub-card-tag-editor {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.yh-epub-card-tag-field {
+  width: 100%;
+}
+
+.yh-epub-card-tag-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* 补全下拉改为文档流，避免被浮层 overflow:hidden 裁切 */
+.yh-epub-annotation-popover .yh-tag-suggest {
+  position: static;
+  flex: 0 0 100%;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+  max-height: 160px;
+  box-shadow: none;
+}
+
 .yh-epub-card-meta {
-  margin-bottom: 10px;
+  margin-top: 8px;
   font-size: var(--yh-font-xs);
   color: var(--text-faint);
   white-space: nowrap;
@@ -1800,30 +1844,47 @@ body.yh-epub-nav-hidden .mobile-navbar {
   text-overflow: ellipsis;
 }
 
+.yh-epub-card-meta:empty {
+  display: none;
+}
+
 .yh-epub-card-actions {
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 0.5px solid var(--yh-border);
 }
 
 .yh-epub-card-btn {
-  padding: 4px 14px;
+  padding: 4px 10px;
   border: 1px solid var(--yh-border);
   border-radius: var(--yh-radius-sm);
   font-size: var(--yh-font-sm);
   cursor: pointer;
 }
 
-.yh-epub-card-btn.is-edit {
+.yh-epub-card-btn.is-edit,
+.yh-epub-card-btn.is-tag {
   background: var(--background-secondary);
   color: var(--text-normal);
 }
 
-.yh-epub-card-btn.is-edit:hover {
+.yh-epub-card-btn.is-edit:hover,
+.yh-epub-card-btn.is-tag:hover {
   background: var(--background-modifier-hover);
 }
 
+.yh-epub-card-btn.is-primary {
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
 .yh-epub-card-btn.is-delete {
+  margin-left: auto;
   background: var(--background-modifier-error);
   border-color: transparent;
   color: #fff;
@@ -1834,20 +1895,18 @@ body.yh-epub-nav-hidden .mobile-navbar {
   color: #fff;
 }
 
-@media (max-width: 800px) {
-  .yh-epub-annotation-card.is-mobile {
-    left: 0 !important;
-    right: 0;
-    bottom: 0;
-    top: auto !important;
-    width: 100%;
-    max-width: none;
-    max-height: 70vh;
-    border-radius: var(--yh-radius) var(--yh-radius) 0 0;
-    border-bottom: none;
-    padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
-    overflow-y: auto;
-  }
+/* 底部卡片不设 max-width 断点：平板/大屏手机 Platform.isMobile 为真时同样有定位。
+   bottom / max-height 由卡片按 visualViewport 计算后写成行内样式，跟随软键盘上移。 */
+.yh-epub-annotation-popover.is-mobile {
+  left: 0 !important;
+  right: 0;
+  top: auto !important;
+  bottom: 0;
+  width: 100%;
+  max-width: none;
+  border-radius: var(--yh-radius) var(--yh-radius) 0 0;
+  border-bottom: none;
+  padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
 }
 
 /* ============================================================
@@ -2860,11 +2919,6 @@ a.yh-epub-goto-link:hover {
   flex-wrap: wrap;
   gap: 4px;
   min-width: 0;
-}
-
-/* EPUB 标注卡片里的只读标签行 */
-.yh-epub-card-tags {
-  margin-top: 8px;
 }
 
 .yh-tag-chip {

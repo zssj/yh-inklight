@@ -11380,6 +11380,62 @@ function formatTime(value) {
   return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+// src/utils/keyboardInset.ts
+var MIN_INSET_PX = 60;
+var FOCUS_REMEASURE_DELAYS = [120, 450];
+function observeKeyboardInset(onChange, isAlive = () => true) {
+  const vv = window.visualViewport;
+  const vk = navigator.virtualKeyboard;
+  let lastInset = -1;
+  let stopped = false;
+  const timers = [];
+  function cleanup() {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    vk?.removeEventListener?.("geometrychange", measure);
+    vv?.removeEventListener("resize", measure);
+    vv?.removeEventListener("scroll", measure);
+    window.removeEventListener("resize", measure);
+    document.removeEventListener("focusin", onFocus);
+    for (const timer of timers) {
+      window.clearTimeout(timer);
+    }
+  }
+  function measure() {
+    if (stopped) {
+      return;
+    }
+    if (!isAlive()) {
+      cleanup();
+      return;
+    }
+    const innerH = window.innerHeight;
+    const vvH = vv?.height ?? innerH;
+    const vvInset = Math.max(0, innerH - vvH - (vv?.offsetTop ?? 0));
+    const vkInset = vk?.boundingRect?.height ?? 0;
+    const inset = Math.max(vvInset, vkInset) > MIN_INSET_PX ? Math.round(Math.max(vvInset, vkInset)) : 0;
+    if (inset === lastInset) {
+      return;
+    }
+    lastInset = inset;
+    onChange(inset);
+  }
+  function onFocus() {
+    for (const delay of FOCUS_REMEASURE_DELAYS) {
+      timers.push(window.setTimeout(measure, delay));
+    }
+  }
+  vk?.addEventListener?.("geometrychange", measure);
+  vv?.addEventListener("resize", measure);
+  vv?.addEventListener("scroll", measure);
+  window.addEventListener("resize", measure);
+  document.addEventListener("focusin", onFocus);
+  measure();
+  return cleanup;
+}
+
 // src/views/cardModel.ts
 function collectTags(highlight, note) {
   return unionTags(highlight?.tags, note?.tags);
@@ -11595,6 +11651,7 @@ function renderTagInput(parent, options) {
   let tags = normalizeTags(options.tags);
   let matches = [];
   let activeIndex = 0;
+  let composing = false;
   const emit = (next) => {
     const normalized = normalizeTags(next);
     if (normalized.length === tags.length && normalized.every((tag, index) => tag === tags[index])) {
@@ -11722,11 +11779,25 @@ function renderTagInput(parent, options) {
     activeIndex = 0;
     renderDropdown();
   };
+  field.addEventListener("compositionstart", () => {
+    composing = true;
+  });
+  field.addEventListener("compositionend", () => {
+    composing = false;
+    activeIndex = 0;
+    renderDropdown();
+  });
   field.addEventListener("input", () => {
+    if (composing) {
+      return;
+    }
     activeIndex = 0;
     renderDropdown();
   });
   field.addEventListener("keydown", (event) => {
+    if (composing || event.isComposing || event.keyCode === 229) {
+      return;
+    }
     if (event.key === "Enter" || event.key === "," || event.key === "\uFF0C") {
       event.preventDefault();
       const picked = !dropdown.hasClass("yh-hidden") ? matches[activeIndex] : void 0;
@@ -11756,6 +11827,9 @@ function renderTagInput(parent, options) {
     }
   });
   field.addEventListener("blur", () => {
+    if (composing) {
+      return;
+    }
     if (field.value.trim()) {
       commitTag(field.value);
     } else {
@@ -11773,7 +11847,7 @@ function renderTagInput(parent, options) {
   }
   return {
     flush: () => {
-      if (field.value.trim()) {
+      if (!composing && field.value.trim()) {
         commitTag(field.value);
       }
     },
@@ -11805,9 +11879,12 @@ function buildTagSuggestions(existingTags, markdownBasenames, obsidianTags = [],
 
 // src/utils/textTerms.ts
 var MIN_RELATION_TEXT_CHARS = 8;
-var MAX_TEXT_CHARS = 500;
-var MAX_TERMS = 12;
-var RELATED_THRESHOLD = 0.25;
+var MAX_TEXT_CHARS = 600;
+var MAX_RAW_TERMS = 400;
+var MAX_TERMS = 24;
+var RARE_TERM_DF = 8;
+var MIN_SHARED_TERMS = 2;
+var MIN_RARE_TERMS_FOR_SHORT = 3;
 var STOP_GRAMS = /* @__PURE__ */ new Set([
   "\u6211\u4EEC",
   "\u4F60\u4EEC",
@@ -11858,24 +11935,28 @@ var STOP_GRAMS = /* @__PURE__ */ new Set([
   "\u662F\u5728",
   "\u662F\u4E2A",
   "\u8FD9\u4E2A",
-  "\u8FD9\u79CD"
+  "\u8FD9\u79CD",
+  "\u4E5F\u5C31\u662F\u8BF4",
+  "\u4E8B\u5B9E\u4E0A",
+  "\u5B9E\u9645\u4E0A",
+  "\u4E00\u822C\u6765\u8BF4",
+  "\u6362\u53E5\u8BDD\u8BF4"
 ]);
 var CJK_RUN = /[\u3400-\u9fff]+/g;
 var ASCII_WORD = /[a-z0-9][a-z0-9_-]*/g;
 function normalize2(text) {
-  return text.replace(/```[\s\S]*?```/g, " ").replace(/!?\[\[[^\]]*\]\]/g, " ").replace(/<[^>]+>/g, " ").replace(/[#>*_`~|]/g, " ").toLowerCase().slice(0, MAX_TEXT_CHARS);
+  return text.replace(/```[\s\S]*?```/g, " ").replace(/!?\[\[[^\]]*\]\]/g, " ").replace(/<[^>]+>/g, " ").replace(/&(?:nbsp|amp|lt|gt|quot|#\d+|#x[0-9a-f]+);/gi, " ").replace(/[#>*_`~|]/g, " ").replace(/[\s\u00a0]+/g, " ").toLowerCase().slice(0, MAX_TEXT_CHARS);
 }
 function extractTerms(text) {
   const clean = normalize2(text);
   if (clean.trim().length < MIN_RELATION_TEXT_CHARS) {
     return [];
   }
-  const counts = /* @__PURE__ */ new Map();
+  const terms = /* @__PURE__ */ new Set();
   const add = (term) => {
-    if (term.length < 2) {
-      return;
+    if (term.length >= 2) {
+      terms.add(term);
     }
-    counts.set(term, (counts.get(term) ?? 0) + 1);
   };
   for (const word of clean.match(ASCII_WORD) ?? []) {
     if (!/^\d+$/.test(word)) {
@@ -11884,22 +11965,46 @@ function extractTerms(text) {
   }
   for (const run of clean.match(CJK_RUN) ?? []) {
     for (let i3 = 0; i3 + 1 < run.length; i3 += 1) {
-      const gram = run.slice(i3, i3 + 2);
-      if (!STOP_GRAMS.has(gram)) {
-        add(gram);
+      const gram2 = run.slice(i3, i3 + 2);
+      if (STOP_GRAMS.has(gram2)) {
+        continue;
+      }
+      add(gram2);
+      if (i3 + 2 < run.length) {
+        const gram3 = run.slice(i3, i3 + 3);
+        if (!STOP_GRAMS.has(gram3) && !STOP_GRAMS.has(gram3.slice(1))) {
+          add(gram3);
+        }
       }
     }
   }
-  return Array.from(counts.entries()).sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0])).slice(0, MAX_TERMS).map(([term]) => term);
+  return Array.from(terms).sort().slice(0, MAX_RAW_TERMS);
+}
+function rankTerms(terms, df, limit = MAX_TERMS) {
+  const priority = (term) => {
+    const count = df.get(term) ?? 0;
+    return count >= 2 ? count : 1e3 + count;
+  };
+  return Array.from(new Set(terms)).sort((left, right) => priority(left) - priority(right) || right.length - left.length || left.localeCompare(right)).slice(0, limit);
 }
 function termOverlap(a3, b3) {
   if (a3.length === 0 || b3.length === 0) {
-    return { score: 0, shared: [] };
+    return { shared: [], coverage: 0 };
   }
   const setB = new Set(b3);
   const shared = a3.filter((term) => setB.has(term));
-  const union = (/* @__PURE__ */ new Set([...a3, ...b3])).size;
-  return { score: union > 0 ? shared.length / union : 0, shared };
+  const base = Math.min(a3.length, b3.length);
+  return { shared, coverage: base > 0 ? shared.length / base : 0 };
+}
+function isRelatedOverlap(overlap, df) {
+  if (overlap.shared.length < MIN_SHARED_TERMS) {
+    return false;
+  }
+  const rare = overlap.shared.filter((term) => (df.get(term) ?? 0) <= RARE_TERM_DF);
+  if (rare.length === 0) {
+    return false;
+  }
+  return rare.some((term) => term.length >= 3) || rare.length >= MIN_RARE_TERMS_FOR_SHORT;
 }
 function isRelationEligible(text, isCode) {
   return !isCode && text.trim().length >= MIN_RELATION_TEXT_CHARS;
@@ -11912,18 +12017,26 @@ var COLD_START_MIN_TAGS = 3;
 var COLD_START_MIN_CARDS = 10;
 var CACHE_TTL_MS = 3e3;
 var MAX_ENTRIES = 800;
+var SAME_DOCUMENT_ORDER_FACTOR = 0.85;
 function cardKey(card) {
   return `${card.sourcePath}#${card.id}`;
 }
-function isAdjacent(a3, b3) {
-  if (a3.sourcePath !== b3.sourcePath) {
+function isAdjacent(self, selfOrder, entry) {
+  const other = entry.card;
+  if (self.sourcePath !== other.sourcePath) {
     return false;
   }
-  if (a3.mode === "md" && b3.mode === "md") {
-    return Math.abs(a3.startOffset - b3.startOffset) < 150;
+  if (self.mode === "md" && other.mode === "md") {
+    return Math.abs(self.startOffset - other.startOffset) < 150;
   }
-  if (a3.mode === "pdf" && b3.mode === "pdf" && a3.pageNumber !== null && b3.pageNumber !== null) {
-    return a3.pageNumber === b3.pageNumber;
+  if (self.mode === "pdf" && other.mode === "pdf" && self.pageNumber !== null && other.pageNumber !== null) {
+    return self.pageNumber === other.pageNumber;
+  }
+  if (self.mode === "epub" && other.mode === "epub") {
+    if (self.chapter && other.chapter && self.chapter !== other.chapter) {
+      return false;
+    }
+    return selfOrder >= 0 && Math.abs(selfOrder - entry.order) <= 1;
   }
   return false;
 }
@@ -11931,6 +12044,8 @@ var RelationModel = class {
   constructor(store) {
     this.store = store;
     this.entries = [];
+    /** 词条 → 出现在多少条卡片里，用于稀有度加权与命中理由排序 */
+    this.documentFrequency = /* @__PURE__ */ new Map();
     /** 标签比较键 → 该标签下所有卡片的词频，用于按内容推荐 */
     this.tagTerms = /* @__PURE__ */ new Map();
     this.version = -1;
@@ -11942,6 +12057,7 @@ var RelationModel = class {
   /**
    * 构建（或复用）快照。documents 是全库时直接复用，当前文件模式则补拉全库——
    * getIndexedDocuments 走 store 的文档缓存，冷启动后只付一次读盘代价。
+   * 两遍：先抽全量词并统计文档频率，再按稀有度裁剪每条卡片的匹配词集。
    */
   async prepare(documents) {
     const now = Date.now();
@@ -11949,66 +12065,77 @@ var RelationModel = class {
       return;
     }
     const all = documents.length > 1 ? documents : await this.store.getIndexedDocuments();
-    const entries = [];
-    const tagTerms = /* @__PURE__ */ new Map();
+    const df = /* @__PURE__ */ new Map();
+    const raw = [];
+    let order = 0;
     for (const document2 of all) {
       for (const card of buildCards(document2)) {
         if (!isRelationEligible(card.text, card.isCode)) {
           continue;
         }
-        const terms = extractTerms(`${card.text} ${card.content}`);
-        if (terms.length === 0) {
+        const allTerms = extractTerms(`${card.text} ${card.content}`);
+        if (allTerms.length === 0) {
           continue;
         }
-        entries.push({ card, key: cardKey(card), terms });
-        for (const tag of card.tags) {
-          const key = tagKey(tag);
-          if (!key) {
-            continue;
-          }
-          let counts = tagTerms.get(key);
-          if (!counts) {
-            counts = /* @__PURE__ */ new Map();
-            tagTerms.set(key, counts);
-          }
-          for (const term of terms) {
-            counts.set(term, (counts.get(term) ?? 0) + 1);
-          }
+        for (const term of allTerms) {
+          df.set(term, (df.get(term) ?? 0) + 1);
         }
-        if (entries.length >= MAX_ENTRIES) {
+        raw.push({ card, key: cardKey(card), allTerms, order: order++ });
+        if (raw.length >= MAX_ENTRIES) {
           break;
         }
       }
-      if (entries.length >= MAX_ENTRIES) {
+      if (raw.length >= MAX_ENTRIES) {
         break;
       }
     }
+    const entries = [];
+    const tagTerms = /* @__PURE__ */ new Map();
+    for (const item of raw) {
+      const terms = rankTerms(item.allTerms, df);
+      entries.push({ card: item.card, key: item.key, terms, order: item.order });
+      for (const tag of item.card.tags) {
+        const key = tagKey(tag);
+        if (!key) {
+          continue;
+        }
+        let counts = tagTerms.get(key);
+        if (!counts) {
+          counts = /* @__PURE__ */ new Map();
+          tagTerms.set(key, counts);
+        }
+        for (const term of terms) {
+          counts.set(term, (counts.get(term) ?? 0) + 1);
+        }
+      }
+    }
     this.entries = entries;
+    this.documentFrequency = df;
     this.tagTerms = tagTerms;
     this.version = this.store.version;
     this.builtAt = now;
   }
   /** 与当前卡片字面相关的其他批注，按重合度降序，带命中理由 */
   getRelated(card, limit = RELATED_LIMIT) {
-    const selfTerms = extractTerms(`${card.text} ${card.content}`);
+    const selfTerms = rankTerms(extractTerms(`${card.text} ${card.content}`), this.documentFrequency);
     if (selfTerms.length === 0) {
       return [];
     }
     const self = cardKey(card);
+    const selfOrder = this.entries.find((entry) => entry.key === self)?.order ?? -1;
     const hits = [];
     for (const entry of this.entries) {
-      if (entry.key === self || isAdjacent(card, entry.card)) {
+      if (entry.key === self || isAdjacent(card, selfOrder, entry)) {
         continue;
       }
       const overlap = termOverlap(selfTerms, entry.terms);
-      if (overlap.shared.length === 0) {
+      if (!isRelatedOverlap(overlap, this.documentFrequency)) {
         continue;
       }
-      const score = overlap.score * (entry.card.sourcePath === card.sourcePath ? 0.6 : 1);
-      if (score < RELATED_THRESHOLD) {
-        continue;
-      }
-      hits.push({ card: entry.card, score, reasons: overlap.shared.slice(0, 2) });
+      const rawScore = overlap.shared.length + overlap.coverage * 2;
+      const score = rawScore * (entry.card.sourcePath === card.sourcePath ? SAME_DOCUMENT_ORDER_FACTOR : 1);
+      const reasons = [...overlap.shared].sort((left, right) => right.length - left.length || (this.documentFrequency.get(left) ?? 0) - (this.documentFrequency.get(right) ?? 0) || left.localeCompare(right)).slice(0, 2);
+      hits.push({ card: entry.card, score, reasons });
     }
     return hits.sort((left, right) => right.score - left.score).slice(0, limit);
   }
@@ -12020,7 +12147,7 @@ var RelationModel = class {
     if (this.tagTerms.size < COLD_START_MIN_TAGS || this.entries.length < COLD_START_MIN_CARDS) {
       return [];
     }
-    const terms = extractTerms(`${card.text} ${card.content}`);
+    const terms = rankTerms(extractTerms(`${card.text} ${card.content}`), this.documentFrequency);
     if (terms.length === 0) {
       return [];
     }
@@ -12092,6 +12219,8 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
      * 编辑态必须记在视图上而不是只挂在 DOM class 上，否则任何一次重绘都会把输入框冲掉。
      */
     this.editingTagCardId = null;
+    /** 移动端标签编辑态的键盘监听清理：同一时刻只允许一个编辑态持有 */
+    this.keyboardCleanup = null;
     this.relations = new RelationModel(plugin.store);
   }
   getViewType() {
@@ -12106,6 +12235,14 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
   async onOpen() {
     this.containerEl.addClass("yh-sidebar");
     await this.render();
+  }
+  async onClose() {
+    this.keyboardCleanup?.();
+    this.keyboardCleanup = null;
+    if (this.renderTimer !== null) {
+      window.clearTimeout(this.renderTimer);
+      this.renderTimer = null;
+    }
   }
   requestRender() {
     if (this.renderTimer !== null) {
@@ -12492,15 +12629,39 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       }
     });
     const field = row.querySelector(".yh-tag-input-field");
+    const list = row.closest(".yh-ov-list");
+    const revealField = () => {
+      if (row.isConnected && field?.isConnected) {
+        field.scrollIntoView({ block: "center" });
+      }
+    };
+    const listeners = new AbortController();
+    const { signal } = listeners;
+    this.keyboardCleanup?.();
+    this.keyboardCleanup = null;
+    if (import_obsidian11.Platform.isMobile && list) {
+      const stop = observeKeyboardInset((inset) => {
+        list.style.paddingBottom = inset > 0 ? `${inset + 24}px` : "";
+        if (inset > 0) {
+          window.setTimeout(revealField, 80);
+        }
+      }, () => row.isConnected);
+      this.keyboardCleanup = () => {
+        stop();
+        list.style.removeProperty("padding-bottom");
+        this.keyboardCleanup = null;
+      };
+    }
     window.requestAnimationFrame(() => {
       if (row.isConnected) {
         field?.focus();
+        revealField();
       }
     });
-    const listeners = new AbortController();
-    const { signal } = listeners;
     const close = () => {
       listeners.abort();
+      this.keyboardCleanup?.();
+      this.keyboardCleanup = null;
       if (this.editingTagCardId === cardData.id) {
         this.editingTagCardId = null;
       }
@@ -12551,6 +12712,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     }
     try {
       await this.plugin.store.setTags(refs, tags);
+      this.relations.invalidate();
     } catch (error) {
       console.warn("yh-inklight: \u4FDD\u5B58\u6807\u7B7E\u5931\u8D25", error);
       new import_obsidian11.Notice("\u6807\u7B7E\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u5199\u5165\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001");

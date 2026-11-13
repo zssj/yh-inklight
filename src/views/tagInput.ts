@@ -2,7 +2,7 @@
  * [INPUT]: 依赖 storage/tags 的归一化规则与 dom 辅助（Obsidian HTMLElement 扩展）
  * [OUTPUT]: 对外提供 renderTagChips（只读 chip 行）、renderTagInput（可编辑 chip + 补全下拉）、
  *           TagSuggestion（带来源的补全候选，含按内容推荐）与 buildTagSuggestions（候选聚合，含 Obsidian 标签）；
- *           推荐项独立配额（最多 3 个），不挤占常规候选
+ *           推荐项独立配额（最多 3 个），不挤占常规候选；renderTagInput 处理中文输入法组合态，拼音选词不会误建标签
  * [POS]: views 模块的标签 UI 单点，被 sidebarView、tagBoardView、CommentModal、EpubNoteModal 共用
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
@@ -112,6 +112,11 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
   let tags = normalizeTags(options.tags);
   let matches: TagSuggestion[] = [];
   let activeIndex = 0;
+  /**
+   * 中文输入法组合态：拼音串还在候选栏里时，Enter / 逗号是「选词」不是「提交标签」。
+   * isComposing 在部分安卓输入法上不可靠，因此自己维护一份显式标志。
+   */
+  let composing = false;
 
   const emit = (next: string[]): void => {
     const normalized = normalizeTags(next);
@@ -253,12 +258,30 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
     renderDropdown();
   };
 
+  field.addEventListener("compositionstart", () => {
+    composing = true;
+  });
+
+  field.addEventListener("compositionend", () => {
+    composing = false;
+    activeIndex = 0;
+    renderDropdown();
+  });
+
   field.addEventListener("input", () => {
+    // 拼音未上屏时不要拿半截拼音去筛候选，等 compositionend 再渲染
+    if (composing) {
+      return;
+    }
     activeIndex = 0;
     renderDropdown();
   });
 
   field.addEventListener("keydown", (event) => {
+    // IME 选词阶段的 Enter / 逗号必须还给输入法；keyCode 229 是安卓 WebView 的兜底
+    if (composing || event.isComposing || event.keyCode === 229) {
+      return;
+    }
     if (event.key === "Enter" || event.key === "," || event.key === "，") {
       event.preventDefault();
       const picked = !dropdown.hasClass("yh-hidden") ? matches[activeIndex] : undefined;
@@ -292,6 +315,10 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
   });
 
   field.addEventListener("blur", () => {
+    // 组合态中失焦（切输入法、点候选栏）不能把拼音当成标签提交
+    if (composing) {
+      return;
+    }
     if (field.value.trim()) {
       commitTag(field.value);
     } else {
@@ -314,7 +341,7 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
 
   return {
     flush: () => {
-      if (field.value.trim()) {
+      if (!composing && field.value.trim()) {
         commitTag(field.value);
       }
     },

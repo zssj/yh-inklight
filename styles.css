@@ -3050,6 +3050,14 @@ a.yh-epub-goto-link:hover {
   box-shadow: none;
 }
 
+/* 侧栏标签编辑：下拉进入文档流，避免被 .yh-ov-list 的 overflow 裁切、或被软键盘盖住 */
+.yh-ov-tags.is-editing .yh-tag-suggest {
+  position: static;
+  margin-top: 4px;
+  max-height: 180px;
+  box-shadow: none;
+}
+
 /* ===== 标签总览（v0.18.2） ===== */
 
 .yh-tagboard-view {

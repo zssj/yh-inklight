@@ -2,14 +2,16 @@
  * [INPUT]: 依赖 Obsidian ItemView、AnnotationStore 数据与插件主类回调
  * [OUTPUT]: 对外提供 AnnotationSidebarView，将当前文件或全库 annotation 合并为可筛选、可跳转、可导出的总览卡片，卡片可挂标签；
  *           标签编辑按内容推荐历史标签，卡片底部折叠展示字面相关的其他批注（受 contentRelations 设置控制）
- * [POS]: views 模块的右侧 Leaf 总览面板，承载搜索、颜色/类型/标签筛选、排序、行内编辑、标签编辑、跳转、删除、导出模板与字面关联
+ * [POS]: views 模块的右侧 Leaf 总览面板，承载搜索、颜色/类型/标签筛选、排序、行内编辑、标签编辑、跳转、删除、导出模板与字面关联；
+ *        移动端标签编辑态额外处理软键盘遮挡（列表补底部留白 + 输入框滚入可视区），不触碰阅读区
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
-import { ItemView, MarkdownRenderer, MarkdownView, Notice, setIcon, TFile, WorkspaceLeaf } from "obsidian";
+import { ItemView, MarkdownRenderer, MarkdownView, Notice, Platform, setIcon, TFile, WorkspaceLeaf } from "obsidian";
 
 import type OverlayAnnotationsPlugin from "../../main";
 import { formatTime } from "../utils/format";
+import { observeKeyboardInset } from "../utils/keyboardInset";
 import {
   ANNOTATION_COLORS,
   AnnotationColor,
@@ -53,6 +55,8 @@ export class AnnotationSidebarView extends ItemView {
   private editingTagCardId: string | null = null;
   /** 字面关联的按需内存快照：随 store.version 自动失效，不落盘 */
   private readonly relations: RelationModel;
+  /** 移动端标签编辑态的键盘监听清理：同一时刻只允许一个编辑态持有 */
+  private keyboardCleanup: (() => void) | null = null;
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: OverlayAnnotationsPlugin) {
     super(leaf);
@@ -74,6 +78,15 @@ export class AnnotationSidebarView extends ItemView {
   async onOpen(): Promise<void> {
     this.containerEl.addClass("yh-sidebar");
     await this.render();
+  }
+
+  async onClose(): Promise<void> {
+    this.keyboardCleanup?.();
+    this.keyboardCleanup = null;
+    if (this.renderTimer !== null) {
+      window.clearTimeout(this.renderTimer);
+      this.renderTimer = null;
+    }
   }
 
   requestRender(): void {
@@ -518,16 +531,47 @@ export class AnnotationSidebarView extends ItemView {
     });
 
     const field = row.querySelector<HTMLInputElement>(".yh-tag-input-field");
-    window.requestAnimationFrame(() => {
-      if (row.isConnected) {
-        field?.focus();
+    const list = row.closest<HTMLElement>(".yh-ov-list");
+
+    /** 把输入框滚进可视区；侧栏列表是唯一滚动容器，不触碰阅读区与编辑器 */
+    const revealField = (): void => {
+      if (row.isConnected && field?.isConnected) {
+        field.scrollIntoView({ block: "center" });
       }
-    });
+    };
 
     const listeners = new AbortController();
     const { signal } = listeners;
+
+    // 前一个编辑态可能没走 close 就被覆盖（点 chip 溢出直接重挂），先收掉旧监听
+    this.keyboardCleanup?.();
+    this.keyboardCleanup = null;
+    if (Platform.isMobile && list) {
+      const stop = observeKeyboardInset((inset) => {
+        // 软键盘 + 中文候选栏会压缩视觉视口；补一段可滚动留白，底部卡片才滚得上来
+        list.style.paddingBottom = inset > 0 ? `${inset + 24}px` : "";
+        if (inset > 0) {
+          window.setTimeout(revealField, 80);
+        }
+      }, () => row.isConnected);
+      this.keyboardCleanup = () => {
+        stop();
+        list.style.removeProperty("padding-bottom");
+        this.keyboardCleanup = null;
+      };
+    }
+
+    window.requestAnimationFrame(() => {
+      if (row.isConnected) {
+        field?.focus();
+        revealField();
+      }
+    });
+
     const close = (): void => {
       listeners.abort();
+      this.keyboardCleanup?.();
+      this.keyboardCleanup = null;
       if (this.editingTagCardId === cardData.id) {
         this.editingTagCardId = null;
       }
@@ -584,6 +628,8 @@ export class AnnotationSidebarView extends ItemView {
 
     try {
       await this.plugin.store.setTags(refs, tags);
+      // 标签变了，「标签 → 词频」字典要跟着重建，不等 3 秒缓存 TTL
+      this.relations.invalidate();
     } catch (error) {
       console.warn("yh-inklight: 保存标签失败", error);
       new Notice("标签保存失败，请检查写入权限或同步状态");

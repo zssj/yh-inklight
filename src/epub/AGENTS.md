@@ -2,7 +2,7 @@
 > L2 | 父级: ../AGENTS.md
 
 成员清单
-EpubReaderView.ts: EPUB 阅读器主视图（ItemView，注册为 inklight-epub-reader），编排 foliate-view 生命周期、工具栏、侧栏、进度/阅读时长、选区菜单、标注卡片、AI 入口、书签、点击/滑动翻页、手机端沉浸式导航栏；文件顶部含 CFI 跳转统一入口常量。只打标签不写想法时保持划线形态（updateEpubHighlight），不生成 note 为空的 comment。
+EpubReaderView.ts: EPUB 阅读器主视图（ItemView，注册为 inklight-epub-reader），编排 foliate-view 生命周期、工具栏、侧栏、进度/阅读时长、选区菜单、标注卡片、AI 入口、书签、点击/滑动翻页、手机端沉浸式导航栏；文件顶部含 CFI 跳转统一入口常量。只打标签不写想法时保持划线形态（updateEpubHighlight），不生成 note 为空的 comment。进度保存（saveCurrentProgress，relocate 后 2s 防抖）只写 sidecar，**不得调 refreshAnnotations**：位置/时长未变时直接跳过写盘，否则移动端会形成「每 2 秒全量重绘侧栏 + 输入法自动弹起」的自激循环。
 EpubFoliateLoader.ts: foliate-js 加载器，从 npm 包构造 foliate-view、从二进制打开书籍，并安装自定义元素与 iframe patch。
 EpubFoliateGuard.ts: customElements 注册守卫，防止 foliate 自定义元素与其他插件（obsidian-weave-reader）重复注册冲突。
 EpubFoliatePatches.ts: foliate iframe 运行时 patch，覆盖 sandbox 检测、选区与内部行为以适配 Obsidian 移动端。

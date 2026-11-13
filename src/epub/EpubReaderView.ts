@@ -299,6 +299,12 @@ export class EpubReaderView extends FileView {
 	private readingTimeSeconds = 0;
 	private readingTimeFlushTimer: number | null = null;
 	private progressSaveTimer: number | null = null;
+	/**
+	 * 上次落盘进度的快照键。
+	 * 视口变化（如移动端软键盘收起）会让 foliate 重排并连续发出 relocate，
+	 * 但位置与阅读时长都没变，重复写盘纯属噪音，直接跳过。
+	 */
+	private lastProgressSaveKey = "";
 	private wheelDebounceTimer: number | null = null;
 	private visibilityHandler: (() => void) | null = null;
 	private blurHandler: (() => void) | null = null;
@@ -1555,6 +1561,20 @@ export class EpubReaderView extends FileView {
 			return;
 		}
 
+		// 位置、阅读时长、通读计数都没变就跳过写盘：
+		// 移动端软键盘收起/弹出会让 foliate 重排并连续 relocate，但阅读位置其实没动
+		const saveKey = [
+			cfi,
+			percent.toFixed(4),
+			this.readingTimeSeconds,
+			this.currentReadCount,
+			this.readCheckpointMask,
+			this.completedThisCycle ? 1 : 0,
+		].join("|");
+		if (saveKey === this.lastProgressSaveKey) {
+			return;
+		}
+
 		const progress: EpubReadingProgress = {
 			cfi,
 			chapter: this.currentChapter,
@@ -1569,7 +1589,11 @@ export class EpubReaderView extends FileView {
 
 		try {
 			await this.store.saveEpubProgress(this.file, progress);
-			this.refreshAnnotations();
+			this.lastProgressSaveKey = saveKey;
+			// 进度变化不改变批注列表内容，这里不再调用 refreshAnnotations()：
+			// 那会全量重建批注侧栏（container.empty + 重新聚焦标签输入框），
+			// 在移动端形成「每 2 秒界面刷新 + 输入法自动弹出」的自激循环。
+			// 书架里的进度在下次打开/切回时按需读取。
 		} catch (error) {
 			console.error("yh-inklight: EPUB progress save failed", error);
 		}

@@ -11648,6 +11648,9 @@ function renderTagInput(parent, options) {
   });
   const dropdown = wrap2.createDiv({ cls: "yh-tag-suggest" });
   dropdown.addClass("yh-hidden");
+  if (options.initialQuery) {
+    field.value = options.initialQuery;
+  }
   let tags = normalizeTags(options.tags);
   let matches = [];
   let activeIndex = 0;
@@ -11735,6 +11738,7 @@ function renderTagInput(parent, options) {
         event.preventDefault();
         emit([...tags, ...options.quickApply.tags]);
         field.value = "";
+        options.onQueryChange?.("");
         closeDropdown();
       });
     }
@@ -11766,6 +11770,7 @@ function renderTagInput(parent, options) {
   const commitTag = (raw) => {
     const tag = normalizeTag(raw);
     field.value = "";
+    options.onQueryChange?.("");
     if (!tag) {
       closeDropdown();
       return;
@@ -11789,6 +11794,7 @@ function renderTagInput(parent, options) {
     renderDropdown();
   });
   field.addEventListener("input", () => {
+    options.onQueryChange?.(field.value);
     if (composing) {
       return;
     }
@@ -12227,6 +12233,12 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.editingTagCardId = null;
     /** 移动端标签编辑态的键盘监听清理：同一时刻只允许一个编辑态持有 */
     this.keyboardCleanup = null;
+    /** 标签编辑期间被挡下的重绘请求，编辑结束后补一次 */
+    this.pendingRender = false;
+    /** 只有用户主动点「+」进入编辑态时才抢焦点；重绘重建不抢，否则输入法会自动弹起 */
+    this.tagEditorAutoFocus = false;
+    /** 编辑态里尚未提交的输入，重绘回填用，避免一次刷新吞掉正在打的标签 */
+    this.pendingTagQuery = "";
     this.relations = new RelationModel(plugin.store);
   }
   getViewType() {
@@ -12245,12 +12257,19 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
   async onClose() {
     this.keyboardCleanup?.();
     this.keyboardCleanup = null;
+    this.pendingRender = false;
+    this.pendingTagQuery = "";
+    this.tagEditorAutoFocus = false;
     if (this.renderTimer !== null) {
       window.clearTimeout(this.renderTimer);
       this.renderTimer = null;
     }
   }
   requestRender() {
+    if (this.editingTagCardId !== null) {
+      this.pendingRender = true;
+      return;
+    }
     if (this.renderTimer !== null) {
       window.clearTimeout(this.renderTimer);
     }
@@ -12302,6 +12321,10 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
    * 只刷新卡片列表（不重建搜索框等控件），用于搜索输入时保持焦点。
    */
   async refreshList() {
+    if (this.editingTagCardId !== null) {
+      this.pendingRender = true;
+      return;
+    }
     const root = this.containerEl.children[1] ?? this.containerEl;
     const list = root.querySelector(".yh-ov-list");
     if (!list) {
@@ -12591,7 +12614,10 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     const suggestions = this.plugin.getTagSuggestions();
     renderTagChips(row, cardData.tags, {
       onChipClick: (tag) => this.focusTag(tagKey(tag)),
-      onOverflowClick: () => this.mountTagEditor(row, file, cardData, suggestions)
+      onOverflowClick: () => {
+        this.tagEditorAutoFocus = true;
+        this.mountTagEditor(row, file, cardData, suggestions);
+      }
     });
     const add = row.createSpan({
       cls: "yh-ov-tag-add",
@@ -12603,6 +12629,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     });
     const open = (event) => {
       event.stopPropagation();
+      this.tagEditorAutoFocus = true;
       this.mountTagEditor(row, file, cardData, suggestions);
     };
     add.addEventListener("click", open);
@@ -12619,6 +12646,8 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
    * 不再用 blur + 定时器拆解，避免焦点抖动导致输入框一闪即逝。
    */
   mountTagEditor(row, file, cardData, suggestions) {
+    const shouldFocus = this.tagEditorAutoFocus;
+    this.tagEditorAutoFocus = false;
     this.editingTagCardId = cardData.id;
     row.empty();
     row.addClass("is-editing");
@@ -12631,6 +12660,11 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       quickApply,
       // 侧栏点 + 即刻给出候选：空内容也显示，不必先输入一个字符
       showSuggestionsOnOpen: true,
+      // 重绘回填未提交输入，避免一次刷新把正在打的标签吞掉
+      initialQuery: this.pendingTagQuery,
+      onQueryChange: (value) => {
+        this.pendingTagQuery = value;
+      },
       onChange: (tags) => {
         cardData.tags = tags;
         void this.persistCardTags(file, cardData, tags);
@@ -12661,7 +12695,10 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       };
     }
     window.requestAnimationFrame(() => {
-      if (row.isConnected) {
+      if (!row.isConnected) {
+        return;
+      }
+      if (shouldFocus) {
         field?.focus();
         revealField();
       }
@@ -12670,11 +12707,17 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       listeners.abort();
       this.keyboardCleanup?.();
       this.keyboardCleanup = null;
+      this.pendingTagQuery = "";
       if (this.editingTagCardId === cardData.id) {
         this.editingTagCardId = null;
       }
+      const shouldRender = this.pendingRender;
+      this.pendingRender = false;
       if (row.isConnected) {
         this.mountTagRow(row, file, cardData);
+      }
+      if (shouldRender) {
+        this.requestRender();
       }
     };
     document.addEventListener(
@@ -14666,6 +14709,12 @@ var EpubReaderView = class extends import_obsidian17.FileView {
     this.readingTimeSeconds = 0;
     this.readingTimeFlushTimer = null;
     this.progressSaveTimer = null;
+    /**
+     * 上次落盘进度的快照键。
+     * 视口变化（如移动端软键盘收起）会让 foliate 重排并连续发出 relocate，
+     * 但位置与阅读时长都没变，重复写盘纯属噪音，直接跳过。
+     */
+    this.lastProgressSaveKey = "";
     this.wheelDebounceTimer = null;
     this.visibilityHandler = null;
     this.blurHandler = null;
@@ -15849,6 +15898,17 @@ var EpubReaderView = class extends import_obsidian17.FileView {
     if (!cfi && percent <= 0) {
       return;
     }
+    const saveKey = [
+      cfi,
+      percent.toFixed(4),
+      this.readingTimeSeconds,
+      this.currentReadCount,
+      this.readCheckpointMask,
+      this.completedThisCycle ? 1 : 0
+    ].join("|");
+    if (saveKey === this.lastProgressSaveKey) {
+      return;
+    }
     const progress = {
       cfi,
       chapter: this.currentChapter,
@@ -15862,7 +15922,7 @@ var EpubReaderView = class extends import_obsidian17.FileView {
     };
     try {
       await this.store.saveEpubProgress(this.file, progress);
-      this.refreshAnnotations();
+      this.lastProgressSaveKey = saveKey;
     } catch (error) {
       console.error("yh-inklight: EPUB progress save failed", error);
     }
@@ -18284,6 +18344,11 @@ var NOTE_TITLE_OPTIONS = [
   { value: "Reminder", label: "\u{1F514} \u63D0\u9192" }
 ];
 var MD_OPEN_STATS_PATH = ".obsidian-annotations/md-open-stats.json";
+var MD_MODIFY_DEBOUNCE_MS = 300;
+function anchorsUnchanged(before, after) {
+  const same = (left, right) => left.anchor.startOffset === right.anchor.startOffset && left.anchor.endOffset === right.anchor.endOffset && left.anchor.selectedText === right.anchor.selectedText && Boolean(left.orphaned) === Boolean(right.orphaned);
+  return before.highlights.length === after.highlights.length && before.comments.length === after.comments.length && before.highlights.every((item, index) => same(item, after.highlights[index])) && before.comments.every((item, index) => same(item, after.comments[index]));
+}
 var YH_INKLIGHT_ICON = `
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
     <rect x="5" y="5" width="90" height="90" rx="20" ry="20" fill="#F5C518"/>
@@ -18302,6 +18367,8 @@ var OverlayAnnotationsPlugin = class extends import_obsidian23.Plugin {
     this.settings = DEFAULT_SETTINGS;
     this.lastSelection = null;
     this.renameMigrationTimer = null;
+    /** 每个 Markdown 文件一个 modify 防抖计时器，避免同步盘连续写入触发重复迁移 */
+    this.mdModifyTimers = /* @__PURE__ */ new Map();
     this.settingsSaveTimer = null;
     this.statsSaveTimer = null;
     this.epubTocSyncTimer = null;
@@ -18449,6 +18516,10 @@ var OverlayAnnotationsPlugin = class extends import_obsidian23.Plugin {
     if (this.epubTocSyncTimer !== null) {
       window.clearTimeout(this.epubTocSyncTimer);
     }
+    for (const timer of this.mdModifyTimers.values()) {
+      window.clearTimeout(timer);
+    }
+    this.mdModifyTimers.clear();
     this.toolbar?.destroy();
     this.popover?.destroy();
     this.stickyLane?.destroy();
@@ -18662,6 +18733,28 @@ ${lines.slice(0, 8).join("\n")}`);
       }
     });
   }
+  /**
+   * 源文件被修改后迁移锚点。
+   * 只有锚点真的漂移时才写盘并刷新视图——否则「保存一下 md」就会重写 sidecar 并
+   * 全量重建批注侧栏（container.empty + 重新聚焦标签输入框），打断正在进行的标签输入。
+   */
+  async syncMarkdownAnchors(file) {
+    const document2 = await this.store.getDocument(file);
+    if (document2.highlights.length === 0 && document2.comments.length === 0) {
+      return;
+    }
+    const source = await this.app.vault.cachedRead(file);
+    const relocated = relocateDocumentAnchors(source, document2);
+    if (anchorsUnchanged(document2, relocated)) {
+      return;
+    }
+    await this.store.saveDocument({
+      ...relocated,
+      fileHash: await this.store.hashFile(file),
+      lastModified: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    await this.refreshAnnotations();
+  }
   registerEvents() {
     this.registerDomEvent(document, "selectionchange", () => this.toolbar.showForSelection());
     this.registerDomEvent(document, "mousedown", (event) => {
@@ -18673,19 +18766,22 @@ ${lines.slice(0, 8).join("\n")}`);
       void this.handleAnnotationClick(event);
     });
     this.registerEvent(
-      this.app.vault.on("modify", async (file) => {
+      this.app.vault.on("modify", (file) => {
         if (!(file instanceof import_obsidian23.TFile) || file.extension !== "md") {
           return;
         }
-        const document2 = await this.store.getDocument(file);
-        const source = await this.app.vault.cachedRead(file);
-        const relocated = relocateDocumentAnchors(source, document2);
-        await this.store.saveDocument({
-          ...relocated,
-          fileHash: await this.store.hashFile(file),
-          lastModified: (/* @__PURE__ */ new Date()).toISOString()
-        });
-        await this.refreshAnnotations();
+        const path = file.path;
+        const pending = this.mdModifyTimers.get(path);
+        if (pending !== void 0) {
+          window.clearTimeout(pending);
+        }
+        this.mdModifyTimers.set(path, window.setTimeout(() => {
+          this.mdModifyTimers.delete(path);
+          const target = this.app.vault.getAbstractFileByPath(path);
+          if (target instanceof import_obsidian23.TFile) {
+            void this.syncMarkdownAnchors(target);
+          }
+        }, MD_MODIFY_DEBOUNCE_MS));
       })
     );
     this.registerEvent(

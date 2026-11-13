@@ -3,7 +3,8 @@
  * [OUTPUT]: 对外提供 AnnotationSidebarView，将当前文件或全库 annotation 合并为可筛选、可跳转、可导出的总览卡片，卡片可挂标签；
  *           标签编辑按内容推荐历史标签，卡片底部折叠展示字面相关的其他批注（受 contentRelations 设置控制）
  * [POS]: views 模块的右侧 Leaf 总览面板，承载搜索、颜色/类型/标签筛选、排序、行内编辑、标签编辑、跳转、删除、导出模板与字面关联；
- *        移动端标签编辑态额外处理软键盘遮挡（列表补底部留白 + 输入框滚入可视区），不触碰阅读区
+ *        移动端标签编辑态额外处理软键盘遮挡（列表补底部留白 + 输入框滚入可视区），不触碰阅读区；
+ *        标签编辑期间 requestRender / refreshList 只登记不重绘，退出编辑后才补，且重绘重建不抢焦点
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
@@ -57,6 +58,12 @@ export class AnnotationSidebarView extends ItemView {
   private readonly relations: RelationModel;
   /** 移动端标签编辑态的键盘监听清理：同一时刻只允许一个编辑态持有 */
   private keyboardCleanup: (() => void) | null = null;
+  /** 标签编辑期间被挡下的重绘请求，编辑结束后补一次 */
+  private pendingRender = false;
+  /** 只有用户主动点「+」进入编辑态时才抢焦点；重绘重建不抢，否则输入法会自动弹起 */
+  private tagEditorAutoFocus = false;
+  /** 编辑态里尚未提交的输入，重绘回填用，避免一次刷新吞掉正在打的标签 */
+  private pendingTagQuery = "";
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: OverlayAnnotationsPlugin) {
     super(leaf);
@@ -83,6 +90,9 @@ export class AnnotationSidebarView extends ItemView {
   async onClose(): Promise<void> {
     this.keyboardCleanup?.();
     this.keyboardCleanup = null;
+    this.pendingRender = false;
+    this.pendingTagQuery = "";
+    this.tagEditorAutoFocus = false;
     if (this.renderTimer !== null) {
       window.clearTimeout(this.renderTimer);
       this.renderTimer = null;
@@ -90,6 +100,12 @@ export class AnnotationSidebarView extends ItemView {
   }
 
   requestRender(): void {
+    // 标签编辑态下整表重建会删掉输入框：既丢未提交内容，又会 rAF 抢焦点把输入法顶出来。
+    // 先记下请求，等编辑结束再补一次重绘。
+    if (this.editingTagCardId !== null) {
+      this.pendingRender = true;
+      return;
+    }
     if (this.renderTimer !== null) {
       window.clearTimeout(this.renderTimer);
     }
@@ -149,6 +165,11 @@ export class AnnotationSidebarView extends ItemView {
    * 只刷新卡片列表（不重建搜索框等控件），用于搜索输入时保持焦点。
    */
   private async refreshList(): Promise<void> {
+    // 与 requestRender 同因：编辑态下重建列表会丢输入、抢焦点
+    if (this.editingTagCardId !== null) {
+      this.pendingRender = true;
+      return;
+    }
     const root = this.containerEl.children[1] ?? this.containerEl;
     const list = root.querySelector<HTMLElement>(".yh-ov-list");
     if (!list) {
@@ -477,7 +498,10 @@ export class AnnotationSidebarView extends ItemView {
     const suggestions = this.plugin.getTagSuggestions();
     renderTagChips(row, cardData.tags, {
       onChipClick: (tag) => this.focusTag(tagKey(tag)),
-      onOverflowClick: () => this.mountTagEditor(row, file, cardData, suggestions),
+      onOverflowClick: () => {
+        this.tagEditorAutoFocus = true;
+        this.mountTagEditor(row, file, cardData, suggestions);
+      },
     });
 
     const add = row.createSpan({
@@ -492,6 +516,8 @@ export class AnnotationSidebarView extends ItemView {
     });
     const open = (event: Event): void => {
       event.stopPropagation();
+      // 只有用户主动点「+」才抢焦点；重绘重建走另一条路径，不置这个标志
+      this.tagEditorAutoFocus = true;
       this.mountTagEditor(row, file, cardData, suggestions);
     };
     add.addEventListener("click", open);
@@ -509,6 +535,9 @@ export class AnnotationSidebarView extends ItemView {
    * 不再用 blur + 定时器拆解，避免焦点抖动导致输入框一闪即逝。
    */
   private mountTagEditor(row: HTMLElement, file: TFile | null, cardData: SidebarCard, suggestions: readonly TagSuggestion[]): void {
+    // 本次挂载是否由用户主动触发；重绘重建时为 false，不抢焦点、不弹输入法
+    const shouldFocus = this.tagEditorAutoFocus;
+    this.tagEditorAutoFocus = false;
     this.editingTagCardId = cardData.id;
     row.empty();
     row.addClass("is-editing");
@@ -526,6 +555,11 @@ export class AnnotationSidebarView extends ItemView {
       quickApply,
       // 侧栏点 + 即刻给出候选：空内容也显示，不必先输入一个字符
       showSuggestionsOnOpen: true,
+      // 重绘回填未提交输入，避免一次刷新把正在打的标签吞掉
+      initialQuery: this.pendingTagQuery,
+      onQueryChange: (value) => {
+        this.pendingTagQuery = value;
+      },
       onChange: (tags) => {
         cardData.tags = tags;
         void this.persistCardTags(file, cardData, tags);
@@ -564,7 +598,11 @@ export class AnnotationSidebarView extends ItemView {
     }
 
     window.requestAnimationFrame(() => {
-      if (row.isConnected) {
+      if (!row.isConnected) {
+        return;
+      }
+      // 只有用户主动进入编辑态才聚焦并滚动；重绘重建保持安静，避免输入法自动弹起
+      if (shouldFocus) {
         field?.focus();
         revealField();
       }
@@ -574,11 +612,18 @@ export class AnnotationSidebarView extends ItemView {
       listeners.abort();
       this.keyboardCleanup?.();
       this.keyboardCleanup = null;
+      this.pendingTagQuery = "";
       if (this.editingTagCardId === cardData.id) {
         this.editingTagCardId = null;
       }
+      const shouldRender = this.pendingRender;
+      this.pendingRender = false;
       if (row.isConnected) {
         this.mountTagRow(row, file, cardData);
+      }
+      // 编辑期间攒下的刷新请求，退出编辑后补一次
+      if (shouldRender) {
+        this.requestRender();
       }
     };
 

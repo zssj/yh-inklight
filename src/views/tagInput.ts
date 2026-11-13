@@ -3,6 +3,7 @@
  * [OUTPUT]: 对外提供 renderTagChips（只读 chip 行）、renderTagInput（可编辑 chip + 补全下拉）、
  *           TagSuggestion（带来源的补全候选，含按内容推荐）与 buildTagSuggestions（候选聚合，含 Obsidian 标签）；
  *           推荐项独立配额（最多 3 个），不挤占常规候选；showSuggestionsOnOpen 供侧栏打开即显示候选；
+ *           initialQuery / onQueryChange 供调用方在重绘后回填未提交输入；
  *           renderTagInput 处理中文输入法组合态，拼音选词不会误建标签
  * [POS]: views 模块的标签 UI 单点，被 sidebarView、tagBoardView、CommentModal、EpubNoteModal 共用
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
@@ -88,6 +89,10 @@ export interface TagInputOptions {
   quickApply?: { label: string; tags: readonly string[] };
   /** 打开编辑态即展示候选（侧栏用）；默认 false，弹窗维持「输入后才弹」 */
   showSuggestionsOnOpen?: boolean;
+  /** 重建时回填的未提交输入（侧栏重绘时用） */
+  initialQuery?: string;
+  /** 输入内容变化回调，供调用方暂存未提交文本，避免一次重绘吞掉正在打的标签 */
+  onQueryChange?: (value: string) => void;
   onChange: (tags: string[]) => void;
   placeholder?: string;
 }
@@ -111,6 +116,9 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
   });
   const dropdown = wrap.createDiv({ cls: "yh-tag-suggest" });
   dropdown.addClass("yh-hidden");
+  if (options.initialQuery) {
+    field.value = options.initialQuery;
+  }
 
   let tags = normalizeTags(options.tags);
   let matches: TagSuggestion[] = [];
@@ -215,6 +223,7 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
         event.preventDefault();
         emit([...tags, ...options.quickApply!.tags]);
         field.value = "";
+        options.onQueryChange?.("");
         closeDropdown();
       });
     }
@@ -249,6 +258,7 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
   const commitTag = (raw: string): void => {
     const tag = normalizeTag(raw);
     field.value = "";
+    options.onQueryChange?.("");
     if (!tag) {
       closeDropdown();
       return;
@@ -275,6 +285,7 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
   });
 
   field.addEventListener("input", () => {
+    options.onQueryChange?.(field.value);
     // 拼音未上屏时不要拿半截拼音去筛候选，等 compositionend 再渲染
     if (composing) {
       return;

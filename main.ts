@@ -21,6 +21,7 @@ import {
   AnnotationPluginSettings,
   CommentAnnotation,
   DEFAULT_SETTINGS,
+  FileAnnotationDocument,
   HighlightAnnotation,
   MdOpenStat,
   SelectionSnapshot,
@@ -54,6 +55,29 @@ const NOTE_TITLE_OPTIONS = [
 /** Markdown 打开次数统计的独立 sidecar 文件（与批注同目录，卸载插件不丢失） */
 const MD_OPEN_STATS_PATH = ".obsidian-annotations/md-open-stats.json";
 
+/** 源文件连续写入的合并窗口：同步盘与外部程序常连续触发 modify，逐次迁移性价比极低 */
+const MD_MODIFY_DEBOUNCE_MS = 300;
+
+/**
+ * 只比较锚点是否真的漂移。relocateDocumentAnchors 每次都返回新对象，
+ * 不能用引用判断；用偏移与选中文本比较才能避免「文件一保存就重写 sidecar」。
+ */
+function anchorsUnchanged(before: FileAnnotationDocument, after: FileAnnotationDocument): boolean {
+  const same = (
+    left: { anchor: { startOffset: number; endOffset: number; selectedText: string }; orphaned?: boolean },
+    right: { anchor: { startOffset: number; endOffset: number; selectedText: string }; orphaned?: boolean },
+  ): boolean =>
+    left.anchor.startOffset === right.anchor.startOffset
+    && left.anchor.endOffset === right.anchor.endOffset
+    && left.anchor.selectedText === right.anchor.selectedText
+    && Boolean(left.orphaned) === Boolean(right.orphaned);
+
+  return before.highlights.length === after.highlights.length
+    && before.comments.length === after.comments.length
+    && before.highlights.every((item, index) => same(item, after.highlights[index]))
+    && before.comments.every((item, index) => same(item, after.comments[index]));
+}
+
 const YH_INKLIGHT_ICON = `
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
     <rect x="5" y="5" width="90" height="90" rx="20" ry="20" fill="#F5C518"/>
@@ -78,6 +102,8 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   private stickyLane!: StickyNoteLane;
   private lastSelection: SelectionSnapshot | null = null;
   private renameMigrationTimer: number | null = null;
+  /** 每个 Markdown 文件一个 modify 防抖计时器，避免同步盘连续写入触发重复迁移 */
+  private readonly mdModifyTimers = new Map<string, number>();
   private settingsSaveTimer: number | null = null;
   private statsSaveTimer: number | null = null;
   private epubTocSyncTimer: number | null = null;
@@ -240,6 +266,10 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     if (this.epubTocSyncTimer !== null) {
       window.clearTimeout(this.epubTocSyncTimer);
     }
+    for (const timer of this.mdModifyTimers.values()) {
+      window.clearTimeout(timer);
+    }
+    this.mdModifyTimers.clear();
     this.toolbar?.destroy();
     this.popover?.destroy();
     this.stickyLane?.destroy();
@@ -483,6 +513,31 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     });
   }
 
+  /**
+   * 源文件被修改后迁移锚点。
+   * 只有锚点真的漂移时才写盘并刷新视图——否则「保存一下 md」就会重写 sidecar 并
+   * 全量重建批注侧栏（container.empty + 重新聚焦标签输入框），打断正在进行的标签输入。
+   */
+  private async syncMarkdownAnchors(file: TFile): Promise<void> {
+    const document = await this.store.getDocument(file);
+    if (document.highlights.length === 0 && document.comments.length === 0) {
+      return;
+    }
+
+    const source = await this.app.vault.cachedRead(file);
+    const relocated = relocateDocumentAnchors(source, document);
+    if (anchorsUnchanged(document, relocated)) {
+      return;
+    }
+
+    await this.store.saveDocument({
+      ...relocated,
+      fileHash: await this.store.hashFile(file),
+      lastModified: new Date().toISOString(),
+    });
+    await this.refreshAnnotations();
+  }
+
   private registerEvents(): void {
     this.registerDomEvent(document, "selectionchange", () => this.toolbar.showForSelection());
     this.registerDomEvent(document, "mousedown", (event) => {
@@ -495,20 +550,23 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     });
 
     this.registerEvent(
-      this.app.vault.on("modify", async (file) => {
+      this.app.vault.on("modify", (file) => {
         if (!(file instanceof TFile) || file.extension !== "md") {
           return;
         }
-
-        const document = await this.store.getDocument(file);
-        const source = await this.app.vault.cachedRead(file);
-        const relocated = relocateDocumentAnchors(source, document);
-        await this.store.saveDocument({
-          ...relocated,
-          fileHash: await this.store.hashFile(file),
-          lastModified: new Date().toISOString(),
-        });
-        await this.refreshAnnotations();
+        // 同一个文件的连续写入合并成一次迁移，避免同步盘每几秒写一次就全量刷新所有批注视图
+        const path = file.path;
+        const pending = this.mdModifyTimers.get(path);
+        if (pending !== undefined) {
+          window.clearTimeout(pending);
+        }
+        this.mdModifyTimers.set(path, window.setTimeout(() => {
+          this.mdModifyTimers.delete(path);
+          const target = this.app.vault.getAbstractFileByPath(path);
+          if (target instanceof TFile) {
+            void this.syncMarkdownAnchors(target);
+          }
+        }, MD_MODIFY_DEBOUNCE_MS));
       }),
     );
 

@@ -17,9 +17,9 @@ views/annotationPopover.ts: 窄屏与阅读模式弹层，点击高亮后展示 
 views/cardModel.ts: 卡片模型纯函数，把 sidecar 文档拍平成 SidebarCard（高亮挂笔记、孤儿笔记独立成卡、标签取并集）。
 views/markdownStatsView.ts: 笔记使用统计视图，列出全库 md 笔记并支持跳转/删除；顶部提供 1 天复习（openCount==1）/ 7 天复习（openCount>=2）/ 上月今日 / 去年今日 四张卡片，日差精确匹配、各 Top 5。
 views/navigation.ts: 三端跳转单点（md 偏移 / pdf 页码 / epub CFI），侧栏与标签总览共用。
-views/sidebarView.ts: 右侧总览面板，使用彩色卡片合并 highlight 与关联 note，并承载搜索、标签筛选、过滤、排序、导出、跳转与内联编辑；移动端标签编辑态处理软键盘遮挡，不改阅读区。
+views/sidebarView.ts: 右侧总览面板，使用彩色卡片合并 highlight 与关联 note，并承载搜索、标签筛选、过滤、排序、导出、跳转与内联编辑；移动端标签编辑态处理软键盘遮挡，不改阅读区；编辑期间延后重绘、重绘不抢焦点，避免输入法自弹。
 views/tagBoardView.ts: 标签总览视图，按「标签 → 文档 → 批注」三栏主从跨文档聚合批注，窄屏降级为单栏 + 面包屑。
-views/tagInput.ts: 标签 UI 组件（只读 chip 行 + chip 编辑器与补全下拉），侧栏、标签总览与两个弹窗共用；候选为 TagSuggestion[]（可含 OB 标签与按内容推荐项，推荐独立配额最多 3 个），支持 quickApply 一键沿用当前文档标签与 showSuggestionsOnOpen（侧栏空内容即显示候选）；处理中文输入法组合态，拼音选词不会误建标签。
+views/tagInput.ts: 标签 UI 组件（只读 chip 行 + chip 编辑器与补全下拉），侧栏、标签总览与两个弹窗共用；候选为 TagSuggestion[]（可含 OB 标签与按内容推荐项，推荐独立配额最多 3 个），支持 quickApply 一键沿用当前文档标签、showSuggestionsOnOpen（侧栏空内容即显示候选）与 initialQuery / onQueryChange（重绘后回填未提交输入）；处理中文输入法组合态，拼音选词不会误建标签。
 views/relationModel.ts: 字面关联派生层（与 cardModel 同层），按需内存快照随 store.version 失效；两遍构建（全量抽词统计文档频率 → 按稀有度裁剪），提供 getRelated（稀有连续片段双通道判定 + 命中理由 + 近邻排除含 EPUB、同文档只降序不设门槛）与 getRecommendedTags（标签→词频、冷启动静默、只推荐用过的标签）；不落盘、不写 sidecar、不升 index 版本。
 views/stickyNoteLane.ts: 编辑/阅读模式的便签泳道，基于 positioning 布局算法渲染可编辑便签条，支持窄屏自适应。
 views/stickyNoteView.ts: 兼容型便利贴卡片组件，保留 Markdown 渲染、折叠与编辑。

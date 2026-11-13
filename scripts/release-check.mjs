@@ -73,12 +73,28 @@ const tagSha = (() => {
   }
 })();
 const short = (s) => s.slice(0, 7);
-const refsOk = head === origin && head === tagSha;
-log(`${tag}  ${refsOk ? "全部就绪" : "存在问题"}`);
-log(
-  `  refs   ${refsOk ? ok(`HEAD=origin=tag ${short(head)}`) : bad(`HEAD=${short(head)} origin=${short(origin)} tag=${tagSha ? short(tagSha) : "缺失"}`)}` +
-    (manifest.version === tag.replace(/^v/, "") ? "" : ` ${bad(`manifest 版本 ${manifest.version} 与 tag 不符`)}`),
-);
+const manifestOk = manifest.version === tag.replace(/^v/, "");
+// tag 必须落在 origin/main 上；HEAD 领先 tag 是发版后的正常状态，不算失败
+const tagOnMain = (() => {
+  if (!tagSha) return false;
+  try {
+    sh(`git merge-base --is-ancestor ${tagSha} origin/main`);
+    return true;
+  } catch {
+    return false;
+  }
+})();
+const ahead = tagSha ? Number(sh(`git rev-list --count ${tagSha}..HEAD`)) : 0;
+const refsOk = Boolean(tagSha) && head === origin && tagOnMain;
+
+const refsText = !tagSha
+  ? bad(`tag 缺失（HEAD ${short(head)} / origin ${short(origin)}）`)
+  : ahead === 0
+    ? ok(`HEAD=origin=tag ${short(head)}`)
+    : ok(`tag ${short(tagSha)} 在 origin/main 上，HEAD 领先 ${ahead} 个提交（发版后正常）`);
+
+log(`${tag}  ${refsOk && manifestOk ? "全部就绪" : "存在问题"}`);
+log(`  refs   ${refsText}${manifestOk ? "" : ` ${bad(`manifest 版本 ${manifest.version} 与 tag 不符`)}`}`);
 
 // tag 都没有就不用等 CI 了，直接给结论，避免空转到超时
 if (!tagSha) {

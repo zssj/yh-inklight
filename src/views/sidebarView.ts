@@ -3,6 +3,7 @@
  * [OUTPUT]: 对外提供 AnnotationSidebarView，将当前文件或全库 annotation 合并为可筛选、可跳转、可导出的总览卡片，卡片可挂标签；
  *           标签编辑按内容推荐历史标签，卡片底部折叠展示字面相关的其他批注（受 contentRelations 设置控制）
  * [POS]: views 模块的右侧 Leaf 总览面板，承载搜索、颜色/类型/标签筛选、排序、行内编辑、标签编辑、跳转、删除、导出模板与字面关联；
+ *        顶部搜索/范围/筛选/排序/导出统一收进单一折叠菜单（默认收起，展开态记在视图字段上），列表区域常驻不被菜单挤压；
  *        移动端标签编辑态额外处理软键盘遮挡（列表补底部留白 + 输入框滚入可视区），不触碰阅读区；
  *        标签编辑期间 requestRender / refreshList 只登记不重绘，退出编辑后才补，且重绘重建不抢焦点
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
@@ -47,6 +48,8 @@ export class AnnotationSidebarView extends ItemView {
   /** 标签筛选的比较键；空字符串表示不筛选 */
   private tagFilter = "";
   private exportFormat: AnnotationExportFormat = "summary";
+  /** 顶部折叠菜单的展开态；必须存在视图字段上，重绘后仍保持用户上一次的选择 */
+  private menuOpen = false;
   private renderToken = 0;
   private renderTimer: number | null = null;
   /**
@@ -123,11 +126,10 @@ export class AnnotationSidebarView extends ItemView {
 
     const file = this.app.workspace.getActiveFile();
     this.renderHeader(container);
-    this.renderControls(container);
+    this.renderMenu(container, file);
 
     if (this.annotationScope === "current" && !file) {
       container.createDiv({ cls: "yh-empty", text: "Open a Markdown or PDF file to inspect annotations." });
-      this.renderExportFooter(container, null);
       return;
     }
 
@@ -157,8 +159,6 @@ export class AnnotationSidebarView extends ItemView {
         this.renderCard(list, card);
       }
     }
-
-    this.renderExportFooter(container, this.annotationScope === "current" ? file : null);
   }
 
   /**
@@ -214,6 +214,26 @@ export class AnnotationSidebarView extends ItemView {
     header.createSpan({ cls: "yh-ov-title", text: "Inklight" });
     const actions = header.createDiv({ cls: "yh-ov-head-actions" });
 
+    // 搜索/范围/筛选/排序/导出的唯一入口：默认收起，点击展开；有生效筛选时点亮小圆点
+    const menu = actions.createEl("button", {
+      cls: "yh-icon-btn yh-ov-menu-btn",
+      attr: {
+        type: "button",
+        title: "筛选与导出",
+        "aria-label": "筛选与导出",
+        "aria-expanded": String(this.menuOpen),
+      },
+    });
+    setIcon(menu, "sliders-horizontal");
+    menu.toggleClass("is-open", this.menuOpen);
+    menu.toggleClass("is-active", this.hasActiveFilters());
+    menu.addEventListener("click", () => {
+      this.menuOpen = !this.menuOpen;
+      menu.toggleClass("is-open", this.menuOpen);
+      menu.setAttribute("aria-expanded", String(this.menuOpen));
+      container.querySelector<HTMLElement>(".yh-ov-menu")?.toggleClass("is-open", this.menuOpen);
+    });
+
     const refresh = actions.createEl("button", {
       cls: "yh-icon-btn yh-ov-refresh",
       attr: { type: "button", title: "Refresh", "aria-label": "Refresh annotations" },
@@ -231,9 +251,28 @@ export class AnnotationSidebarView extends ItemView {
     });
   }
 
-  private renderControls(container: Element): void {
-    const searchRow = container.createDiv({ cls: "yh-ov-search-row" });
-    const search = searchRow.createEl("input", {
+  /** 有任一筛选/搜索/范围生效时，菜单按钮点亮小圆点，收起态也能看出列表被过滤过 */
+  private hasActiveFilters(): boolean {
+    return (
+      this.query.trim().length > 0 ||
+      this.annotationScope !== "current" ||
+      this.color !== "all" ||
+      this.type !== "all" ||
+      this.tagFilter !== ""
+    );
+  }
+
+  /**
+   * 顶部控件统一收进一个折叠菜单：默认收起，避免搜索 + 五个下拉 + 导出常驻把列表挤成窄条。
+   * 展开态记在 this.menuOpen 上，任何一次重绘（改筛选、刷新）后保持展开；
+   * 展开/收起只切菜单自身的 class，不重绘列表，因此列表内容与滚动位置都不受影响。
+   */
+  private renderMenu(container: Element, file: TFile | null): void {
+    const panel = container.createDiv({ cls: "yh-ov-menu" });
+    panel.toggleClass("is-open", this.menuOpen);
+
+    // 搜索批注
+    const search = panel.createEl("input", {
       cls: "yh-ov-search",
       attr: { type: "search", placeholder: "搜索批注..." },
     });
@@ -241,6 +280,8 @@ export class AnnotationSidebarView extends ItemView {
     let searchTimer: number | null = null;
     search.addEventListener("input", () => {
       this.query = search.value;
+      // 搜索只走 refreshList（不整表重建），徽标点手动同步，收起后仍能看出列表被过滤
+      container.querySelector<HTMLElement>(".yh-ov-menu-btn")?.toggleClass("is-active", this.hasActiveFilters());
       if (searchTimer !== null) {
         window.clearTimeout(searchTimer);
       }
@@ -250,7 +291,8 @@ export class AnnotationSidebarView extends ItemView {
       }, 200);
     });
 
-    const scope = searchRow.createEl("select", { cls: "yh-filter-select" });
+    // 范围：当前文件 / 全库
+    const scope = panel.createEl("select", { cls: "yh-filter-select", attr: { title: "批注范围" } });
     scope.createEl("option", { text: "当前文件", value: "current" });
     scope.createEl("option", { text: "全库", value: "all" });
     scope.value = this.annotationScope;
@@ -259,10 +301,7 @@ export class AnnotationSidebarView extends ItemView {
       await this.render();
     });
 
-    const filterButton = searchRow.createEl("button", { cls: "yh-icon-btn", attr: { type: "button", title: "筛选" } });
-    setIcon(filterButton, "filter");
-
-    const filterRow = container.createDiv({ cls: "yh-ov-filter-row" });
+    const filterRow = panel.createDiv({ cls: "yh-ov-menu-row" });
     const color = filterRow.createEl("select", { cls: "yh-filter-select" });
     color.createEl("option", { text: "全部颜色", value: "all" });
     for (const item of ANNOTATION_COLORS) {
@@ -284,7 +323,8 @@ export class AnnotationSidebarView extends ItemView {
       await this.render();
     });
 
-    const sort = filterRow.createEl("select", { cls: "yh-filter-select" });
+    const sortRow = panel.createDiv({ cls: "yh-ov-menu-row" });
+    const sort = sortRow.createEl("select", { cls: "yh-filter-select" });
     const sortOptions = { document: "文档顺序", newest: "最新优先", oldest: "最早优先" } as const;
     for (const item of ["document", "newest", "oldest"] as const) {
       sort.createEl("option", { text: sortOptions[item], value: item });
@@ -296,7 +336,8 @@ export class AnnotationSidebarView extends ItemView {
     });
 
     // 标签筛选：选项来自内存索引，按文件数降序；选中后自动切全库，否则当前文件里常为空
-    const tagSelect = filterRow.createEl("select", {
+    const tagRow = panel.createDiv({ cls: "yh-ov-menu-row" });
+    const tagSelect = tagRow.createEl("select", {
       cls: "yh-filter-select yh-tag-filter",
       attr: { title: "按标签筛选" },
     });
@@ -319,13 +360,38 @@ export class AnnotationSidebarView extends ItemView {
       await this.render();
     });
 
-    const boardButton = filterRow.createEl("button", {
+    const boardButton = tagRow.createEl("button", {
       cls: "yh-icon-btn yh-tag-board-btn",
-      attr: { type: "button", title: "在标签总览中查看" },
+      attr: { type: "button", title: "在标签总览中查看", "aria-label": "在标签总览中查看" },
     });
     setIcon(boardButton, "layout-grid");
     boardButton.addEventListener("click", () => {
       void this.plugin.activateTagBoard(this.tagFilter || undefined);
+    });
+
+    // 导出：按钮 + 格式，语义与原先底部导出栏一致，只是收进菜单
+    panel.createDiv({ cls: "yh-ov-menu-sep" });
+    const exportRow = panel.createDiv({ cls: "yh-ov-menu-row yh-ov-menu-export" });
+    const exportButton = exportRow.createEl("button", { cls: "yh-export-btn", text: "↑ 导出批注", attr: { type: "button" } });
+    exportButton.disabled = this.annotationScope === "current" && !file;
+    exportButton.addEventListener("click", async () => {
+      if (this.annotationScope === "current" && !file) {
+        return;
+      }
+      const exported =
+        this.annotationScope === "all"
+          ? await this.plugin.store.exportAllNotes(this.exportFormat, this.plugin.settings.obTagBridge)
+          : await this.plugin.store.exportNotes(file!, this.exportFormat, this.plugin.settings.obTagBridge);
+      new Notice(`已导出笔记至 ${exported.path}`);
+    });
+    const exportFormat = exportRow.createEl("select", { cls: "yh-filter-select yh-export-format", attr: { title: "导出格式" } });
+    exportFormat.createEl("option", { text: "默认摘要", value: "summary" });
+    exportFormat.createEl("option", { text: "按颜色分组", value: "by-color" });
+    exportFormat.createEl("option", { text: "只导出笔记", value: "notes-only" });
+    exportFormat.createEl("option", { text: "阅读笔记", value: "reading-notes" });
+    exportFormat.value = this.exportFormat;
+    exportFormat.addEventListener("change", () => {
+      this.exportFormat = exportFormat.value as AnnotationExportFormat;
     });
   }
 
@@ -908,31 +974,6 @@ export class AnnotationSidebarView extends ItemView {
 
   private cardUpdatedAt(card: SidebarCard): string {
     return card.note?.updatedAt ?? card.createdAt;
-  }
-
-  private renderExportFooter(container: Element, file: TFile | null): void {
-    const footer = container.createDiv({ cls: "yh-ov-foot" });
-    const exportButton = footer.createEl("button", { cls: "yh-export-btn", text: "↑ 导出批注", attr: { type: "button" } });
-    exportButton.disabled = this.annotationScope === "current" && !file;
-    exportButton.addEventListener("click", async () => {
-      if (this.annotationScope === "current" && !file) {
-        return;
-      }
-      const exported =
-        this.annotationScope === "all"
-          ? await this.plugin.store.exportAllNotes(this.exportFormat, this.plugin.settings.obTagBridge)
-          : await this.plugin.store.exportNotes(file!, this.exportFormat, this.plugin.settings.obTagBridge);
-      new Notice(`已导出笔记至 ${exported.path}`);
-    });
-    const exportFormat = footer.createEl("select", { cls: "yh-filter-select yh-export-format", attr: { title: "导出格式" } });
-    exportFormat.createEl("option", { text: "默认摘要", value: "summary" });
-    exportFormat.createEl("option", { text: "按颜色分组", value: "by-color" });
-    exportFormat.createEl("option", { text: "只导出笔记", value: "notes-only" });
-    exportFormat.createEl("option", { text: "阅读笔记", value: "reading-notes" });
-    exportFormat.value = this.exportFormat;
-    exportFormat.addEventListener("change", () => {
-      this.exportFormat = exportFormat.value as AnnotationExportFormat;
-    });
   }
 
   private async jumpTo(

@@ -42,6 +42,7 @@ npm run release-check              # 默认取 package.json 版本；也可 npm 
 ```
 
   它校验：HEAD == origin/main == tag 指向同一提交；`Build Check`(main) 与 `Release Obsidian Plugin`(该 tag) 均 success；Release 三资产 `uploaded` 且大小与本地产物一致（按 LF 归一化，CRLF 工作区不会误报）。输出 4 行结论，退出码 0 即就绪。未登录 GitHub 时 API 配额 60 次/小时，可用 `GITHUB_TOKEN` 环境变量提高。
+
 - Deploy target for manual testing: `E:\知识库\.obsidian\plugins\yh-inklight\`（只覆盖 main.js / manifest.json / styles.css，不动 data.json）。
 
 ## Key Architecture

@@ -287,23 +287,47 @@
   font-weight: 400;
 }
 
-.yh-ov-search-row {
+/* ===== 顶部折叠菜单：搜索 / 范围 / 颜色 / 类型 / 排序 / 标签 / 导出 ===== */
+.yh-ov-menu {
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid var(--yh-border);
+  background: var(--background-secondary);
+  flex-shrink: 0;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.yh-ov-menu.is-open {
+  display: flex;
+}
+
+.yh-ov-menu-row {
   display: flex;
   align-items: center;
-  flex-wrap: nowrap;
-  gap: 4px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--yh-border);
-  flex-shrink: 0;
+  gap: 6px;
+}
+
+.yh-ov-menu-row > .yh-filter-select {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.yh-ov-menu-sep {
+  height: 1px;
+  margin: 2px 0;
+  background: var(--yh-border);
 }
 
 .yh-ov-search {
-  flex: 1;
-  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
   padding: 5px 8px;
   border: 1px solid var(--yh-border);
   border-radius: var(--yh-radius-sm);
-  background: var(--background-secondary);
+  background: var(--background-primary);
   color: var(--text-normal);
   font-size: var(--yh-font-sm);
   outline: none;
@@ -314,18 +338,26 @@
   box-shadow: 0 0 0 3px rgba(245, 197, 24, 0.15);
 }
 
-.yh-ov-filter-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--yh-border);
-  flex-shrink: 0;
+.yh-ov-menu-btn {
+  position: relative;
 }
 
-/* 四个筛选控件改为两行两列，避免侧栏宽度不足时文字被截断 */
-.yh-ov-filter-row .yh-filter-select {
-  flex: 1 1 calc(50% - 2px);
+.yh-ov-menu-btn.is-open {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+/* 收起态也提示「列表被筛选过」：圆点贴按钮右上角，留出 1.5px 亮边避免压住图标线条 */
+.yh-ov-menu-btn.is-active::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--yh-yellow);
+  box-shadow: 0 0 0 1.5px var(--background-primary);
 }
 
 .yh-filter-select {
@@ -339,10 +371,6 @@
   font-size: var(--yh-font-xs);
   cursor: pointer;
   outline: none;
-}
-
-.yh-ov-filter-row .yh-filter-select {
-  min-width: 0;
 }
 
 .yh-filter-select:focus {
@@ -702,15 +730,6 @@ span.yh-ov-expand-btn:hover {
   background: rgba(255, 255, 255, 0.08);
 }
 
-.yh-ov-foot {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px 3px;
-  border-top: 1px solid var(--yh-border);
-  flex-shrink: 0;
-}
-
 .yh-export-btn {
   flex: 1;
   padding: 6px 8px;
@@ -733,9 +752,9 @@ span.yh-ov-expand-btn:hover {
   opacity: 0.55;
 }
 
-.yh-export-format {
+.yh-ov-menu-row > .yh-export-format {
   flex: 0 0 auto;
-  width: 120px;
+  width: 112px;
 }
 
 /* ===== Annotation popover ===== */

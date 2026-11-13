@@ -12239,6 +12239,8 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     /** 标签筛选的比较键；空字符串表示不筛选 */
     this.tagFilter = "";
     this.exportFormat = "summary";
+    /** 顶部折叠菜单的展开态；必须存在视图字段上，重绘后仍保持用户上一次的选择 */
+    this.menuOpen = false;
     this.renderToken = 0;
     this.renderTimer = null;
     /**
@@ -12300,10 +12302,9 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     container.addClass("yh-overview");
     const file = this.app.workspace.getActiveFile();
     this.renderHeader(container);
-    this.renderControls(container);
+    this.renderMenu(container, file);
     if (this.annotationScope === "current" && !file) {
       container.createDiv({ cls: "yh-empty", text: "Open a Markdown or PDF file to inspect annotations." });
-      this.renderExportFooter(container, null);
       return;
     }
     const documents = this.annotationScope === "all" ? await this.plugin.store.getIndexedDocuments() : [await this.plugin.store.getDocument(file)];
@@ -12330,7 +12331,6 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
         this.renderCard(list, card);
       }
     }
-    this.renderExportFooter(container, this.annotationScope === "current" ? file : null);
   }
   /**
    * 只刷新卡片列表（不重建搜索框等控件），用于搜索输入时保持焦点。
@@ -12377,6 +12377,24 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     const header = container.createDiv({ cls: "yh-ov-head" });
     header.createSpan({ cls: "yh-ov-title", text: "Inklight" });
     const actions = header.createDiv({ cls: "yh-ov-head-actions" });
+    const menu = actions.createEl("button", {
+      cls: "yh-icon-btn yh-ov-menu-btn",
+      attr: {
+        type: "button",
+        title: "\u7B5B\u9009\u4E0E\u5BFC\u51FA",
+        "aria-label": "\u7B5B\u9009\u4E0E\u5BFC\u51FA",
+        "aria-expanded": String(this.menuOpen)
+      }
+    });
+    (0, import_obsidian11.setIcon)(menu, "sliders-horizontal");
+    menu.toggleClass("is-open", this.menuOpen);
+    menu.toggleClass("is-active", this.hasActiveFilters());
+    menu.addEventListener("click", () => {
+      this.menuOpen = !this.menuOpen;
+      menu.toggleClass("is-open", this.menuOpen);
+      menu.setAttribute("aria-expanded", String(this.menuOpen));
+      container.querySelector(".yh-ov-menu")?.toggleClass("is-open", this.menuOpen);
+    });
     const refresh = actions.createEl("button", {
       cls: "yh-icon-btn yh-ov-refresh",
       attr: { type: "button", title: "Refresh", "aria-label": "Refresh annotations" }
@@ -12392,9 +12410,19 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       void this.leaf.detach();
     });
   }
-  renderControls(container) {
-    const searchRow = container.createDiv({ cls: "yh-ov-search-row" });
-    const search2 = searchRow.createEl("input", {
+  /** 有任一筛选/搜索/范围生效时，菜单按钮点亮小圆点，收起态也能看出列表被过滤过 */
+  hasActiveFilters() {
+    return this.query.trim().length > 0 || this.annotationScope !== "current" || this.color !== "all" || this.type !== "all" || this.tagFilter !== "";
+  }
+  /**
+   * 顶部控件统一收进一个折叠菜单：默认收起，避免搜索 + 五个下拉 + 导出常驻把列表挤成窄条。
+   * 展开态记在 this.menuOpen 上，任何一次重绘（改筛选、刷新）后保持展开；
+   * 展开/收起只切菜单自身的 class，不重绘列表，因此列表内容与滚动位置都不受影响。
+   */
+  renderMenu(container, file) {
+    const panel = container.createDiv({ cls: "yh-ov-menu" });
+    panel.toggleClass("is-open", this.menuOpen);
+    const search2 = panel.createEl("input", {
       cls: "yh-ov-search",
       attr: { type: "search", placeholder: "\u641C\u7D22\u6279\u6CE8..." }
     });
@@ -12402,6 +12430,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     let searchTimer = null;
     search2.addEventListener("input", () => {
       this.query = search2.value;
+      container.querySelector(".yh-ov-menu-btn")?.toggleClass("is-active", this.hasActiveFilters());
       if (searchTimer !== null) {
         window.clearTimeout(searchTimer);
       }
@@ -12410,7 +12439,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
         void this.refreshList();
       }, 200);
     });
-    const scope = searchRow.createEl("select", { cls: "yh-filter-select" });
+    const scope = panel.createEl("select", { cls: "yh-filter-select", attr: { title: "\u6279\u6CE8\u8303\u56F4" } });
     scope.createEl("option", { text: "\u5F53\u524D\u6587\u4EF6", value: "current" });
     scope.createEl("option", { text: "\u5168\u5E93", value: "all" });
     scope.value = this.annotationScope;
@@ -12418,9 +12447,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       this.annotationScope = scope.value;
       await this.render();
     });
-    const filterButton = searchRow.createEl("button", { cls: "yh-icon-btn", attr: { type: "button", title: "\u7B5B\u9009" } });
-    (0, import_obsidian11.setIcon)(filterButton, "filter");
-    const filterRow = container.createDiv({ cls: "yh-ov-filter-row" });
+    const filterRow = panel.createDiv({ cls: "yh-ov-menu-row" });
     const color = filterRow.createEl("select", { cls: "yh-filter-select" });
     color.createEl("option", { text: "\u5168\u90E8\u989C\u8272", value: "all" });
     for (const item of ANNOTATION_COLORS) {
@@ -12440,7 +12467,8 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       this.type = type.value;
       await this.render();
     });
-    const sort = filterRow.createEl("select", { cls: "yh-filter-select" });
+    const sortRow = panel.createDiv({ cls: "yh-ov-menu-row" });
+    const sort = sortRow.createEl("select", { cls: "yh-filter-select" });
     const sortOptions = { document: "\u6587\u6863\u987A\u5E8F", newest: "\u6700\u65B0\u4F18\u5148", oldest: "\u6700\u65E9\u4F18\u5148" };
     for (const item of ["document", "newest", "oldest"]) {
       sort.createEl("option", { text: sortOptions[item], value: item });
@@ -12450,7 +12478,8 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       this.sort = sort.value;
       await this.render();
     });
-    const tagSelect = filterRow.createEl("select", {
+    const tagRow = panel.createDiv({ cls: "yh-ov-menu-row" });
+    const tagSelect = tagRow.createEl("select", {
       cls: "yh-filter-select yh-tag-filter",
       attr: { title: "\u6309\u6807\u7B7E\u7B5B\u9009" }
     });
@@ -12472,13 +12501,33 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       }
       await this.render();
     });
-    const boardButton = filterRow.createEl("button", {
+    const boardButton = tagRow.createEl("button", {
       cls: "yh-icon-btn yh-tag-board-btn",
-      attr: { type: "button", title: "\u5728\u6807\u7B7E\u603B\u89C8\u4E2D\u67E5\u770B" }
+      attr: { type: "button", title: "\u5728\u6807\u7B7E\u603B\u89C8\u4E2D\u67E5\u770B", "aria-label": "\u5728\u6807\u7B7E\u603B\u89C8\u4E2D\u67E5\u770B" }
     });
     (0, import_obsidian11.setIcon)(boardButton, "layout-grid");
     boardButton.addEventListener("click", () => {
       void this.plugin.activateTagBoard(this.tagFilter || void 0);
+    });
+    panel.createDiv({ cls: "yh-ov-menu-sep" });
+    const exportRow = panel.createDiv({ cls: "yh-ov-menu-row yh-ov-menu-export" });
+    const exportButton = exportRow.createEl("button", { cls: "yh-export-btn", text: "\u2191 \u5BFC\u51FA\u6279\u6CE8", attr: { type: "button" } });
+    exportButton.disabled = this.annotationScope === "current" && !file;
+    exportButton.addEventListener("click", async () => {
+      if (this.annotationScope === "current" && !file) {
+        return;
+      }
+      const exported = this.annotationScope === "all" ? await this.plugin.store.exportAllNotes(this.exportFormat, this.plugin.settings.obTagBridge) : await this.plugin.store.exportNotes(file, this.exportFormat, this.plugin.settings.obTagBridge);
+      new import_obsidian11.Notice(`\u5DF2\u5BFC\u51FA\u7B14\u8BB0\u81F3 ${exported.path}`);
+    });
+    const exportFormat = exportRow.createEl("select", { cls: "yh-filter-select yh-export-format", attr: { title: "\u5BFC\u51FA\u683C\u5F0F" } });
+    exportFormat.createEl("option", { text: "\u9ED8\u8BA4\u6458\u8981", value: "summary" });
+    exportFormat.createEl("option", { text: "\u6309\u989C\u8272\u5206\u7EC4", value: "by-color" });
+    exportFormat.createEl("option", { text: "\u53EA\u5BFC\u51FA\u7B14\u8BB0", value: "notes-only" });
+    exportFormat.createEl("option", { text: "\u9605\u8BFB\u7B14\u8BB0", value: "reading-notes" });
+    exportFormat.value = this.exportFormat;
+    exportFormat.addEventListener("change", () => {
+      this.exportFormat = exportFormat.value;
     });
   }
   renderCard(list, cardData) {
@@ -12987,27 +13036,6 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
   }
   cardUpdatedAt(card) {
     return card.note?.updatedAt ?? card.createdAt;
-  }
-  renderExportFooter(container, file) {
-    const footer = container.createDiv({ cls: "yh-ov-foot" });
-    const exportButton = footer.createEl("button", { cls: "yh-export-btn", text: "\u2191 \u5BFC\u51FA\u6279\u6CE8", attr: { type: "button" } });
-    exportButton.disabled = this.annotationScope === "current" && !file;
-    exportButton.addEventListener("click", async () => {
-      if (this.annotationScope === "current" && !file) {
-        return;
-      }
-      const exported = this.annotationScope === "all" ? await this.plugin.store.exportAllNotes(this.exportFormat, this.plugin.settings.obTagBridge) : await this.plugin.store.exportNotes(file, this.exportFormat, this.plugin.settings.obTagBridge);
-      new import_obsidian11.Notice(`\u5DF2\u5BFC\u51FA\u7B14\u8BB0\u81F3 ${exported.path}`);
-    });
-    const exportFormat = footer.createEl("select", { cls: "yh-filter-select yh-export-format", attr: { title: "\u5BFC\u51FA\u683C\u5F0F" } });
-    exportFormat.createEl("option", { text: "\u9ED8\u8BA4\u6458\u8981", value: "summary" });
-    exportFormat.createEl("option", { text: "\u6309\u989C\u8272\u5206\u7EC4", value: "by-color" });
-    exportFormat.createEl("option", { text: "\u53EA\u5BFC\u51FA\u7B14\u8BB0", value: "notes-only" });
-    exportFormat.createEl("option", { text: "\u9605\u8BFB\u7B14\u8BB0", value: "reading-notes" });
-    exportFormat.value = this.exportFormat;
-    exportFormat.addEventListener("change", () => {
-      this.exportFormat = exportFormat.value;
-    });
   }
   async jumpTo(file, offset, pageNumber, mode = "md", cfiRange) {
     await openAnnotationTarget(

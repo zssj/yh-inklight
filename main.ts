@@ -114,7 +114,12 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     );
     this.registerView(
       MARKDOWN_STATS_VIEW_TYPE,
-      (leaf) => new MarkdownStatsView(leaf, this.mdOpenStats, () => this.saveSettings(), (file) => this.openMarkdownNote(file)),
+      (leaf) =>
+        new MarkdownStatsView(leaf, {
+          getStats: () => this.mdOpenStats,
+          isTrackingEnabled: () => this.settings.mdOpenTracking,
+          onOpen: (file) => this.openMarkdownNote(file),
+        }),
     );
     // EPUB 目录左侧栏视图：仅手机端由 syncEpubTocLeaf 挂载/摘除
     this.registerView(EPUB_TOC_VIEW_TYPE, (leaf) => new EpubTocView(leaf));
@@ -222,6 +227,9 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     }
     if (this.statsSaveTimer !== null) {
       window.clearTimeout(this.statsSaveTimer);
+      this.statsSaveTimer = null;
+      // 卸载前尽力落盘，最多丢 1.5s 内的增量
+      void this.saveMdOpenStats();
     }
     if (this.epubTocSyncTimer !== null) {
       window.clearTimeout(this.epubTocSyncTimer);
@@ -512,6 +520,8 @@ export default class OverlayAnnotationsPlugin extends Plugin {
               delete stats[oldPath];
               this.debouncedSaveMdOpenStats();
             }
+            // 统计视图展示路径，即使该文件无统计记录也要刷新
+            this.refreshMarkdownStatsViews();
           }
           await this.refreshAnnotations();
           this.renameMigrationTimer = null;
@@ -544,6 +554,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
             delete stats[file.path];
             this.debouncedSaveMdOpenStats();
           }
+          this.refreshMarkdownStatsViews();
         }
       }),
     );

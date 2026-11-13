@@ -16324,6 +16324,43 @@ function findEpubFileFromExportPath(exportPath, app) {
 // src/views/markdownStatsView.ts
 var import_obsidian20 = require("obsidian");
 var MARKDOWN_STATS_VIEW_TYPE = "inklight-md-stats";
+var DAY_MS = 864e5;
+var REVIEW_LIMIT = 5;
+var REVIEW_CHECKPOINTS = [1, 7];
+function diffCalendarDays(now, then) {
+  const today = new Date(now);
+  const past = new Date(then);
+  if (Number.isNaN(today.getTime()) || Number.isNaN(past.getTime())) {
+    return Number.NaN;
+  }
+  today.setHours(0, 0, 0, 0);
+  past.setHours(0, 0, 0, 0);
+  return Math.round((today.getTime() - past.getTime()) / DAY_MS);
+}
+function computeReviewBuckets(entries, now, checkpoints = REVIEW_CHECKPOINTS, limit = REVIEW_LIMIT) {
+  const buckets = checkpoints.map((daysAgo) => ({ daysAgo, entries: [] }));
+  const byDays = new Map(buckets.map((bucket) => [bucket.daysAgo, bucket]));
+  for (const entry of entries) {
+    if (entry.openCount <= 0 || !(entry.lastOpenedAt > 0)) {
+      continue;
+    }
+    const daysAgo = diffCalendarDays(now, entry.lastOpenedAt);
+    const bucket = byDays.get(daysAgo);
+    if (!bucket) {
+      continue;
+    }
+    bucket.entries.push({ ...entry, daysAgo });
+  }
+  for (const bucket of buckets) {
+    bucket.entries.sort(
+      (a3, b3) => b3.openCount - a3.openCount || a3.file.basename.localeCompare(b3.file.basename, "zh-CN")
+    );
+    if (bucket.entries.length > limit) {
+      bucket.entries.length = limit;
+    }
+  }
+  return buckets;
+}
 var ConfirmDeleteModal = class extends import_obsidian20.Modal {
   constructor(app, file, onConfirm) {
     super(app);
@@ -16347,13 +16384,13 @@ var ConfirmDeleteModal = class extends import_obsidian20.Modal {
   }
 };
 var MarkdownStatsView = class extends import_obsidian20.ItemView {
-  constructor(leaf, stats, saveSettings, onOpen) {
+  constructor(leaf, options) {
     super(leaf);
     this.entries = [];
     this.ascending = true;
-    this.stats = stats;
-    this.saveSettings = saveSettings;
-    this.openCallback = onOpen;
+    this.getStats = options.getStats;
+    this.isTrackingEnabled = options.isTrackingEnabled;
+    this.openCallback = options.onOpen ?? null;
   }
   getViewType() {
     return MARKDOWN_STATS_VIEW_TYPE;
@@ -16375,6 +16412,7 @@ var MarkdownStatsView = class extends import_obsidian20.ItemView {
   }
   async render() {
     const container = this.contentEl;
+    const scrollTop = container.scrollTop;
     container.empty();
     container.addClass("yh-md-stats-view");
     const heading = container.createEl("h4", { cls: "md-stats-heading" });
@@ -16384,10 +16422,9 @@ var MarkdownStatsView = class extends import_obsidian20.ItemView {
       container.createEl("p", { cls: "md-stats-empty", text: "Vault \u4E2D\u6CA1\u6709 Markdown \u7B14\u8BB0\u3002" });
       return;
     }
-    this.buildControls(container);
-    this.listEl = container.createDiv({ cls: "md-stats-list" });
+    const stats = this.getStats();
     this.entries = files.map((file) => {
-      const stat = this.stats[file.path];
+      const stat = stats[file.path];
       return {
         file,
         openCount: stat?.openCount ?? 0,
@@ -16397,7 +16434,12 @@ var MarkdownStatsView = class extends import_obsidian20.ItemView {
     const total = this.entries.length;
     const opened = this.entries.filter((e3) => e3.openCount > 0).length;
     heading.setText(`\u{1F4CA} \u7B14\u8BB0\u4F7F\u7528\u7EDF\u8BA1 \xB7 \u5171 ${total} \u6761 \xB7 \u5DF2\u6253\u5F00 ${opened}`);
+    this.buildControls(container);
+    this.buildReviewSection(container);
+    this.buildAllListHeader(container, total);
+    this.listEl = container.createDiv({ cls: "md-stats-list" });
     this.applySort();
+    container.scrollTop = scrollTop;
   }
   buildControls(container) {
     const controls = container.createDiv({ cls: "md-stats-controls" });
@@ -16414,6 +16456,51 @@ var MarkdownStatsView = class extends import_obsidian20.ItemView {
   sortLabel() {
     return this.ascending ? "\u5347\u5E8F \u2191 \xB7 \u4ECE\u672A\u6253\u5F00\u5728\u524D" : "\u964D\u5E8F \u2193 \xB7 \u6253\u5F00\u6700\u591A\u5728\u524D";
   }
+  buildAllListHeader(container, total) {
+    const head = container.createDiv({ cls: "md-stats-section-head md-stats-section-head-all" });
+    head.createEl("div", { cls: "md-stats-section-title", text: "\u5168\u90E8\u7B14\u8BB0" });
+    head.createEl("div", { cls: "md-stats-section-hint", text: `${total} \u6761` });
+  }
+  /** 1 天 / 7 天复习卡：精确匹配自然日，空卡隐藏；两卡皆空时给一行提示 */
+  buildReviewSection(container) {
+    const hasHistory = this.entries.some((entry) => entry.openCount > 0);
+    if (!hasHistory) {
+      return;
+    }
+    if (!this.isTrackingEnabled()) {
+      container.createDiv({
+        cls: "md-stats-review-empty",
+        text: "\u6253\u5F00\u6B21\u6570\u7EDF\u8BA1\u5DF2\u5173\u95ED\uFF0C\u590D\u4E60\u5361\u7247\u6682\u4E0D\u53EF\u7528\u3002"
+      });
+      return;
+    }
+    const buckets = computeReviewBuckets(this.entries, Date.now()).filter(
+      (bucket) => bucket.entries.length > 0
+    );
+    if (buckets.length === 0) {
+      container.createDiv({
+        cls: "md-stats-review-empty",
+        text: "\u4ECA\u5929\u6CA1\u6709\u5230\u671F\u7684\u590D\u4E60\u7B14\u8BB0\u3002"
+      });
+      return;
+    }
+    for (const bucket of buckets) {
+      this.renderReviewCard(container, bucket);
+    }
+  }
+  renderReviewCard(container, bucket) {
+    const section = container.createDiv({ cls: "md-stats-section md-stats-review" });
+    const head = section.createDiv({ cls: "md-stats-section-head" });
+    head.createEl("div", { cls: "md-stats-section-title", text: `${bucket.daysAgo} \u5929\u590D\u4E60` });
+    head.createEl("div", {
+      cls: "md-stats-section-hint",
+      text: bucket.daysAgo === 1 ? "\u6628\u5929\u8BFB\u8FC7" : `${bucket.daysAgo} \u5929\u524D\u8BFB\u8FC7`
+    });
+    const list = section.createDiv({ cls: "md-stats-list md-stats-review-list" });
+    for (const entry of bucket.entries) {
+      this.renderItem(entry, list, entry.daysAgo);
+    }
+  }
   applySort() {
     if (!this.listEl) {
       return;
@@ -16427,19 +16514,32 @@ var MarkdownStatsView = class extends import_obsidian20.ItemView {
     });
     this.listEl.empty();
     for (const entry of this.entries) {
-      this.renderItem(entry);
+      this.renderItem(entry, this.listEl);
     }
   }
-  renderItem(entry) {
+  renderItem(entry, target, daysAgo) {
     const { file, openCount, lastOpenedAt } = entry;
-    const item = this.listEl.createDiv({ cls: "md-stats-item" });
+    const isReview = daysAgo !== void 0;
+    const item = target.createDiv({
+      cls: isReview ? "md-stats-item md-stats-review-item" : "md-stats-item"
+    });
     if (openCount === 0) {
       item.classList.add("md-stats-unopened");
     }
     const info = item.createDiv({ cls: "md-stats-info" });
     info.createEl("div", { cls: "md-stats-title", text: file.basename });
-    const lastOpen = lastOpenedAt > 0 ? ` \xB7 \u6700\u8FD1 ${new Date(lastOpenedAt).toLocaleDateString()}` : "";
-    info.createEl("div", { cls: "md-stats-path", text: `${file.path}${lastOpen}` });
+    const lastOpenLabel = lastOpenedAt > 0 ? new Date(lastOpenedAt).toLocaleDateString() : "";
+    if (isReview) {
+      info.createEl("div", {
+        cls: "md-stats-path md-stats-review-meta",
+        text: lastOpenLabel ? `\u4E0A\u6B21 ${lastOpenLabel}` : "\u4E0A\u6B21\u9605\u8BFB\u65F6\u95F4\u672A\u77E5"
+      });
+      item.title = file.path;
+    } else {
+      const recent = lastOpenLabel ? ` \xB7 \u6700\u8FD1 ${lastOpenLabel}` : "";
+      info.createEl("div", { cls: "md-stats-path", text: `${file.path}${recent}` });
+      item.title = file.path;
+    }
     item.createDiv({
       cls: `md-stats-badge${openCount > 0 ? " md-stats-badge-hot" : ""}`,
       text: `${openCount} \u6B21`
@@ -16454,7 +16554,7 @@ var MarkdownStatsView = class extends import_obsidian20.ItemView {
       void this.confirmDelete(file);
     });
     item.addEventListener("click", () => {
-      this.openCallback(file);
+      this.openCallback?.(file);
     });
   }
   async confirmDelete(file) {
@@ -16530,7 +16630,11 @@ var OverlayAnnotationsPlugin = class extends import_obsidian21.Plugin {
     );
     this.registerView(
       MARKDOWN_STATS_VIEW_TYPE,
-      (leaf) => new MarkdownStatsView(leaf, this.mdOpenStats, () => this.saveSettings(), (file) => this.openMarkdownNote(file))
+      (leaf) => new MarkdownStatsView(leaf, {
+        getStats: () => this.mdOpenStats,
+        isTrackingEnabled: () => this.settings.mdOpenTracking,
+        onOpen: (file) => this.openMarkdownNote(file)
+      })
     );
     this.registerView(EPUB_TOC_VIEW_TYPE, (leaf) => new EpubTocView(leaf));
     this.app.workspace.onLayoutReady(() => this.scheduleEpubTocSync());
@@ -16630,6 +16734,8 @@ var OverlayAnnotationsPlugin = class extends import_obsidian21.Plugin {
     }
     if (this.statsSaveTimer !== null) {
       window.clearTimeout(this.statsSaveTimer);
+      this.statsSaveTimer = null;
+      void this.saveMdOpenStats();
     }
     if (this.epubTocSyncTimer !== null) {
       window.clearTimeout(this.epubTocSyncTimer);
@@ -16885,6 +16991,7 @@ ${lines.slice(0, 8).join("\n")}`);
               delete stats[oldPath];
               this.debouncedSaveMdOpenStats();
             }
+            this.refreshMarkdownStatsViews();
           }
           await this.refreshAnnotations();
           this.renameMigrationTimer = null;
@@ -16913,6 +17020,7 @@ ${lines.slice(0, 8).join("\n")}`);
             delete stats[file.path];
             this.debouncedSaveMdOpenStats();
           }
+          this.refreshMarkdownStatsViews();
         }
       })
     );

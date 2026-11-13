@@ -2754,6 +2754,64 @@ a.yh-epub-goto-link:hover {
   color: var(--color-red, #e53935);
 }
 
+/* ============================================================
+   Markdown 统计：复习卡片分节
+   ============================================================ */
+
+.yh-md-stats-view .md-stats-section {
+  margin-bottom: 12px;
+}
+
+.yh-md-stats-view .md-stats-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 2px 8px;
+}
+
+.yh-md-stats-view .md-stats-section-head-all {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--yh-border);
+}
+
+.yh-md-stats-view .md-stats-section-title {
+  font-size: var(--yh-font-sm);
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.yh-md-stats-view .md-stats-section-hint {
+  flex-shrink: 0;
+  font-size: var(--yh-font-xs);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.yh-md-stats-view .md-stats-review {
+  padding: 8px 8px 10px;
+  border: 1px solid var(--yh-border);
+  border-radius: var(--yh-radius-sm);
+  background: var(--background-secondary);
+}
+
+.yh-md-stats-view .md-stats-review-empty {
+  padding: 2px 2px 8px;
+  font-size: var(--yh-font-xs);
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+
+.md-stats-item.md-stats-review-item {
+  border-color: transparent;
+  background: var(--background-primary);
+}
+
+.md-stats-item.md-stats-review-item .md-stats-review-meta {
+  color: var(--text-muted);
+}
+
 .yh-md-stats-modal-actions {
   display: flex;
   gap: 8px;

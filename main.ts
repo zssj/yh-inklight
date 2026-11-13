@@ -118,7 +118,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
         new MarkdownStatsView(leaf, {
           getStats: () => this.mdOpenStats,
           isTrackingEnabled: () => this.settings.mdOpenTracking,
-          onOpen: (file) => this.openMarkdownNote(file),
+          onOpen: (file, options) => this.openMarkdownNote(file, options),
         }),
     );
     // EPUB 目录左侧栏视图：仅手机端由 syncEpubTocLeaf 挂载/摘除
@@ -977,10 +977,37 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     }
   }
 
-  async openMarkdownNote(file: TFile): Promise<void> {
+  async openMarkdownNote(file: TFile, options?: { forceCount?: boolean }): Promise<void> {
     const leaf = this.app.workspace.getLeaf("tab");
     await leaf.openFile(file);
     this.app.workspace.revealLeaf(leaf);
+    if (options?.forceCount) {
+      this.ensureMarkdownOpenCounted(file);
+    }
+  }
+
+  /**
+   * 复习卡点击兜底计数：60s 冷却会吃掉 file-open 的计数，导致条目不移出卡片。
+   * openFile 之后检查，若刚才没有写入（lastOpenedAt 仍是旧的）则补记一次。
+   */
+  private ensureMarkdownOpenCounted(file: TFile): void {
+    if (!this.settings.mdOpenTracking || file.extension.toLowerCase() !== "md") {
+      return;
+    }
+    const now = Date.now();
+    const existing = this.mdOpenStats[file.path];
+    // file-open 已正常计数：lastOpenedAt 在数秒内 → 不再重复记
+    if (existing && now - (Date.parse(existing.lastOpenedAt) || 0) < 5_000) {
+      return;
+    }
+    this.mdOpenStats[file.path] = {
+      openCount: (existing?.openCount ?? 0) + 1,
+      lastOpenedAt: new Date(now).toISOString(),
+    };
+    this.lastCountedPath = file.path;
+    this.lastCountedAt = now;
+    this.debouncedSaveMdOpenStats();
+    this.refreshMarkdownStatsViews();
   }
 
   /**

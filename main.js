@@ -16326,7 +16326,12 @@ var import_obsidian20 = require("obsidian");
 var MARKDOWN_STATS_VIEW_TYPE = "inklight-md-stats";
 var DAY_MS = 864e5;
 var REVIEW_LIMIT = 5;
-var REVIEW_CHECKPOINTS = [1, 7];
+var REVIEW_RULES = [
+  { kind: "day1", title: "1 \u5929\u590D\u4E60", hint: "\u53EA\u8BFB\u8FC7 1 \u6B21" },
+  { kind: "day7", title: "7 \u5929\u590D\u4E60", hint: "\u5DF2\u590D\u4E60\u8FC7" },
+  { kind: "lastMonth", title: "\u4E0A\u6708\u4ECA\u65E5", hint: "\u4E0A\u4E2A\u6708\u7684\u540C\u4E00\u5929" },
+  { kind: "lastYear", title: "\u53BB\u5E74\u4ECA\u65E5", hint: "\u53BB\u5E74\u7684\u540C\u4E00\u5929" }
+];
 function diffCalendarDays(now, then) {
   const today = new Date(now);
   const past = new Date(then);
@@ -16337,29 +16342,85 @@ function diffCalendarDays(now, then) {
   past.setHours(0, 0, 0, 0);
   return Math.round((today.getTime() - past.getTime()) / DAY_MS);
 }
-function computeReviewBuckets(entries, now, checkpoints = REVIEW_CHECKPOINTS, limit = REVIEW_LIMIT) {
-  const buckets = checkpoints.map((daysAgo) => ({ daysAgo, entries: [] }));
-  const byDays = new Map(buckets.map((bucket) => [bucket.daysAgo, bucket]));
-  for (const entry of entries) {
-    if (entry.openCount <= 0 || !(entry.lastOpenedAt > 0)) {
-      continue;
-    }
-    const daysAgo = diffCalendarDays(now, entry.lastOpenedAt);
-    const bucket = byDays.get(daysAgo);
-    if (!bucket) {
-      continue;
-    }
-    bucket.entries.push({ ...entry, daysAgo });
+function isValidYmd(y3, m3, d2) {
+  const dt2 = new Date(y3, m3, d2);
+  return dt2.getFullYear() === y3 && dt2.getMonth() === m3 && dt2.getDate() === d2;
+}
+function lastMonthSameDay(now) {
+  const y3 = now.getFullYear();
+  const m3 = now.getMonth();
+  const prevY = m3 === 0 ? y3 - 1 : y3;
+  const prevM = m3 === 0 ? 11 : m3 - 1;
+  const d2 = now.getDate();
+  return isValidYmd(prevY, prevM, d2) ? { y: prevY, m: prevM, d: d2 } : null;
+}
+function lastYearSameDay(now) {
+  const y3 = now.getFullYear() - 1;
+  const m3 = now.getMonth();
+  const d2 = now.getDate();
+  return isValidYmd(y3, m3, d2) ? { y: y3, m: m3, d: d2 } : null;
+}
+function isSameYmd(date, target) {
+  return date.getFullYear() === target.y && date.getMonth() === target.m && date.getDate() === target.d;
+}
+function classifyReview(entry, now) {
+  if (entry.openCount <= 0 || !(entry.lastOpenedAt > 0)) {
+    return null;
   }
-  for (const bucket of buckets) {
-    bucket.entries.sort(
+  const past = new Date(entry.lastOpenedAt);
+  if (Number.isNaN(past.getTime())) {
+    return null;
+  }
+  const daysAgo = diffCalendarDays(now.getTime(), entry.lastOpenedAt);
+  if (!Number.isFinite(daysAgo) || daysAgo < 0) {
+    return null;
+  }
+  if (entry.openCount === 1 && daysAgo === 1) {
+    return { kind: "day1", daysAgo };
+  }
+  if (entry.openCount >= 2 && daysAgo === 7) {
+    return { kind: "day7", daysAgo };
+  }
+  const lastMonth = lastMonthSameDay(now);
+  if (lastMonth && isSameYmd(past, lastMonth)) {
+    return { kind: "lastMonth", daysAgo };
+  }
+  const lastYear = lastYearSameDay(now);
+  if (lastYear && isSameYmd(past, lastYear)) {
+    return { kind: "lastYear", daysAgo };
+  }
+  return null;
+}
+function computeReviewBuckets(entries, now, limit = REVIEW_LIMIT) {
+  const grouped = /* @__PURE__ */ new Map();
+  for (const rule of REVIEW_RULES) {
+    grouped.set(rule.kind, []);
+  }
+  for (const entry of entries) {
+    const hit = classifyReview(entry, now);
+    if (!hit) {
+      continue;
+    }
+    const bucket = grouped.get(hit.kind);
+    if (bucket) {
+      bucket.push({ ...entry, daysAgo: hit.daysAgo });
+    }
+  }
+  const result = [];
+  for (const rule of REVIEW_RULES) {
+    const list = grouped.get(rule.kind) ?? [];
+    if (list.length === 0) {
+      continue;
+    }
+    list.sort(
       (a3, b3) => b3.openCount - a3.openCount || a3.file.basename.localeCompare(b3.file.basename, "zh-CN")
     );
-    if (bucket.entries.length > limit) {
-      bucket.entries.length = limit;
+    if (list.length > limit) {
+      list.length = limit;
     }
+    result.push({ kind: rule.kind, title: rule.title, hint: rule.hint, entries: list });
   }
-  return buckets;
+  return result;
 }
 var ConfirmDeleteModal = class extends import_obsidian20.Modal {
   constructor(app, file, onConfirm) {
@@ -16461,7 +16522,7 @@ var MarkdownStatsView = class extends import_obsidian20.ItemView {
     head.createEl("div", { cls: "md-stats-section-title", text: "\u5168\u90E8\u7B14\u8BB0" });
     head.createEl("div", { cls: "md-stats-section-hint", text: `${total} \u6761` });
   }
-  /** 1 天 / 7 天复习卡：精确匹配自然日，空卡隐藏；两卡皆空时给一行提示 */
+  /** 四张复习卡：严格「恰好」命中，空卡隐藏；四卡皆空时给一行提示 */
   buildReviewSection(container) {
     const hasHistory = this.entries.some((entry) => entry.openCount > 0);
     if (!hasHistory) {
@@ -16474,9 +16535,7 @@ var MarkdownStatsView = class extends import_obsidian20.ItemView {
       });
       return;
     }
-    const buckets = computeReviewBuckets(this.entries, Date.now()).filter(
-      (bucket) => bucket.entries.length > 0
-    );
+    const buckets = computeReviewBuckets(this.entries, /* @__PURE__ */ new Date());
     if (buckets.length === 0) {
       container.createDiv({
         cls: "md-stats-review-empty",
@@ -16491,11 +16550,8 @@ var MarkdownStatsView = class extends import_obsidian20.ItemView {
   renderReviewCard(container, bucket) {
     const section = container.createDiv({ cls: "md-stats-section md-stats-review" });
     const head = section.createDiv({ cls: "md-stats-section-head" });
-    head.createEl("div", { cls: "md-stats-section-title", text: `${bucket.daysAgo} \u5929\u590D\u4E60` });
-    head.createEl("div", {
-      cls: "md-stats-section-hint",
-      text: bucket.daysAgo === 1 ? "\u6628\u5929\u8BFB\u8FC7" : `${bucket.daysAgo} \u5929\u524D\u8BFB\u8FC7`
-    });
+    head.createEl("div", { cls: "md-stats-section-title", text: bucket.title });
+    head.createEl("div", { cls: "md-stats-section-hint", text: bucket.hint });
     const list = section.createDiv({ cls: "md-stats-list md-stats-review-list" });
     for (const entry of bucket.entries) {
       this.renderItem(entry, list, entry.daysAgo);
@@ -16517,9 +16573,9 @@ var MarkdownStatsView = class extends import_obsidian20.ItemView {
       this.renderItem(entry, this.listEl);
     }
   }
-  renderItem(entry, target, daysAgo) {
+  renderItem(entry, target, reviewDaysAgo) {
     const { file, openCount, lastOpenedAt } = entry;
-    const isReview = daysAgo !== void 0;
+    const isReview = reviewDaysAgo !== void 0;
     const item = target.createDiv({
       cls: isReview ? "md-stats-item md-stats-review-item" : "md-stats-item"
     });
@@ -16528,17 +16584,17 @@ var MarkdownStatsView = class extends import_obsidian20.ItemView {
     }
     const info = item.createDiv({ cls: "md-stats-info" });
     info.createEl("div", { cls: "md-stats-title", text: file.basename });
+    item.title = file.path;
     const lastOpenLabel = lastOpenedAt > 0 ? new Date(lastOpenedAt).toLocaleDateString() : "";
     if (isReview) {
+      const suffix = lastOpenLabel ? ` \xB7 \u4E0A\u6B21 ${lastOpenLabel}` : "";
       info.createEl("div", {
         cls: "md-stats-path md-stats-review-meta",
-        text: lastOpenLabel ? `\u4E0A\u6B21 ${lastOpenLabel}` : "\u4E0A\u6B21\u9605\u8BFB\u65F6\u95F4\u672A\u77E5"
+        text: `\u95F4\u9694 ${reviewDaysAgo} \u5929${suffix}`
       });
-      item.title = file.path;
     } else {
       const recent = lastOpenLabel ? ` \xB7 \u6700\u8FD1 ${lastOpenLabel}` : "";
       info.createEl("div", { cls: "md-stats-path", text: `${file.path}${recent}` });
-      item.title = file.path;
     }
     item.createDiv({
       cls: `md-stats-badge${openCount > 0 ? " md-stats-badge-hot" : ""}`,
@@ -16554,7 +16610,7 @@ var MarkdownStatsView = class extends import_obsidian20.ItemView {
       void this.confirmDelete(file);
     });
     item.addEventListener("click", () => {
-      this.openCallback?.(file);
+      this.openCallback?.(file, isReview ? { forceCount: true } : void 0);
     });
   }
   async confirmDelete(file) {
@@ -16633,7 +16689,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian21.Plugin {
       (leaf) => new MarkdownStatsView(leaf, {
         getStats: () => this.mdOpenStats,
         isTrackingEnabled: () => this.settings.mdOpenTracking,
-        onOpen: (file) => this.openMarkdownNote(file)
+        onOpen: (file, options) => this.openMarkdownNote(file, options)
       })
     );
     this.registerView(EPUB_TOC_VIEW_TYPE, (leaf) => new EpubTocView(leaf));
@@ -17380,10 +17436,35 @@ ${lines.slice(0, 8).join("\n")}`);
       view.refresh();
     }
   }
-  async openMarkdownNote(file) {
+  async openMarkdownNote(file, options) {
     const leaf = this.app.workspace.getLeaf("tab");
     await leaf.openFile(file);
     this.app.workspace.revealLeaf(leaf);
+    if (options?.forceCount) {
+      this.ensureMarkdownOpenCounted(file);
+    }
+  }
+  /**
+   * 复习卡点击兜底计数：60s 冷却会吃掉 file-open 的计数，导致条目不移出卡片。
+   * openFile 之后检查，若刚才没有写入（lastOpenedAt 仍是旧的）则补记一次。
+   */
+  ensureMarkdownOpenCounted(file) {
+    if (!this.settings.mdOpenTracking || file.extension.toLowerCase() !== "md") {
+      return;
+    }
+    const now = Date.now();
+    const existing = this.mdOpenStats[file.path];
+    if (existing && now - (Date.parse(existing.lastOpenedAt) || 0) < 5e3) {
+      return;
+    }
+    this.mdOpenStats[file.path] = {
+      openCount: (existing?.openCount ?? 0) + 1,
+      lastOpenedAt: new Date(now).toISOString()
+    };
+    this.lastCountedPath = file.path;
+    this.lastCountedAt = now;
+    this.debouncedSaveMdOpenStats();
+    this.refreshMarkdownStatsViews();
   }
   /**
    * 打开 EPUB 文件并导航到指定 CFI 位置。

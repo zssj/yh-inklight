@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Obsidian ItemView/Modal API、storage/types 的打开次数统计
- * [OUTPUT]: 提供 MarkdownStatsView，按打开次数展示全库 md 笔记，并在顶部按遗忘曲线提供 1 天 / 7 天 复习卡片（各 Top 5）
+ * [OUTPUT]: 提供 MarkdownStatsView，按打开次数展示全库 md 笔记，并在顶部提供 1 天/7 天/上月今日/去年今日 四张复习卡片（各 Top 5）
  * [POS]: Markdown 笔记使用统计侧栏视图
  */
 
@@ -12,8 +12,23 @@ export const MARKDOWN_STATS_VIEW_TYPE = "inklight-md-stats";
 const DAY_MS = 86_400_000;
 /** 每张复习卡片最多展示条数 */
 export const REVIEW_LIMIT = 5;
-/** 遗忘曲线检查点（自然日）：1 天 / 7 天 */
-export const REVIEW_CHECKPOINTS = [1, 7] as const;
+
+/** 四类复习卡：两张间隔卡 + 两张日历追溯卡 */
+export type ReviewKind = "day1" | "day7" | "lastMonth" | "lastYear";
+
+interface ReviewRule {
+  kind: ReviewKind;
+  title: string;
+  hint: string;
+}
+
+/** 渲染顺序即数组顺序 */
+export const REVIEW_RULES: readonly ReviewRule[] = [
+  { kind: "day1", title: "1 天复习", hint: "只读过 1 次" },
+  { kind: "day7", title: "7 天复习", hint: "已复习过" },
+  { kind: "lastMonth", title: "上月今日", hint: "上个月的同一天" },
+  { kind: "lastYear", title: "去年今日", hint: "去年的同一天" },
+];
 
 export interface StatsEntry {
   file: TFile;
@@ -22,13 +37,21 @@ export interface StatsEntry {
 }
 
 export interface ReviewEntry extends StatsEntry {
-  /** 上次阅读距今的自然日数，精确等于某个检查点 */
+  /** 上次阅读距今的自然日数 */
   daysAgo: number;
 }
 
 export interface ReviewBucket {
-  daysAgo: number;
+  kind: ReviewKind;
+  title: string;
+  hint: string;
   entries: ReviewEntry[];
+}
+
+interface Ymd {
+  y: number;
+  m: number;
+  d: number;
 }
 
 /** 本地自然日差：今天零点 - 上次阅读零点；非法时间返回 NaN */
@@ -43,42 +66,118 @@ export function diffCalendarDays(now: number, then: number): number {
   return Math.round((today.getTime() - past.getTime()) / DAY_MS);
 }
 
+/** 该年月日是否存在（用于排除 2/31、平年 2/29 这类溢出日期） */
+function isValidYmd(y: number, m: number, d: number): boolean {
+  const dt = new Date(y, m, d);
+  return dt.getFullYear() === y && dt.getMonth() === m && dt.getDate() === d;
+}
+
+/** 上个月的同一天；该日不存在（如 3/31 的上月今日）返回 null */
+function lastMonthSameDay(now: Date): Ymd | null {
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const prevY = m === 0 ? y - 1 : y;
+  const prevM = m === 0 ? 11 : m - 1;
+  const d = now.getDate();
+  return isValidYmd(prevY, prevM, d) ? { y: prevY, m: prevM, d } : null;
+}
+
+/** 去年的同一天；闰日无对应（如平年无 2/29）返回 null */
+function lastYearSameDay(now: Date): Ymd | null {
+  const y = now.getFullYear() - 1;
+  const m = now.getMonth();
+  const d = now.getDate();
+  return isValidYmd(y, m, d) ? { y, m, d } : null;
+}
+
+function isSameYmd(date: Date, target: Ymd): boolean {
+  return date.getFullYear() === target.y && date.getMonth() === target.m && date.getDate() === target.d;
+}
+
 /**
- * 按检查点分组：只收「恰好 1 天 / 恰好 7 天」读过的笔记，互斥且精确。
- * 桶内按打开次数降序、同次数按标题中文排序，各截断到 limit 条。
+ * 判定一条笔记归属哪张复习卡，互斥（最多命中一张）。
+ * - 1 天卡：只读过 1 次，且自然日差恰好 1
+ * - 7 天卡：读过 2 次及以上，且自然日差恰好 7
+ * - 上月今日 / 去年今日：日历同号，不限打开次数
+ */
+export function classifyReview(
+  entry: StatsEntry,
+  now: Date,
+): { kind: ReviewKind; daysAgo: number } | null {
+  if (entry.openCount <= 0 || !(entry.lastOpenedAt > 0)) {
+    return null;
+  }
+  const past = new Date(entry.lastOpenedAt);
+  if (Number.isNaN(past.getTime())) {
+    return null;
+  }
+  const daysAgo = diffCalendarDays(now.getTime(), entry.lastOpenedAt);
+  if (!Number.isFinite(daysAgo) || daysAgo < 0) {
+    return null;
+  }
+
+  if (entry.openCount === 1 && daysAgo === 1) {
+    return { kind: "day1", daysAgo };
+  }
+  if (entry.openCount >= 2 && daysAgo === 7) {
+    return { kind: "day7", daysAgo };
+  }
+
+  const lastMonth = lastMonthSameDay(now);
+  if (lastMonth && isSameYmd(past, lastMonth)) {
+    return { kind: "lastMonth", daysAgo };
+  }
+
+  const lastYear = lastYearSameDay(now);
+  if (lastYear && isSameYmd(past, lastYear)) {
+    return { kind: "lastYear", daysAgo };
+  }
+
+  return null;
+}
+
+/**
+ * 按 REVIEW_RULES 顺序分组，丢弃空桶，每桶按打开次数降序截断到 limit。
+ * 精确匹配下桶内日差相同，故另以标题做稳定次序。
  */
 export function computeReviewBuckets(
   entries: readonly StatsEntry[],
-  now: number,
-  checkpoints: readonly number[] = REVIEW_CHECKPOINTS,
+  now: Date,
   limit: number = REVIEW_LIMIT,
 ): ReviewBucket[] {
-  const buckets: ReviewBucket[] = checkpoints.map((daysAgo) => ({ daysAgo, entries: [] }));
-  const byDays = new Map<number, ReviewBucket>(buckets.map((bucket) => [bucket.daysAgo, bucket]));
-
-  for (const entry of entries) {
-    if (entry.openCount <= 0 || !(entry.lastOpenedAt > 0)) {
-      continue;
-    }
-    const daysAgo = diffCalendarDays(now, entry.lastOpenedAt);
-    const bucket = byDays.get(daysAgo);
-    if (!bucket) {
-      continue;
-    }
-    bucket.entries.push({ ...entry, daysAgo });
+  const grouped = new Map<ReviewKind, ReviewEntry[]>();
+  for (const rule of REVIEW_RULES) {
+    grouped.set(rule.kind, []);
   }
 
-  for (const bucket of buckets) {
-    bucket.entries.sort(
+  for (const entry of entries) {
+    const hit = classifyReview(entry, now);
+    if (!hit) {
+      continue;
+    }
+    const bucket = grouped.get(hit.kind);
+    if (bucket) {
+      bucket.push({ ...entry, daysAgo: hit.daysAgo });
+    }
+  }
+
+  const result: ReviewBucket[] = [];
+  for (const rule of REVIEW_RULES) {
+    const list = grouped.get(rule.kind) ?? [];
+    if (list.length === 0) {
+      continue;
+    }
+    list.sort(
       (a, b) =>
         b.openCount - a.openCount ||
         a.file.basename.localeCompare(b.file.basename, "zh-CN"),
     );
-    if (bucket.entries.length > limit) {
-      bucket.entries.length = limit;
+    if (list.length > limit) {
+      list.length = limit;
     }
+    result.push({ kind: rule.kind, title: rule.title, hint: rule.hint, entries: list });
   }
-  return buckets;
+  return result;
 }
 
 /** 删除确认弹窗 */
@@ -113,13 +212,13 @@ export interface MarkdownStatsViewOptions {
   /** 每次读取都取插件当前引用，避免清空统计后视图仍读旧对象 */
   getStats: () => Record<string, MdOpenStat>;
   isTrackingEnabled: () => boolean;
-  onOpen?: (file: TFile) => void;
+  onOpen?: (file: TFile, options?: { forceCount?: boolean }) => void;
 }
 
 export class MarkdownStatsView extends ItemView {
   private readonly getStats: () => Record<string, MdOpenStat>;
   private readonly isTrackingEnabled: () => boolean;
-  private readonly openCallback: ((file: TFile) => void) | null;
+  private readonly openCallback: ((file: TFile, options?: { forceCount?: boolean }) => void) | null;
   private entries: StatsEntry[] = [];
   private ascending = true;
   private listEl!: HTMLElement;
@@ -216,7 +315,7 @@ export class MarkdownStatsView extends ItemView {
     head.createEl("div", { cls: "md-stats-section-hint", text: `${total} 条` });
   }
 
-  /** 1 天 / 7 天复习卡：精确匹配自然日，空卡隐藏；两卡皆空时给一行提示 */
+  /** 四张复习卡：严格「恰好」命中，空卡隐藏；四卡皆空时给一行提示 */
   private buildReviewSection(container: HTMLElement): void {
     const hasHistory = this.entries.some((entry) => entry.openCount > 0);
     if (!hasHistory) {
@@ -231,9 +330,7 @@ export class MarkdownStatsView extends ItemView {
       return;
     }
 
-    const buckets = computeReviewBuckets(this.entries, Date.now()).filter(
-      (bucket) => bucket.entries.length > 0,
-    );
+    const buckets = computeReviewBuckets(this.entries, new Date());
 
     if (buckets.length === 0) {
       container.createDiv({
@@ -251,11 +348,8 @@ export class MarkdownStatsView extends ItemView {
   private renderReviewCard(container: HTMLElement, bucket: ReviewBucket): void {
     const section = container.createDiv({ cls: "md-stats-section md-stats-review" });
     const head = section.createDiv({ cls: "md-stats-section-head" });
-    head.createEl("div", { cls: "md-stats-section-title", text: `${bucket.daysAgo} 天复习` });
-    head.createEl("div", {
-      cls: "md-stats-section-hint",
-      text: bucket.daysAgo === 1 ? "昨天读过" : `${bucket.daysAgo} 天前读过`,
-    });
+    head.createEl("div", { cls: "md-stats-section-title", text: bucket.title });
+    head.createEl("div", { cls: "md-stats-section-hint", text: bucket.hint });
 
     const list = section.createDiv({ cls: "md-stats-list md-stats-review-list" });
     for (const entry of bucket.entries) {
@@ -281,9 +375,9 @@ export class MarkdownStatsView extends ItemView {
     }
   }
 
-  private renderItem(entry: StatsEntry, target: HTMLElement, daysAgo?: number): void {
+  private renderItem(entry: StatsEntry, target: HTMLElement, reviewDaysAgo?: number): void {
     const { file, openCount, lastOpenedAt } = entry;
-    const isReview = daysAgo !== undefined;
+    const isReview = reviewDaysAgo !== undefined;
 
     const item = target.createDiv({
       cls: isReview ? "md-stats-item md-stats-review-item" : "md-stats-item",
@@ -294,18 +388,18 @@ export class MarkdownStatsView extends ItemView {
 
     const info = item.createDiv({ cls: "md-stats-info" });
     info.createEl("div", { cls: "md-stats-title", text: file.basename });
+    item.title = file.path;
 
     const lastOpenLabel = lastOpenedAt > 0 ? new Date(lastOpenedAt).toLocaleDateString() : "";
     if (isReview) {
+      const suffix = lastOpenLabel ? ` · 上次 ${lastOpenLabel}` : "";
       info.createEl("div", {
         cls: "md-stats-path md-stats-review-meta",
-        text: lastOpenLabel ? `上次 ${lastOpenLabel}` : "上次阅读时间未知",
+        text: `间隔 ${reviewDaysAgo} 天${suffix}`,
       });
-      item.title = file.path;
     } else {
       const recent = lastOpenLabel ? ` · 最近 ${lastOpenLabel}` : "";
       info.createEl("div", { cls: "md-stats-path", text: `${file.path}${recent}` });
-      item.title = file.path;
     }
 
     item.createDiv({
@@ -324,7 +418,8 @@ export class MarkdownStatsView extends ItemView {
     });
 
     item.addEventListener("click", () => {
-      this.openCallback?.(file);
+      // 复习卡点击：绕过 60s 冷却强制计数，否则条目不会移出卡片
+      this.openCallback?.(file, isReview ? { forceCount: true } : undefined);
     });
   }
 

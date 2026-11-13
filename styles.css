@@ -2787,6 +2787,9 @@ a.yh-epub-goto-link:hover {
   font-size: var(--yh-font-xs);
   color: var(--text-faint);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 58%;
 }
 
 .yh-md-stats-view .md-stats-review {

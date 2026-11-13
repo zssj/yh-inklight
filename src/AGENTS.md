@@ -13,7 +13,7 @@ pdf/pdfViewerAdapter.ts: Obsidian 原生 PDF viewer 适配层，封装当前页�
 storage/types.ts: sidecar JSON、设置、锚点、高亮、便签、代码选区标记、索引的类型真相源。
 storage/annotationStore.ts: .obsidian-annotations 持久化后端，读写文件 JSON 与全局 index。
 views/annotationPopover.ts: 窄屏与阅读模式弹层，点击高亮后展示 sidecar 中的高亮和便签内容。
-views/markdownStatsView.ts: 笔记使用统计视图，列出全库 md 笔记并支持跳转/删除；顶部按遗忘曲线提供 1 天 / 7 天 复习卡片，自然日精确匹配、各 Top 5。
+views/markdownStatsView.ts: 笔记使用统计视图，列出全库 md 笔记并支持跳转/删除；顶部提供 1 天复习（openCount==1）/ 7 天复习（openCount>=2）/ 上月今日 / 去年今日 四张卡片，日差精确匹配、各 Top 5。
 views/sidebarView.ts: 右侧总览面板，使用彩色卡片合并 highlight 与关联 note，并承载搜索、过滤、排序、导出、跳转与内联编辑。
 views/stickyNoteLane.ts: 编辑/阅读模式的便签泳道，基于 positioning 布局算法渲染可编辑便签条，支持窄屏自适应。
 views/stickyNoteView.ts: 兼容型便利贴卡片组件，保留 Markdown 渲染、折叠与编辑。

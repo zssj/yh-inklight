@@ -11,7 +11,7 @@ EpubTocView.ts: 目录侧栏，构建 TOC 树、随阅读位置高亮当前章�
 EpubChapterResolver.ts: TOC/spine 章节解析，把 TOC 链接解析为 spine index，规范化 CFI 与进度百分比（0–1）。
 EpubProgressManager.ts: 死代码——全仓无引用，勿改动勿依赖（进度恢复逻辑已在 EpubReaderView 内实现）。
 EpubAnnotationCard.ts: 点击高亮/便签后弹出的标注卡片，展示原文、想法、只读标签 chip 与删除动作。
-EpubNoteModal.ts: 便签/想法输入弹窗，移动端用 visualViewport 定位避开键盘；提交前 flush 标签输入框里未回车的文本。
+EpubNoteModal.ts: 便签/想法输入弹窗，移动端用 visualViewport 定位避开键盘；提交前 flush 标签输入框里未回车的文本；补全候选为 TagSuggestion[]（带来源）。
 EpubAiModal.ts: AI 解释/翻译/改写弹窗，内置动作预设与自定义提问，回复可存为便签。
 EpubImageViewer.ts: EPUB 内图片全屏放大查看器，点击放大、再点/Esc 关闭。
 EpubGotoHandler.ts: 导出批注 Markdown 的回链处理器，点击「回到原文」callout 链接跳回 EPUB 对应 CFI。

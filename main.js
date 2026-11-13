@@ -8519,6 +8519,8 @@ var DEFAULT_SETTINGS = {
   pdfProgressTracking: true,
   // Markdown 打开统计
   mdOpenTracking: true,
+  // 与 Obsidian 标签互通（默认关，保持既有导出内容不变）
+  obTagBridge: false,
   // EPUB 手机端沉浸式导航栏
   epubHideMobileNavbar: true,
   epubMobileBottomInset: 32,
@@ -9846,7 +9848,19 @@ var AnnotationSettingsTab = class extends import_obsidian7.PluginSettingTab {
     this.renderEpubSettings();
     this.renderAiSettings();
     this.renderMarkdownStatsSettings();
+    this.renderTagBridgeSettings();
     this.renderDataMaintenanceSettings();
+  }
+  /** 与 Obsidian 标签互通：默认关闭，保持既有导出内容逐字不变 */
+  renderTagBridgeSettings() {
+    const { containerEl } = this;
+    containerEl.createEl("h3", { text: "\u6807\u7B7E\u4E92\u901A" });
+    new import_obsidian7.Setting(containerEl).setName("\u4E0E Obsidian \u6807\u7B7E\u4E92\u901A").setDesc("\u5F00\u542F\u540E\uFF1A\u6807\u7B7E\u8865\u5168\u5019\u9009\u5E76\u5165 Obsidian \u6807\u7B7E\uFF08\u5F53\u524D\u6587\u6863\u6807\u7B7E\u7F6E\u9876\uFF09\uFF1B\u5BFC\u51FA\u7684\u6279\u6CE8\u7B14\u8BB0\u5199\u5165 frontmatter tags \u4E0E\u6B63\u6587 #\u6807\u7B7E\uFF0C\u53EF\u88AB\u6807\u7B7E\u9762\u677F\u3001\u641C\u7D22\u548C Dataview \u68C0\u7D22\u3002\u53EA\u5199\u63D2\u4EF6\u81EA\u5DF1\u751F\u6210\u7684\u5BFC\u51FA\u7B14\u8BB0\uFF0C\u4E0D\u4FEE\u6539\u539F\u6587\u6863\u3002").addToggle((toggle) => {
+      toggle.setValue(this.plugin.settings.obTagBridge).onChange(async (value) => {
+        this.plugin.settings.obTagBridge = value;
+        await this.plugin.saveSettings();
+      });
+    });
   }
   /** EPUB 阅读相关设置：字号 / 正文字体 / 主题 / 翻页 / 高亮样式 / 摘录目录 / 段落模式 / 脚注 / 回显 */
   renderEpubSettings() {
@@ -10154,12 +10168,47 @@ function hasTag(tags, key) {
 function sortTagKeys(keys) {
   return Array.from(new Set(keys.filter((key) => !!key))).sort((left, right) => left.localeCompare(right));
 }
+var OB_WHITESPACE = /\s+/g;
+var OB_PUNCTUATION = /[^\p{L}\p{N}/_-]+/gu;
+var OB_NUMERIC_PREFIX = "tag-";
+function toObsidianTag(raw) {
+  const base = normalizeTag(raw);
+  if (!base) {
+    return null;
+  }
+  const segments = base.split("/").map(
+    (part) => part.replace(OB_WHITESPACE, "-").replace(OB_PUNCTUATION, "").replace(/-+/g, "-").replace(/^-+|-+$/g, "").toLowerCase()
+  ).filter((part) => part.length > 0);
+  const result = segments.join("/");
+  if (!result) {
+    return null;
+  }
+  return /^\d+$/.test(result.replace(/[/\-_]/g, "")) ? `${OB_NUMERIC_PREFIX}${result}` : result;
+}
+function toObsidianTags(input) {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  const result = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const item of input) {
+    const tag = toObsidianTag(item);
+    if (!tag || seen.has(tag)) {
+      continue;
+    }
+    seen.add(tag);
+    result.push(tag);
+  }
+  return result;
+}
 
 // src/storage/annotationStore.ts
 var STORE_DIR = ".obsidian-annotations";
 var INDEX_PATH = (0, import_obsidian8.normalizePath)(`${STORE_DIR}/index.json`);
 var MAX_LEGACY_SIDECAR_NAME_LENGTH = 180;
 var MAX_COMPACT_SIDECAR_PREFIX_LENGTH = 96;
+var TAG_BLOCK_START = "  # inklight:tags:start";
+var TAG_BLOCK_END = "  # inklight:tags:end";
 var AnnotationStoreReadError = class extends Error {
   constructor(path, originalError) {
     super(`Failed to read annotation sidecar JSON: ${path}`);
@@ -10720,28 +10769,32 @@ var AnnotationStore = class {
     await this.saveDocument(nextDocument);
     return nextDocument;
   }
-  async exportNotes(file, format = "summary") {
+  async exportNotes(file, format = "summary", obTagBridge = false) {
     const document2 = await this.getDocument(file);
     const baseName = file.basename || file.name.replace(/\.md$/i, "");
     const suffix = format === "summary" ? "" : `-${format}`;
     const targetPath = (0, import_obsidian8.normalizePath)(`${file.parent?.path ?? ""}/${baseName}-notes${suffix}.md`);
-    const lines = buildExportLines(`Notes for ${file.path}`, [{ filePath: file.path, document: document2 }], format);
+    const lines = buildExportLines(`Notes for ${file.path}`, [{ filePath: file.path, document: document2 }], format, obTagBridge, "full");
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
     if (existing instanceof import_obsidian8.TFile) {
-      await this.app.vault.modify(existing, lines.join("\n"));
+      const generated = lines.join("\n");
+      const content = obTagBridge ? mergeExportFrontmatter(await this.app.vault.cachedRead(existing), generated) : generated;
+      await this.app.vault.modify(existing, content);
       return existing;
     }
     return this.app.vault.create(targetPath, lines.join("\n"));
   }
-  async exportAllNotes(format = "summary") {
+  async exportAllNotes(format = "summary", obTagBridge = false) {
     const documents = await this.getIndexedDocuments();
     const suffix = format === "summary" ? "" : `-${format}`;
     const targetPath = (0, import_obsidian8.normalizePath)(`inklight-all-notes${suffix}.md`);
     const sources = documents.map((document2) => ({ filePath: document2.filePath, document: document2 }));
-    const lines = buildExportLines("\u58A8\u5149\u6279\u6CE8\u5168\u5E93\u6C47\u603B", sources, format);
+    const lines = buildExportLines("\u58A8\u5149\u6279\u6CE8\u5168\u5E93\u6C47\u603B", sources, format, obTagBridge, "marker-only");
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
     if (existing instanceof import_obsidian8.TFile) {
-      await this.app.vault.modify(existing, lines.join("\n"));
+      const generated = lines.join("\n");
+      const content = obTagBridge ? mergeExportFrontmatter(await this.app.vault.cachedRead(existing), generated) : generated;
+      await this.app.vault.modify(existing, content);
       return existing;
     }
     return this.app.vault.create(targetPath, lines.join("\n"));
@@ -10957,9 +11010,11 @@ function hashPath(value) {
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
-function buildExportLines(title, sources, format) {
-  const entries = sources.flatMap((source) => collectExportEntries(source));
-  const lines = [`# ${title}`, "", `Exported: ${(/* @__PURE__ */ new Date()).toISOString()}`, ""];
+function buildExportLines(title, sources, format, obTagBridge, frontmatterMode) {
+  const rawEntries = sources.flatMap((source) => collectExportEntries(source));
+  const entries = obTagBridge ? rawEntries : rawEntries.map((entry) => ({ ...entry, tags: [] }));
+  const frontmatter = obTagBridge ? renderTagFrontmatter(entries, frontmatterMode) : [];
+  const lines = [...frontmatter, `# ${title}`, "", `Exported: ${(/* @__PURE__ */ new Date()).toISOString()}`, ""];
   if (!entries.length) {
     return [...lines, "No annotations found.", ""];
   }
@@ -10986,7 +11041,8 @@ function collectExportEntries(source) {
       content: "",
       createdAt: highlight.createdAt,
       pageNumber: null,
-      startOffset: highlight.anchor.startOffset
+      startOffset: highlight.anchor.startOffset,
+      tags: normalizeTags(highlight.tags)
     })),
     ...source.document.comments.map((comment) => ({
       id: comment.id,
@@ -10998,7 +11054,8 @@ function collectExportEntries(source) {
       content: comment.content,
       createdAt: comment.updatedAt || comment.createdAt,
       pageNumber: null,
-      startOffset: comment.anchor.startOffset
+      startOffset: comment.anchor.startOffset,
+      tags: normalizeTags(comment.tags)
     })),
     ...source.document.pdfHighlights.map((highlight) => ({
       id: highlight.id,
@@ -11010,7 +11067,8 @@ function collectExportEntries(source) {
       content: "",
       createdAt: highlight.createdAt,
       pageNumber: highlight.anchor.pageNumber,
-      startOffset: Number.MAX_SAFE_INTEGER
+      startOffset: Number.MAX_SAFE_INTEGER,
+      tags: normalizeTags(highlight.tags)
     })),
     ...source.document.pdfComments.map((comment) => ({
       id: comment.id,
@@ -11022,7 +11080,8 @@ function collectExportEntries(source) {
       content: comment.content,
       createdAt: comment.updatedAt || comment.createdAt,
       pageNumber: comment.anchor.pageNumber,
-      startOffset: Number.MAX_SAFE_INTEGER
+      startOffset: Number.MAX_SAFE_INTEGER,
+      tags: normalizeTags(comment.tags)
     })),
     ...source.document.epubHighlights.map((highlight) => ({
       id: highlight.id,
@@ -11036,7 +11095,8 @@ function collectExportEntries(source) {
       pageNumber: null,
       chapter: highlight.anchor.chapter,
       cfiRange: highlight.anchor.cfiRange,
-      startOffset: Number.MAX_SAFE_INTEGER
+      startOffset: Number.MAX_SAFE_INTEGER,
+      tags: normalizeTags(highlight.tags)
     })),
     ...source.document.epubComments.map((comment) => ({
       id: comment.id,
@@ -11050,7 +11110,8 @@ function collectExportEntries(source) {
       pageNumber: null,
       chapter: comment.anchor.chapter,
       cfiRange: comment.anchor.cfiRange,
-      startOffset: Number.MAX_SAFE_INTEGER
+      startOffset: Number.MAX_SAFE_INTEGER,
+      tags: normalizeTags(comment.tags)
     }))
   ].sort((left, right) => {
     return left.sourcePath.localeCompare(right.sourcePath) || left.startOffset - right.startOffset;
@@ -11101,6 +11162,59 @@ function renderReadingNotes(entries) {
     })
   ];
 }
+function renderTagFrontmatter(entries, mode) {
+  const tags = mode === "full" ? toObsidianTags(entries.flatMap((entry) => entry.tags)) : [];
+  const merged = ["inklight", ...tags.filter((tag) => tag !== "inklight")];
+  return [
+    "---",
+    "tags:",
+    TAG_BLOCK_START,
+    ...merged.map((tag) => `  - ${tag}`),
+    TAG_BLOCK_END,
+    "---",
+    ""
+  ];
+}
+function splitFrontmatter(text) {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
+  if (!match) {
+    return null;
+  }
+  return {
+    lines: match[1].split(/\r?\n/),
+    body: text.slice(match[0].length)
+  };
+}
+function mergeExportFrontmatter(existingText, generatedText) {
+  const generated = splitFrontmatter(generatedText);
+  if (!generated) {
+    return generatedText;
+  }
+  const existing = splitFrontmatter(existingText);
+  if (!existing) {
+    return generatedText;
+  }
+  const startIdx = existing.lines.indexOf(TAG_BLOCK_START);
+  const endIdx = existing.lines.indexOf(TAG_BLOCK_END);
+  if (startIdx >= 0 && endIdx > startIdx) {
+    const newStart = generated.lines.indexOf(TAG_BLOCK_START);
+    const newEnd = generated.lines.indexOf(TAG_BLOCK_END);
+    const tags = newStart >= 0 && newEnd > newStart ? generated.lines.slice(newStart + 1, newEnd) : [];
+    const merged = [
+      ...existing.lines.slice(0, startIdx + 1),
+      ...tags,
+      ...existing.lines.slice(endIdx)
+    ];
+    return `---
+${merged.join("\n")}
+---
+${generated.body}`;
+  }
+  return `---
+${existing.lines.join("\n")}
+---
+${generated.body}`;
+}
 function renderAnnotationBlock(entry) {
   const blockId = `${entry.mode}-${entry.id}`;
   const calloutType = entry.mode === "epub" ? "inklight-epub" : entry.mode === "pdf" ? "inklight-pdf" : "inklight-md";
@@ -11114,6 +11228,11 @@ function renderAnnotationBlock(entry) {
     for (const line of entry.content.split(/\r?\n/)) {
       lines.push(`> Note: ${line}`);
     }
+  }
+  const tagLine = toObsidianTags(entry.tags);
+  if (tagLine.length > 0) {
+    lines.push(">");
+    lines.push(`> Tags: ${tagLine.map((tag) => `#${tag}`).join(" ")}`);
   }
   const backLink = entryBackLink(entry, blockId);
   if (backLink) {
@@ -11404,6 +11523,12 @@ function isCodeAnchor(anchor) {
 
 // src/views/tagInput.ts
 var MAX_SUGGESTIONS = 8;
+var KIND_LABELS = {
+  current: "\u672C\u6587\u6863",
+  used: "\u5DF2\u7528\u6807\u7B7E",
+  ob: "OB \u6807\u7B7E",
+  page: "\u6982\u5FF5\u9875"
+};
 function renderTagChips(parent, tags, options = {}) {
   const list = normalizeTags(tags);
   if (list.length === 0) {
@@ -11489,39 +11614,51 @@ function renderTagInput(parent, options) {
     const seen = /* @__PURE__ */ new Set();
     const query = (suggestion ?? "").toLowerCase();
     const pool = [];
-    for (const name of options.suggestions) {
-      const key = tagKey(name);
+    for (const item of options.suggestions) {
+      const key = tagKey(item.name);
       if (!key || existing.has(key) || seen.has(key)) {
         continue;
       }
-      if (query && !name.toLowerCase().includes(query)) {
+      if (query && !item.name.toLowerCase().includes(query)) {
         continue;
       }
       seen.add(key);
-      pool.push(name);
+      pool.push(item);
       if (pool.length >= MAX_SUGGESTIONS) {
         break;
       }
     }
     matches = pool;
-    const canCreate = Boolean(suggestion) && !existing.has(tagKey(suggestion)) && !pool.some((name) => tagKey(name) === tagKey(suggestion));
-    if (matches.length === 0 && !canCreate) {
+    const canCreate = Boolean(suggestion) && !existing.has(tagKey(suggestion)) && !pool.some((item) => tagKey(item.name) === tagKey(suggestion));
+    const showQuick = !query && Boolean(options.quickApply?.tags.length);
+    if (matches.length === 0 && !canCreate && !showQuick) {
       closeDropdown();
       return;
     }
     dropdown.removeClass("yh-hidden");
     dropdown.empty();
     activeIndex = Math.min(activeIndex, Math.max(0, matches.length - 1));
-    matches.forEach((name, index) => {
-      const item = dropdown.createDiv({ cls: "yh-tag-suggest-item" });
-      item.createSpan({ cls: "yh-tag-suggest-name", text: name });
-      item.createSpan({ cls: "yh-tag-suggest-kind", text: "\u6982\u5FF5\u9875" });
-      if (index === activeIndex) {
-        item.addClass("is-active");
-      }
-      item.addEventListener("mousedown", (event) => {
+    if (showQuick && options.quickApply) {
+      const quick = dropdown.createDiv({ cls: "yh-tag-suggest-item yh-tag-suggest-quick" });
+      quick.createSpan({ cls: "yh-tag-suggest-name", text: options.quickApply.label });
+      quick.createSpan({ cls: "yh-tag-suggest-kind", text: "\u4E00\u952E\u6CBF\u7528" });
+      quick.addEventListener("mousedown", (event) => {
         event.preventDefault();
-        commitTag(name);
+        emit([...tags, ...options.quickApply.tags]);
+        field.value = "";
+        closeDropdown();
+      });
+    }
+    matches.forEach((item, index) => {
+      const row = dropdown.createDiv({ cls: "yh-tag-suggest-item" });
+      row.createSpan({ cls: "yh-tag-suggest-name", text: item.name });
+      row.createSpan({ cls: "yh-tag-suggest-kind", text: KIND_LABELS[item.kind] });
+      if (index === activeIndex) {
+        row.addClass("is-active");
+      }
+      row.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        commitTag(item.name);
       });
     });
     if (canCreate) {
@@ -11559,7 +11696,7 @@ function renderTagInput(parent, options) {
     if (event.key === "Enter" || event.key === "," || event.key === "\uFF0C") {
       event.preventDefault();
       const picked = !dropdown.hasClass("yh-hidden") ? matches[activeIndex] : void 0;
-      commitTag(picked ?? field.value);
+      commitTag(picked?.name ?? field.value);
       return;
     }
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -11606,18 +11743,27 @@ function renderTagInput(parent, options) {
     focus: () => field.focus()
   };
 }
-function buildTagSuggestions(existingTags, markdownBasenames) {
+function buildTagSuggestions(existingTags, markdownBasenames, obsidianTags = [], currentFileTags = []) {
   const seen = /* @__PURE__ */ new Set();
-  const merged = [];
-  for (const name of [...existingTags, ...markdownBasenames]) {
-    const key = tagKey(name);
-    if (!key || seen.has(key)) {
-      continue;
+  const result = [];
+  const pushGroup = (names, kind) => {
+    const group = [];
+    for (const name of names) {
+      const cleaned = normalizeTag(name);
+      const key = tagKey(cleaned ?? "");
+      if (!cleaned || !key || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      group.push({ name: cleaned, kind });
     }
-    seen.add(key);
-    merged.push(name);
-  }
-  return merged.sort((left, right) => left.localeCompare(right, "zh-Hans-CN"));
+    return group.sort((left, right) => left.name.localeCompare(right.name, "zh-Hans-CN"));
+  };
+  result.push(...pushGroup(currentFileTags, "current"));
+  result.push(...pushGroup(existingTags, "used"));
+  result.push(...pushGroup(obsidianTags, "ob"));
+  result.push(...pushGroup(markdownBasenames, "page"));
+  return result;
 }
 
 // src/views/navigation.ts
@@ -12012,9 +12158,12 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.editingTagCardId = cardData.id;
     row.empty();
     row.addClass("is-editing");
+    const currentTags = this.plugin.settings.obTagBridge ? this.plugin.getFileObsidianTags(file) : [];
+    const quickApply = currentTags.length > 0 ? { label: `\u6CBF\u7528\u672C\u6587\u6863\u6807\u7B7E\uFF08${currentTags.length}\uFF09`, tags: currentTags } : void 0;
     renderTagInput(row, {
       tags: cardData.tags,
       suggestions,
+      quickApply,
       onChange: (tags) => {
         cardData.tags = tags;
         void this.persistCardTags(file, cardData, tags);
@@ -12297,7 +12446,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       if (this.annotationScope === "current" && !file) {
         return;
       }
-      const exported = this.annotationScope === "all" ? await this.plugin.store.exportAllNotes(this.exportFormat) : await this.plugin.store.exportNotes(file, this.exportFormat);
+      const exported = this.annotationScope === "all" ? await this.plugin.store.exportAllNotes(this.exportFormat, this.plugin.settings.obTagBridge) : await this.plugin.store.exportNotes(file, this.exportFormat, this.plugin.settings.obTagBridge);
       new import_obsidian11.Notice(`\u5DF2\u5BFC\u51FA\u7B14\u8BB0\u81F3 ${exported.path}`);
     });
     const exportFormat = footer.createEl("select", { cls: "yh-filter-select yh-export-format", attr: { title: "\u5BFC\u51FA\u683C\u5F0F" } });
@@ -18497,13 +18646,62 @@ ${lines.slice(0, 8).join("\n")}`);
     return matches[0] ?? null;
   }
   /**
-   * 标签补全候选：已用过的标签 ∪ 全库 md 文件名（概念页名）。
-   * 走内存索引 + vault 文件列表，不读磁盘内容，212 篇量级耗时可忽略。
+   * 全库 Obsidian 标签：遍历 md 的 metadataCache 缓存逐篇收集。
+   * 不走 getTags()（当前 obsidian.d.ts 未暴露该 API），顺带能覆盖 frontmatter 标签。
+   * 只读内存缓存，不读文件内容；数量级与 vault 的 md 篇数相同，耗时可忽略。
+   */
+  getVaultObsidianTags() {
+    const tags = [];
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      tags.push(...this.getFileObsidianTags(file));
+    }
+    return normalizeTags(tags);
+  }
+  /**
+   * 读取一个 md 文档上的 Obsidian 标签（正文 #tag + frontmatter 的 tags/tag）。
+   * 只读 metadataCache，不读文件内容；PDF/EPUB 返回空数组（它们没有 OB 标签）。
+   */
+  getFileObsidianTags(file) {
+    if (!file || file.extension.toLowerCase() !== "md") {
+      return [];
+    }
+    const cache = this.app.metadataCache.getFileCache(file);
+    if (!cache) {
+      return [];
+    }
+    const raw = [];
+    for (const item of cache.tags ?? []) {
+      raw.push(item.tag);
+    }
+    const fm = cache.frontmatter?.tags ?? cache.frontmatter?.tag;
+    if (typeof fm === "string") {
+      raw.push(fm);
+    } else if (Array.isArray(fm)) {
+      for (const value of fm) {
+        if (typeof value === "string") {
+          raw.push(value);
+        }
+      }
+    }
+    return normalizeTags(raw);
+  }
+  /**
+   * 标签补全候选：当前文档 OB 标签（置顶）∪ 已用标签 ∪ OB 全库标签 ∪ 全库 md 文件名。
+   * 全部走内存索引与 metadataCache，不读磁盘内容；开关关闭时保持原有两类候选。
+   * 每次调用即时重算，因此无需监听 metadataCache 的 changed 事件。
    */
   getTagSuggestions() {
     const existing = this.store.getTagDictionary().map((item) => item.name);
     const basenames = this.app.vault.getMarkdownFiles().map((file) => file.basename);
-    return buildTagSuggestions(existing, basenames);
+    if (!this.settings.obTagBridge) {
+      return buildTagSuggestions(existing, basenames);
+    }
+    return buildTagSuggestions(
+      existing,
+      basenames,
+      this.getVaultObsidianTags(),
+      this.getFileObsidianTags(this.app.workspace.getActiveFile())
+    );
   }
   async openMarkdownNote(file, options) {
     const leaf = this.findMarkdownLeaf(file) ?? this.app.workspace.getLeaf("tab");

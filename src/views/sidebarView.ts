@@ -23,7 +23,7 @@ import {
   PdfHighlightAnnotation,
 } from "../storage/types";
 import { AnnotationKind, AnnotationMode, buildCards, SidebarCard } from "./cardModel";
-import { buildTagSuggestions, renderTagChips, renderTagInput } from "./tagInput";
+import { renderTagChips, renderTagInput, TagSuggestion } from "./tagInput";
 import { openAnnotationTarget } from "./navigation";
 import { tagKey, hasTag } from "../storage/tags";
 import type { TagRef } from "../storage/annotationStore";
@@ -443,13 +443,18 @@ export class AnnotationSidebarView extends ItemView {
    * 编辑态存于 this.editingTagCardId，关闭只由「点卡片外 / Esc」显式触发；
    * 不再用 blur + 定时器拆解，避免焦点抖动导致输入框一闪即逝。
    */
-  private mountTagEditor(row: HTMLElement, file: TFile | null, cardData: SidebarCard, suggestions: string[]): void {
+  private mountTagEditor(row: HTMLElement, file: TFile | null, cardData: SidebarCard, suggestions: readonly TagSuggestion[]): void {
     this.editingTagCardId = cardData.id;
     row.empty();
     row.addClass("is-editing");
+    const currentTags = this.plugin.settings.obTagBridge ? this.plugin.getFileObsidianTags(file) : [];
+    const quickApply = currentTags.length > 0
+      ? { label: `沿用本文档标签（${currentTags.length}）`, tags: currentTags }
+      : undefined;
     renderTagInput(row, {
       tags: cardData.tags,
       suggestions,
+      quickApply,
       onChange: (tags) => {
         cardData.tags = tags;
         void this.persistCardTags(file, cardData, tags);
@@ -766,8 +771,8 @@ export class AnnotationSidebarView extends ItemView {
       }
       const exported =
         this.annotationScope === "all"
-          ? await this.plugin.store.exportAllNotes(this.exportFormat)
-          : await this.plugin.store.exportNotes(file!, this.exportFormat);
+          ? await this.plugin.store.exportAllNotes(this.exportFormat, this.plugin.settings.obTagBridge)
+          : await this.plugin.store.exportNotes(file!, this.exportFormat, this.plugin.settings.obTagBridge);
       new Notice(`已导出笔记至 ${exported.path}`);
     });
     const exportFormat = footer.createEl("select", { cls: "yh-filter-select yh-export-format", attr: { title: "导出格式" } });

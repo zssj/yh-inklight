@@ -25,12 +25,16 @@ import {
   EpubReadingProgress,
   ReadingBookmark,
 } from "./types";
-import { normalizeTags, sortTagKeys, tagKey } from "./tags";
+import { normalizeTags, sortTagKeys, tagKey, toObsidianTags } from "./tags";
 
 const STORE_DIR = ".obsidian-annotations";
 const INDEX_PATH = normalizePath(`${STORE_DIR}/index.json`);
 const MAX_LEGACY_SIDECAR_NAME_LENGTH = 180;
 const MAX_COMPACT_SIDECAR_PREFIX_LENGTH = 96;
+
+/** 导出笔记 frontmatter 的受控替换边界（YAML 注释形式，不破坏 frontmatter 结构） */
+const TAG_BLOCK_START = "  # inklight:tags:start";
+const TAG_BLOCK_END = "  # inklight:tags:end";
 
 interface ExportDocumentSource {
   filePath: string;
@@ -50,6 +54,8 @@ interface ExportEntry {
   chapter?: string;
   cfiRange?: string;
   startOffset: number;
+  /** 该条批注的插件标签，仅在 OB 标签互通开启时写入导出笔记 */
+  tags: string[];
 }
 
 /** 一条待改标签的批注定位（跨文档批量操作用） */
@@ -724,32 +730,41 @@ export class AnnotationStore {
     return nextDocument;
   }
 
-  async exportNotes(file: TFile, format: AnnotationExportFormat = "summary"): Promise<TFile> {
+  async exportNotes(file: TFile, format: AnnotationExportFormat = "summary", obTagBridge = false): Promise<TFile> {
     const document = await this.getDocument(file);
     const baseName = file.basename || file.name.replace(/\.md$/i, "");
     const suffix = format === "summary" ? "" : `-${format}`;
     const targetPath = normalizePath(`${file.parent?.path ?? ""}/${baseName}-notes${suffix}.md`);
-    const lines = buildExportLines(`Notes for ${file.path}`, [{ filePath: file.path, document }], format);
+    const lines = buildExportLines(`Notes for ${file.path}`, [{ filePath: file.path, document }], format, obTagBridge, "full");
 
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
     if (existing instanceof TFile) {
-      await this.app.vault.modify(existing, lines.join("\n"));
+      const generated = lines.join("\n");
+      // 开启互通时合并用户手改过的 frontmatter；关闭时保持原有全量覆盖行为
+      const content = obTagBridge
+        ? mergeExportFrontmatter(await this.app.vault.cachedRead(existing), generated)
+        : generated;
+      await this.app.vault.modify(existing, content);
       return existing;
     }
 
     return this.app.vault.create(targetPath, lines.join("\n"));
   }
 
-  async exportAllNotes(format: AnnotationExportFormat = "summary"): Promise<TFile> {
+  async exportAllNotes(format: AnnotationExportFormat = "summary", obTagBridge = false): Promise<TFile> {
     const documents = await this.getIndexedDocuments();
     const suffix = format === "summary" ? "" : `-${format}`;
     const targetPath = normalizePath(`inklight-all-notes${suffix}.md`);
     const sources = documents.map((document) => ({ filePath: document.filePath, document }));
-    const lines = buildExportLines("墨光批注全库汇总", sources, format);
+    const lines = buildExportLines("墨光批注全库汇总", sources, format, obTagBridge, "marker-only");
 
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
     if (existing instanceof TFile) {
-      await this.app.vault.modify(existing, lines.join("\n"));
+      const generated = lines.join("\n");
+      const content = obTagBridge
+        ? mergeExportFrontmatter(await this.app.vault.cachedRead(existing), generated)
+        : generated;
+      await this.app.vault.modify(existing, content);
       return existing;
     }
 
@@ -1027,9 +1042,14 @@ function buildExportLines(
   title: string,
   sources: ExportDocumentSource[],
   format: AnnotationExportFormat,
+  obTagBridge: boolean,
+  frontmatterMode: "full" | "marker-only",
 ): string[] {
-  const entries = sources.flatMap((source) => collectExportEntries(source));
-  const lines = [`# ${title}`, "", `Exported: ${new Date().toISOString()}`, ""];
+  const rawEntries = sources.flatMap((source) => collectExportEntries(source));
+  // 开关关闭时清空 tags，保证所有 render 分支的输出与改造前逐字一致
+  const entries = obTagBridge ? rawEntries : rawEntries.map((entry) => ({ ...entry, tags: [] }));
+  const frontmatter = obTagBridge ? renderTagFrontmatter(entries, frontmatterMode) : [];
+  const lines = [...frontmatter, `# ${title}`, "", `Exported: ${new Date().toISOString()}`, ""];
 
   if (!entries.length) {
     return [...lines, "No annotations found.", ""];
@@ -1063,6 +1083,7 @@ function collectExportEntries(source: ExportDocumentSource): ExportEntry[] {
       createdAt: highlight.createdAt,
       pageNumber: null,
       startOffset: highlight.anchor.startOffset,
+      tags: normalizeTags(highlight.tags),
     })),
     ...source.document.comments.map((comment): ExportEntry => ({
       id: comment.id,
@@ -1075,6 +1096,7 @@ function collectExportEntries(source: ExportDocumentSource): ExportEntry[] {
       createdAt: comment.updatedAt || comment.createdAt,
       pageNumber: null,
       startOffset: comment.anchor.startOffset,
+      tags: normalizeTags(comment.tags),
     })),
     ...source.document.pdfHighlights.map((highlight): ExportEntry => ({
       id: highlight.id,
@@ -1087,6 +1109,7 @@ function collectExportEntries(source: ExportDocumentSource): ExportEntry[] {
       createdAt: highlight.createdAt,
       pageNumber: highlight.anchor.pageNumber,
       startOffset: Number.MAX_SAFE_INTEGER,
+      tags: normalizeTags(highlight.tags),
     })),
     ...source.document.pdfComments.map((comment): ExportEntry => ({
       id: comment.id,
@@ -1099,6 +1122,7 @@ function collectExportEntries(source: ExportDocumentSource): ExportEntry[] {
       createdAt: comment.updatedAt || comment.createdAt,
       pageNumber: comment.anchor.pageNumber,
       startOffset: Number.MAX_SAFE_INTEGER,
+      tags: normalizeTags(comment.tags),
     })),
     ...source.document.epubHighlights.map((highlight): ExportEntry => ({
       id: highlight.id,
@@ -1113,6 +1137,7 @@ function collectExportEntries(source: ExportDocumentSource): ExportEntry[] {
       chapter: highlight.anchor.chapter,
       cfiRange: highlight.anchor.cfiRange,
       startOffset: Number.MAX_SAFE_INTEGER,
+      tags: normalizeTags(highlight.tags),
     })),
     ...source.document.epubComments.map((comment): ExportEntry => ({
       id: comment.id,
@@ -1127,6 +1152,7 @@ function collectExportEntries(source: ExportDocumentSource): ExportEntry[] {
       chapter: comment.anchor.chapter,
       cfiRange: comment.anchor.cfiRange,
       startOffset: Number.MAX_SAFE_INTEGER,
+      tags: normalizeTags(comment.tags),
     })),
   ].sort((left, right) => {
     return left.sourcePath.localeCompare(right.sourcePath) || left.startOffset - right.startOffset;
@@ -1182,6 +1208,71 @@ function renderReadingNotes(entries: ExportEntry[]): string[] {
   ];
 }
 
+/**
+ * 生成导出笔记的 frontmatter。标记用 YAML 注释行，既不破坏结构又能在覆盖时定位替换区间。
+ * 全库导出只写固定 inklight 标记：把 N 篇文档的标签塞进一篇的 frontmatter 会丢粒度，
+ * 逐条标签一律写在各自 callout 正文里。
+ */
+function renderTagFrontmatter(entries: ExportEntry[], mode: "full" | "marker-only"): string[] {
+  const tags = mode === "full" ? toObsidianTags(entries.flatMap((entry) => entry.tags)) : [];
+  const merged = ["inklight", ...tags.filter((tag) => tag !== "inklight")];
+  return [
+    "---",
+    "tags:",
+    TAG_BLOCK_START,
+    ...merged.map((tag) => `  - ${tag}`),
+    TAG_BLOCK_END,
+    "---",
+    "",
+  ];
+}
+
+/** 把 md 文本拆成 frontmatter 行数组与正文；无 frontmatter 时返回 null */
+function splitFrontmatter(text: string): { lines: string[]; body: string } | null {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
+  if (!match) {
+    return null;
+  }
+  return {
+    lines: match[1].split(/\r?\n/),
+    body: text.slice(match[0].length),
+  };
+}
+
+/**
+ * 覆盖导出笔记时保护用户手改过的 frontmatter。
+ * - 有受控标记：只替换标记内的 tags 行，frontmatter 其它字段保留
+ * - 有 frontmatter 但无标记：整块保留，不注入 tags（正文 #标签 仍会被 OB 索引）
+ * - 无 frontmatter：直接使用新生成的内容
+ * 正文始终用生成内容（与改造前的全量覆盖行为一致）。
+ */
+function mergeExportFrontmatter(existingText: string, generatedText: string): string {
+  const generated = splitFrontmatter(generatedText);
+  if (!generated) {
+    return generatedText;
+  }
+  const existing = splitFrontmatter(existingText);
+  if (!existing) {
+    return generatedText;
+  }
+
+  const startIdx = existing.lines.indexOf(TAG_BLOCK_START);
+  const endIdx = existing.lines.indexOf(TAG_BLOCK_END);
+  if (startIdx >= 0 && endIdx > startIdx) {
+    const newStart = generated.lines.indexOf(TAG_BLOCK_START);
+    const newEnd = generated.lines.indexOf(TAG_BLOCK_END);
+    const tags = newStart >= 0 && newEnd > newStart ? generated.lines.slice(newStart + 1, newEnd) : [];
+    const merged = [
+      ...existing.lines.slice(0, startIdx + 1),
+      ...tags,
+      ...existing.lines.slice(endIdx),
+    ];
+    return `---\n${merged.join("\n")}\n---\n${generated.body}`;
+  }
+
+  return `---\n${existing.lines.join("\n")}\n---\n${generated.body}`;
+}
+
 function renderAnnotationBlock(entry: ExportEntry): string[] {
   const blockId = `${entry.mode}-${entry.id}`;
   const calloutType = entry.mode === "epub" ? "inklight-epub" : entry.mode === "pdf" ? "inklight-pdf" : "inklight-md";
@@ -1197,6 +1288,12 @@ function renderAnnotationBlock(entry: ExportEntry): string[] {
     for (const line of entry.content.split(/\r?\n/)) {
       lines.push(`> Note: ${line}`);
     }
+  }
+
+  const tagLine = toObsidianTags(entry.tags);
+  if (tagLine.length > 0) {
+    lines.push(">");
+    lines.push(`> Tags: ${tagLine.map((tag) => `#${tag}`).join(" ")}`);
   }
 
   const backLink = entryBackLink(entry, blockId);

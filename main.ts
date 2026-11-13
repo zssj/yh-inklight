@@ -35,7 +35,8 @@ import { EpubAiModal } from "./src/epub/EpubAiModal";
 import { EpubTocView, EPUB_TOC_VIEW_TYPE } from "./src/epub/EpubTocView";
 import { registerEpubGotoHandler } from "./src/epub/EpubGotoHandler";
 import { MarkdownStatsView, MARKDOWN_STATS_VIEW_TYPE } from "./src/views/markdownStatsView";
-import { buildTagSuggestions, renderTagInput } from "./src/views/tagInput";
+import { buildTagSuggestions, renderTagInput, TagSuggestion } from "./src/views/tagInput";
+import { normalizeTags } from "./src/storage/tags";
 import { TagBoardView, TAG_BOARD_VIEW_TYPE } from "./src/views/tagBoardView";
 
 interface CommentModalValue {
@@ -1036,13 +1037,64 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   }
 
   /**
-   * 标签补全候选：已用过的标签 ∪ 全库 md 文件名（概念页名）。
-   * 走内存索引 + vault 文件列表，不读磁盘内容，212 篇量级耗时可忽略。
+   * 全库 Obsidian 标签：遍历 md 的 metadataCache 缓存逐篇收集。
+   * 不走 getTags()（当前 obsidian.d.ts 未暴露该 API），顺带能覆盖 frontmatter 标签。
+   * 只读内存缓存，不读文件内容；数量级与 vault 的 md 篇数相同，耗时可忽略。
    */
-  getTagSuggestions(): string[] {
+  private getVaultObsidianTags(): string[] {
+    const tags: string[] = [];
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      tags.push(...this.getFileObsidianTags(file));
+    }
+    return normalizeTags(tags);
+  }
+
+  /**
+   * 读取一个 md 文档上的 Obsidian 标签（正文 #tag + frontmatter 的 tags/tag）。
+   * 只读 metadataCache，不读文件内容；PDF/EPUB 返回空数组（它们没有 OB 标签）。
+   */
+  getFileObsidianTags(file: TFile | null): string[] {
+    if (!file || file.extension.toLowerCase() !== "md") {
+      return [];
+    }
+    const cache = this.app.metadataCache.getFileCache(file);
+    if (!cache) {
+      return [];
+    }
+    const raw: string[] = [];
+    for (const item of cache.tags ?? []) {
+      raw.push(item.tag);
+    }
+    const fm = cache.frontmatter?.tags ?? cache.frontmatter?.tag;
+    if (typeof fm === "string") {
+      raw.push(fm);
+    } else if (Array.isArray(fm)) {
+      for (const value of fm) {
+        if (typeof value === "string") {
+          raw.push(value);
+        }
+      }
+    }
+    return normalizeTags(raw);
+  }
+
+  /**
+   * 标签补全候选：当前文档 OB 标签（置顶）∪ 已用标签 ∪ OB 全库标签 ∪ 全库 md 文件名。
+   * 全部走内存索引与 metadataCache，不读磁盘内容；开关关闭时保持原有两类候选。
+   * 每次调用即时重算，因此无需监听 metadataCache 的 changed 事件。
+   */
+  getTagSuggestions(): TagSuggestion[] {
     const existing = this.store.getTagDictionary().map((item) => item.name);
     const basenames = this.app.vault.getMarkdownFiles().map((file) => file.basename);
-    return buildTagSuggestions(existing, basenames);
+    if (!this.settings.obTagBridge) {
+      return buildTagSuggestions(existing, basenames);
+    }
+    return buildTagSuggestions(
+      existing,
+      basenames,
+      this.getVaultObsidianTags(),
+      this.getFileObsidianTags(this.app.workspace.getActiveFile()),
+    );
   }
 
   async openMarkdownNote(file: TFile, options?: { forceCount?: boolean }): Promise<void> {
@@ -1609,7 +1661,7 @@ class CommentModal extends Modal {
     private readonly initialTitle: string,
     private readonly initialContent: string,
     initialTags: string[] = [],
-    private readonly tagSuggestions: string[] = [],
+    private readonly tagSuggestions: readonly TagSuggestion[] = [],
   ) {
     super(app);
     this.tags = initialTags;

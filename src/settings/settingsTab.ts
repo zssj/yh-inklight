@@ -123,7 +123,24 @@ export class AnnotationSettingsTab extends PluginSettingTab {
     this.renderEpubSettings();
     this.renderAiSettings();
     this.renderMarkdownStatsSettings();
+    this.renderTagBridgeSettings();
     this.renderDataMaintenanceSettings();
+  }
+
+  /** 与 Obsidian 标签互通：默认关闭，保持既有导出内容逐字不变 */
+  private renderTagBridgeSettings(): void {
+    const { containerEl } = this;
+    containerEl.createEl("h3", { text: "标签互通" });
+
+    new Setting(containerEl)
+      .setName("与 Obsidian 标签互通")
+      .setDesc("开启后：标签补全候选并入 Obsidian 标签（当前文档标签置顶）；导出的批注笔记写入 frontmatter tags 与正文 #标签，可被标签面板、搜索和 Dataview 检索。只写插件自己生成的导出笔记，不修改原文档。")
+      .addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.obTagBridge).onChange(async (value) => {
+          this.plugin.settings.obTagBridge = value;
+          await this.plugin.saveSettings();
+        });
+      });
   }
 
   /** EPUB 阅读相关设置：字号 / 正文字体 / 主题 / 翻页 / 高亮样式 / 摘录目录 / 段落模式 / 脚注 / 回显 */

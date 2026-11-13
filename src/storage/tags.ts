@@ -1,6 +1,7 @@
 /**
  * [INPUT]: 无外部依赖，纯字符串处理
- * [OUTPUT]: 对外提供标签归一化（normalizeTag / normalizeTags）、比较键（tagKey）、并集（unionTags）与容量常量
+ * [OUTPUT]: 对外提供标签归一化（normalizeTag / normalizeTags）、比较键（tagKey）、并集（unionTags）、
+ *           Obsidian 标签语法转换（toObsidianTag / toObsidianTags）、排序键（sortTagKeys）与容量常量
  * [POS]: storage 模块的标签规则单点，被 annotationStore、views/tagInput、views/sidebarView、views/tagBoardView 共享
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
@@ -99,4 +100,64 @@ export function hasTag(tags: readonly string[] | null | undefined, key: string):
 /** 排序键：用于索引里 tags 数组的稳定输出（小写升序） */
 export function sortTagKeys(keys: readonly string[]): string[] {
   return Array.from(new Set(keys.filter((key) => !!key))).sort((left, right) => left.localeCompare(right));
+}
+
+/**
+ * Obsidian 标签只接受 Unicode 字母/数字、`_`、`-` 与 `/`（嵌套）。
+ * 空白折叠成一个 `-`（保住词边界），其余标点直接剔除，避免导出后被截断。
+ * 与 normalizeTag 的差异：后者允许空格与更多标点，故写入 md 前必须再过这一层。
+ */
+const OB_WHITESPACE = /\s+/g;
+const OB_PUNCTUATION = /[^\p{L}\p{N}/_-]+/gu;
+/** 纯数字标签 Obsidian 不识别，统一加前缀 */
+const OB_NUMERIC_PREFIX = "tag-";
+
+/**
+ * 把插件标签转换为可被 Obsidian metadataCache 索引的标签文本（不含 `#`）。
+ * 输出统一小写，与 index.json 的 tagNames key / tagKey() 对齐。
+ * 返回 null 表示转换后无有效内容。
+ */
+export function toObsidianTag(raw: string | null | undefined): string | null {
+  const base = normalizeTag(raw);
+  if (!base) {
+    return null;
+  }
+
+  const segments = base
+    .split("/")
+    .map((part) =>
+      part
+        .replace(OB_WHITESPACE, "-")
+        .replace(OB_PUNCTUATION, "")
+        .replace(/-+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .toLowerCase(),
+    )
+    .filter((part) => part.length > 0);
+
+  const result = segments.join("/");
+  if (!result) {
+    return null;
+  }
+
+  // 去掉分隔符与连字符后仍全是数字 → OB 会当作无效标签
+  return /^\d+$/.test(result.replace(/[/\-_]/g, "")) ? `${OB_NUMERIC_PREFIX}${result}` : result;
+}
+
+/** 数组版转换：逐项转换 → 按结果去重，顺序保持输入顺序 */
+export function toObsidianTags(input: readonly string[] | null | undefined): string[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const item of input) {
+    const tag = toObsidianTag(item);
+    if (!tag || seen.has(tag)) {
+      continue;
+    }
+    seen.add(tag);
+    result.push(tag);
+  }
+  return result;
 }

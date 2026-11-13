@@ -226,6 +226,9 @@ export interface AnnotationPluginSettings {
   pdfProgressTracking: boolean;
   // --- Markdown 打开统计（数据存于独立 sidecar，见 main.ts）---
   mdOpenTracking: boolean;
+  // --- 与 Obsidian 标签互通 ---
+  /** 开启后：标签补全候选并入 OB 标签；导出的笔记写入 OB 可索引的 frontmatter / 正文标签 */
+  obTagBridge: boolean;
   // --- EPUB 手机端沉浸式导航栏 ---
   epubHideMobileNavbar: boolean;
   /** EPUB 底部进度条与安卓系统导航条的间距（px），遮挡时调大 */
@@ -284,6 +287,8 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   pdfProgressTracking: true,
   // Markdown 打开统计
   mdOpenTracking: true,
+  // 与 Obsidian 标签互通（默认关，保持既有导出内容不变）
+  obTagBridge: false,
   // EPUB 手机端沉浸式导航栏
   epubHideMobileNavbar: true,
   epubMobileBottomInset: 32,

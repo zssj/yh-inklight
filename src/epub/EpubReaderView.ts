@@ -45,6 +45,7 @@ import {
 	showFoliateStart,
 } from "./EpubFoliateLoader";
 import { EpubNoteModal, EpubNoteResult } from "./EpubNoteModal";
+import type { TagSuggestion } from "../views/tagInput";
 import { EpubAiModal } from "./EpubAiModal";
 import { EpubAnnotationCard } from "./EpubAnnotationCard";
 import { EpubImageViewer } from "./EpubImageViewer";
@@ -184,7 +185,7 @@ export interface EpubReaderViewOptions {
 	/** 目录内容或当前高亮条目变化时通知 main.ts 刷新左侧栏目录视图 */
 	onTocChanged: () => void;
 	/** 标签补全候选（已有标签 ∪ 概念页名），由 main.ts 注入 */
-	tagSuggestions?: () => string[];
+	tagSuggestions?: () => TagSuggestion[];
 }
 
 /**
@@ -209,7 +210,7 @@ export class EpubReaderView extends FileView {
 	private readonly refreshAnnotations: () => void;
 	private readonly saveSettings: () => Promise<void>;
 	private readonly onTocChanged: () => void;
-	private readonly tagSuggestions: () => string[];
+	private readonly tagSuggestions: () => TagSuggestion[];
 
 	// ---- foliate 实例 ----
 

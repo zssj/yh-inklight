@@ -13,7 +13,7 @@ import {
   EpubHighlightStyle,
   EPUB_HIGHLIGHT_STYLES,
 } from "../storage/types";
-import { renderTagInput, TagInputHandle } from "../views/tagInput";
+import { renderTagInput, TagInputHandle, TagSuggestion } from "../views/tagInput";
 
 export interface EpubNoteResult {
   note: string;
@@ -42,7 +42,7 @@ export class EpubNoteModal extends Modal {
   private tags: string[];
   private onSubmit: (result: EpubNoteResult) => void;
   private titleText: string;
-  private readonly tagSuggestions: string[];
+  private readonly tagSuggestions: readonly TagSuggestion[];
   private keyboardCleanup?: () => void;
   private tagInput?: TagInputHandle;
 
@@ -58,7 +58,7 @@ export class EpubNoteModal extends Modal {
     },
     onSubmit: (result: EpubNoteResult) => void,
     titleText = "写下你的想法",
-    tagSuggestions: string[] = [],
+    tagSuggestions: readonly TagSuggestion[] = [],
   ) {
     super(app);
     this.selectedText = selectedText;

@@ -1,6 +1,7 @@
 /**
  * [INPUT]: 依赖 storage/tags 的归一化规则与 dom 辅助（Obsidian HTMLElement 扩展）
- * [OUTPUT]: 对外提供 renderTagChips（只读 chip 行）与 renderTagInput（可编辑 chip + 补全下拉）
+ * [OUTPUT]: 对外提供 renderTagChips（只读 chip 行）、renderTagInput（可编辑 chip + 补全下拉）、
+ *           TagSuggestion（带来源的补全候选）与 buildTagSuggestions（候选聚合，含 Obsidian 标签）
  * [POS]: views 模块的标签 UI 单点，被 sidebarView、tagBoardView、CommentModal、EpubNoteModal 共用
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
@@ -8,6 +9,22 @@
 import { MAX_TAGS_PER_ANNOTATION, MAX_VISIBLE_TAG_CHIPS, normalizeTag, normalizeTags, tagKey } from "../storage/tags";
 
 const MAX_SUGGESTIONS = 8;
+
+/** 补全候选的来源，决定下拉右侧的角标文案 */
+export type TagSuggestionKind = "current" | "used" | "ob" | "page";
+
+/** 带来源的补全候选：name 用于写入标签，kind 只用于展示 */
+export interface TagSuggestion {
+  name: string;
+  kind: TagSuggestionKind;
+}
+
+const KIND_LABELS: Record<TagSuggestionKind, string> = {
+  current: "本文档",
+  used: "已用标签",
+  ob: "OB 标签",
+  page: "概念页",
+};
 
 export interface TagChipOptions {
   /** 最多展示几个 chip，默认 4；超出折叠为 +N */
@@ -60,8 +77,10 @@ export function renderTagChips(parent: HTMLElement, tags: readonly string[], opt
 
 export interface TagInputOptions {
   tags: readonly string[];
-  /** 补全候选：已有标签 ∪ 全库 md 文件名 */
-  suggestions: readonly string[];
+  /** 补全候选：当前文档 OB 标签 + 已用标签 + OB 全库标签 + 全库 md 文件名 */
+  suggestions: readonly TagSuggestion[];
+  /** 可选的一键沿用：下拉空查询时首项，点击把整组标签并入当前卡片 */
+  quickApply?: { label: string; tags: readonly string[] };
   onChange: (tags: string[]) => void;
   placeholder?: string;
 }
@@ -87,7 +106,7 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
   dropdown.addClass("yh-hidden");
 
   let tags = normalizeTags(options.tags);
-  let matches: string[] = [];
+  let matches: TagSuggestion[] = [];
   let activeIndex = 0;
 
   const emit = (next: string[]): void => {
@@ -129,26 +148,27 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
     const seen = new Set<string>();
     const query = (suggestion ?? "").toLowerCase();
 
-    const pool: string[] = [];
-    for (const name of options.suggestions) {
-      const key = tagKey(name);
+    const pool: TagSuggestion[] = [];
+    for (const item of options.suggestions) {
+      const key = tagKey(item.name);
       if (!key || existing.has(key) || seen.has(key)) {
         continue;
       }
-      if (query && !name.toLowerCase().includes(query)) {
+      if (query && !item.name.toLowerCase().includes(query)) {
         continue;
       }
       seen.add(key);
-      pool.push(name);
+      pool.push(item);
       if (pool.length >= MAX_SUGGESTIONS) {
         break;
       }
     }
 
     matches = pool;
-    const canCreate = Boolean(suggestion) && !existing.has(tagKey(suggestion!)) && !pool.some((name) => tagKey(name) === tagKey(suggestion!));
+    const canCreate = Boolean(suggestion) && !existing.has(tagKey(suggestion!)) && !pool.some((item) => tagKey(item.name) === tagKey(suggestion!));
+    const showQuick = !query && Boolean(options.quickApply?.tags.length);
 
-    if (matches.length === 0 && !canCreate) {
+    if (matches.length === 0 && !canCreate && !showQuick) {
       closeDropdown();
       return;
     }
@@ -157,16 +177,28 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
     dropdown.empty();
     activeIndex = Math.min(activeIndex, Math.max(0, matches.length - 1));
 
-    matches.forEach((name, index) => {
-      const item = dropdown.createDiv({ cls: "yh-tag-suggest-item" });
-      item.createSpan({ cls: "yh-tag-suggest-name", text: name });
-      item.createSpan({ cls: "yh-tag-suggest-kind", text: "概念页" });
-      if (index === activeIndex) {
-        item.addClass("is-active");
-      }
-      item.addEventListener("mousedown", (event) => {
+    if (showQuick && options.quickApply) {
+      const quick = dropdown.createDiv({ cls: "yh-tag-suggest-item yh-tag-suggest-quick" });
+      quick.createSpan({ cls: "yh-tag-suggest-name", text: options.quickApply.label });
+      quick.createSpan({ cls: "yh-tag-suggest-kind", text: "一键沿用" });
+      quick.addEventListener("mousedown", (event) => {
         event.preventDefault();
-        commitTag(name);
+        emit([...tags, ...options.quickApply!.tags]);
+        field.value = "";
+        closeDropdown();
+      });
+    }
+
+    matches.forEach((item, index) => {
+      const row = dropdown.createDiv({ cls: "yh-tag-suggest-item" });
+      row.createSpan({ cls: "yh-tag-suggest-name", text: item.name });
+      row.createSpan({ cls: "yh-tag-suggest-kind", text: KIND_LABELS[item.kind] });
+      if (index === activeIndex) {
+        row.addClass("is-active");
+      }
+      row.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        commitTag(item.name);
       });
     });
 
@@ -208,7 +240,7 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
     if (event.key === "Enter" || event.key === "," || event.key === "，") {
       event.preventDefault();
       const picked = !dropdown.hasClass("yh-hidden") ? matches[activeIndex] : undefined;
-      commitTag(picked ?? field.value);
+      commitTag(picked?.name ?? field.value);
       return;
     }
 
@@ -263,17 +295,38 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
   };
 }
 
-/** 补全候选：已有标签 + 全库 md 文件名（概念页名），去重后按长度升序便于短名优先 */
-export function buildTagSuggestions(existingTags: readonly string[], markdownBasenames: readonly string[]): string[] {
+/**
+ * 补全候选聚合：当前文档 OB 标签（置顶）→ 已用标签 → OB 全库标签 → 全库 md 文件名。
+ * 按 tagKey 去重（保留首次出现），各组内部按名称排序，当前文档组始终排最前。
+ * 纯函数，不读磁盘；调用方负责从 metadataCache 采集标签。
+ */
+export function buildTagSuggestions(
+  existingTags: readonly string[],
+  markdownBasenames: readonly string[],
+  obsidianTags: readonly string[] = [],
+  currentFileTags: readonly string[] = [],
+): TagSuggestion[] {
   const seen = new Set<string>();
-  const merged: string[] = [];
-  for (const name of [...existingTags, ...markdownBasenames]) {
-    const key = tagKey(name);
-    if (!key || seen.has(key)) {
-      continue;
+  const result: TagSuggestion[] = [];
+
+  const pushGroup = (names: readonly string[], kind: TagSuggestionKind): TagSuggestion[] => {
+    const group: TagSuggestion[] = [];
+    for (const name of names) {
+      const cleaned = normalizeTag(name);
+      const key = tagKey(cleaned ?? "");
+      if (!cleaned || !key || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      group.push({ name: cleaned, kind });
     }
-    seen.add(key);
-    merged.push(name);
-  }
-  return merged.sort((left, right) => left.localeCompare(right, "zh-Hans-CN"));
+    return group.sort((left, right) => left.name.localeCompare(right.name, "zh-Hans-CN"));
+  };
+
+  // 当前文档标签必须最先占用 seen，才能压过同名的其它来源并置顶
+  result.push(...pushGroup(currentFileTags, "current"));
+  result.push(...pushGroup(existingTags, "used"));
+  result.push(...pushGroup(obsidianTags, "ob"));
+  result.push(...pushGroup(markdownBasenames, "page"));
+  return result;
 }

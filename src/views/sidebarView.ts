@@ -524,6 +524,8 @@ export class AnnotationSidebarView extends ItemView {
       tags: cardData.tags,
       suggestions: [...recommended, ...suggestions],
       quickApply,
+      // 侧栏点 + 即刻给出候选：空内容也显示，不必先输入一个字符
+      showSuggestionsOnOpen: true,
       onChange: (tags) => {
         cardData.tags = tags;
         void this.persistCardTags(file, cardData, tags);

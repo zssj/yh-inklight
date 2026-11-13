@@ -2,7 +2,8 @@
  * [INPUT]: 依赖 storage/tags 的归一化规则与 dom 辅助（Obsidian HTMLElement 扩展）
  * [OUTPUT]: 对外提供 renderTagChips（只读 chip 行）、renderTagInput（可编辑 chip + 补全下拉）、
  *           TagSuggestion（带来源的补全候选，含按内容推荐）与 buildTagSuggestions（候选聚合，含 Obsidian 标签）；
- *           推荐项独立配额（最多 3 个），不挤占常规候选；renderTagInput 处理中文输入法组合态，拼音选词不会误建标签
+ *           推荐项独立配额（最多 3 个），不挤占常规候选；showSuggestionsOnOpen 供侧栏打开即显示候选；
+ *           renderTagInput 处理中文输入法组合态，拼音选词不会误建标签
  * [POS]: views 模块的标签 UI 单点，被 sidebarView、tagBoardView、CommentModal、EpubNoteModal 共用
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
@@ -85,6 +86,8 @@ export interface TagInputOptions {
   suggestions: readonly TagSuggestion[];
   /** 可选的一键沿用：下拉空查询时首项，点击把整组标签并入当前卡片 */
   quickApply?: { label: string; tags: readonly string[] };
+  /** 打开编辑态即展示候选（侧栏用）；默认 false，弹窗维持「输入后才弹」 */
+  showSuggestionsOnOpen?: boolean;
   onChange: (tags: string[]) => void;
   placeholder?: string;
 }
@@ -112,6 +115,9 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
   let tags = normalizeTags(options.tags);
   let matches: TagSuggestion[] = [];
   let activeIndex = 0;
+  /** 侧栏要求打开即显示；有按内容推荐项时其它调用方也保持打开即显示 */
+  const showOnOpen = options.showSuggestionsOnOpen === true
+    || options.suggestions.some((item) => item.kind === "recommended");
   /**
    * 中文输入法组合态：拼音串还在候选栏里时，Enter / 逗号是「选词」不是「提交标签」。
    * isComposing 在部分安卓输入法上不可靠，因此自己维护一份显式标志。
@@ -314,6 +320,14 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
     }
   });
 
+  field.addEventListener("focus", () => {
+    // 首次聚焦与之后每次重新聚焦都兜底渲染：内容为空也立即显示候选列表，
+    // 不依赖「先输入一个字符」触发 input；未开启 showOnOpen 的调用方行为保持原样
+    if (showOnOpen) {
+      renderDropdown();
+    }
+  });
+
   field.addEventListener("blur", () => {
     // 组合态中失焦（切输入法、点候选栏）不能把拼音当成标签提交
     if (composing) {
@@ -334,8 +348,8 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
 
   renderChips();
 
-  // 常规候选仍等用户输入再弹（保持弹窗原有交互）；有按内容推荐项时，打开输入框即刻展示
-  if (options.suggestions.some((item) => item.kind === "recommended")) {
+  // 常规弹窗仍等用户输入再弹；侧栏（或有推荐项时）打开输入框即刻展示
+  if (showOnOpen) {
     renderDropdown();
   }
 

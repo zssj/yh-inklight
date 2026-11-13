@@ -11651,6 +11651,7 @@ function renderTagInput(parent, options) {
   let tags = normalizeTags(options.tags);
   let matches = [];
   let activeIndex = 0;
+  const showOnOpen = options.showSuggestionsOnOpen === true || options.suggestions.some((item) => item.kind === "recommended");
   let composing = false;
   const emit = (next) => {
     const normalized = normalizeTags(next);
@@ -11826,6 +11827,11 @@ function renderTagInput(parent, options) {
       emit(tags.slice(0, -1));
     }
   });
+  field.addEventListener("focus", () => {
+    if (showOnOpen) {
+      renderDropdown();
+    }
+  });
   field.addEventListener("blur", () => {
     if (composing) {
       return;
@@ -11842,7 +11848,7 @@ function renderTagInput(parent, options) {
     }
   });
   renderChips();
-  if (options.suggestions.some((item) => item.kind === "recommended")) {
+  if (showOnOpen) {
     renderDropdown();
   }
   return {
@@ -12623,6 +12629,8 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       tags: cardData.tags,
       suggestions: [...recommended, ...suggestions],
       quickApply,
+      // 侧栏点 + 即刻给出候选：空内容也显示，不必先输入一个字符
+      showSuggestionsOnOpen: true,
       onChange: (tags) => {
         cardData.tags = tags;
         void this.persistCardTags(file, cardData, tags);

@@ -3050,9 +3050,14 @@ a.yh-epub-goto-link:hover {
   box-shadow: none;
 }
 
-/* 侧栏标签编辑：下拉进入文档流，避免被 .yh-ov-list 的 overflow 裁切、或被软键盘盖住 */
+/* 侧栏标签编辑：下拉进入文档流并独占整行，始终固定在输入框正下方。
+   .yh-tag-input 是 flex-wrap 容器，若不撑满 100% 下拉会被排到输入框右侧、宽度随内容漂移；
+   独占一行后也不再挤压 field 的宽度，输入光标正常显示。 */
 .yh-ov-tags.is-editing .yh-tag-suggest {
   position: static;
+  flex: 0 0 100%;
+  width: 100%;
+  box-sizing: border-box;
   margin-top: 4px;
   max-height: 180px;
   box-shadow: none;

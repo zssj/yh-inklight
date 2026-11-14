@@ -5,7 +5,7 @@
 annotationPopover.ts: 点击高亮后的弹层视图，在窄屏或阅读模式显示高亮原文与 Markdown 便签。
 cardModel.ts: 卡片模型纯函数，把一份 sidecar 文档拍平成 SidebarCard（高亮挂笔记、孤儿笔记单独成卡、标签取并集），无 IO。
 markdownStatsView.ts: 笔记使用统计视图，列出全库 md 笔记并支持跳转/删除；顶部提供 1 天复习（openCount==1）/ 7 天复习（openCount>=2）/ 上月今日 / 去年今日 四张卡片（各 Top 5，日差精确匹配，空卡隐藏）。
-navigation.ts: 三端跳转单点（md 偏移 / pdf 页码 / epub CFI），侧栏与标签总览共用。
+navigation.ts: 三端跳转单点（md 偏移 / pdf 页码 / epub CFI），侧栏与标签总览共用；epub 分支先复用已打开该书的 leaf（view.file 或 viewState.state.file 匹配，含 deferred），避免重复 openFile 二次触发 onLoadFile 造成进度恢复与批注跳转互相覆盖；视图类型常量在本文件内定义，**不要 import EpubReaderView**（会让 esbuild 模块图整体重排，main.js diff 从几百行涨到八千行）。
 sidebarView.ts: 右侧 Leaf 总览面板，将 highlight 与关联 note 合并为同一卡片并支持搜索、标签筛选、排序、跳转、删除与导出；顶部搜索/范围（当前文件·全库）/颜色/类型/排序/标签/导出统一收进单一折叠菜单（默认收起，展开态存视图字段 menuOpen，跨重绘保留；开合以 panel.hidden 为唯一硬状态、class 仅作样式，经视图根节点的 click 委托 + menuPanel/menuButton 直连引用切换，不再 querySelector 查找，故按钮被重绘重建或点击相位变化都不会丢收起动作；收起态不占列表高度），有生效筛选时菜单按钮点亮小圆点；卡片标签行可原地编辑，编辑态存在视图字段 editingTagCardId（重绘不丢），仅由点卡片外或 Esc 显式关闭；标签编辑并入按内容推荐项，卡片底部折叠展示字面相关批注（带命中词、可跳转），受 contentRelations 设置控制；移动端编辑态用 utils/keyboardInset 补列表底部留白并把输入框滚入可视区，onClose 与 close() 都清理监听；编辑态期间 requestRender / refreshList 只置 pendingRender 不重绘（退出后补一次），重绘重建仅在用户主动点 + 时聚焦（tagEditorAutoFocus），未提交输入经 pendingTagQuery 回填。
 relationModel.ts: 字面关联派生层（与 cardModel 同层），按需内存快照随 store.version 失效；两遍构建（全量抽词统计文档频率 → rankTerms 按稀有度裁剪），getRelated 走 isRelatedOverlap 双通道判定 + 命中理由 + 近邻排除（含 EPUB 同章相邻），同文档降权只影响排序不做门槛；getRecommendedTags 基于「标签→词频」只推荐用过的标签且冷启动静默；不落盘、不写 sidecar、不升 index 版本。
 tagBoardView.ts: 标签总览视图，按「标签 → 文档 → 批注」三栏主从跨文档聚合，窄屏降级为单栏 + 面包屑。

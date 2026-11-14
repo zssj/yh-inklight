@@ -30,7 +30,14 @@ type FoliateViewModule = {
 type FoliateBookHandle = {
   transformTarget?: EventTarget;
   toc?: Array<{ label?: string; href?: string; subitems?: unknown[] }>;
-  sections?: Array<{ id?: unknown; cfi?: string; size?: number; linear?: string }>;
+  sections?: Array<{
+    id?: unknown;
+    cfi?: string;
+    size?: number;
+    linear?: string;
+    /** foliate 用于全书搜索/内容定位；按需解析 section XHTML，不影响已渲染文档 */
+    createDocument?: () => Promise<Document> | Document;
+  }>;
   [key: string]: unknown;
 };
 

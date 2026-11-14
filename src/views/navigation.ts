@@ -5,9 +5,12 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
-import { App, MarkdownView, TFile } from "obsidian";
+import { App, MarkdownView, TFile, WorkspaceLeaf } from "obsidian";
 
 import type { AnnotationMode } from "./cardModel";
+
+/** 与 EpubReaderView.EPUB_READER_VIEW_TYPE 一致；跳转层不反向依赖 epub 渲染层，避免模块图扰动 */
+const EPUB_READER_VIEW_TYPE = "inklight-epub-reader";
 
 export interface AnnotationTarget {
   file: TFile;
@@ -20,15 +23,29 @@ export interface AnnotationTarget {
 
 /**
  * 打开批注所在位置。三类载体走各自的定位方式：
- * - EPUB：交给插件的 CFI 跳转（含轮询重试，见 main.navigateEpubToCfi）
+ * - EPUB：复用已打开的阅读器 leaf，交给插件的 CFI 跳转（见 main.navigateEpubToCfi）
  * - PDF：派发自定义事件，由 PDF 层翻页
  * - Markdown：编辑器偏移 → 光标 + 滚动 + 短暂高亮闪烁
+ *
+ * EPUB 必须先复用已有 leaf：重复 openFile 会二次触发 onLoadFile，
+ * 进度恢复的 goTo 与批注跳转互相覆盖，还会同时留下两个同文件视图。
  */
 export async function openAnnotationTarget(
   app: App,
   target: AnnotationTarget,
   navigateEpub: (file: TFile, cfiRange: string) => void,
 ): Promise<void> {
+  if (target.mode === "epub") {
+    const existing = findOpenEpubLeaf(app, target.file);
+    if (existing) {
+      app.workspace.revealLeaf(existing);
+      if (target.cfiRange) {
+        navigateEpub(target.file, target.cfiRange);
+      }
+      return;
+    }
+  }
+
   const leaf = app.workspace.getLeaf(false);
   await leaf.openFile(target.file);
 
@@ -54,4 +71,17 @@ export async function openAnnotationTarget(
   view.editor.scrollIntoView({ from: pos, to: pos }, true);
   view.containerEl.addClass("yh-flash-target");
   window.setTimeout(() => view.containerEl.removeClass("yh-flash-target"), 850);
+}
+
+/** 找到已打开目标 EPUB 的 leaf；viewState 兜底覆盖尚未加载的 deferred leaf。 */
+function findOpenEpubLeaf(app: App, file: TFile): WorkspaceLeaf | null {
+  const matches = app.workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE).filter((leaf) => {
+    const viewFile = (leaf.view as { file?: TFile } | undefined)?.file?.path;
+    if (viewFile === file.path) {
+      return true;
+    }
+    const state = leaf.getViewState().state as { file?: unknown } | undefined;
+    return state?.file === file.path;
+  });
+  return matches[0] ?? null;
 }

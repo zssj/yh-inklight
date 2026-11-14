@@ -224,6 +224,20 @@ export class EpubReaderView extends FileView {
 	// 跟踪 foliate 高亮层实际已渲染的标注（id → 渲染时传入 foliate 的 meta）。
 	// 全量刷新时据此 remove，不依赖 sidecar 缓存——否则外部删除（侧栏）后被删的标注无法从 foliate 层移除。
 	private renderedAnnotationMeta = new Map<string, { value: string; id: string; color: AnnotationColor; style: EpubHighlightStyle }>();
+	/**
+	 * 书籍是否已完成 open + 进度恢复。外部跳转必须等它置 true，
+	 * 否则 goTo 会与 restoreProgress 的 goTo 竞争，被跳回上次阅读位置。
+	 */
+	private bookReady = false;
+	/** 书未就绪时暂存的最近一次跳转目标，就绪后统一执行（连点以最后一次为准） */
+	private pendingCfi: string | null = null;
+	/** 跳转后高亮层补绘的防抖计时器：目标 section 的 overlayer 可能晚于 load 事件才 attach */
+	private annotationRedrawTimer: number | null = null;
+	/**
+	 * 历史 CFI 失效（书换版后 spine 编号漂移）时按原文内容重新定位的结果：annotationId → 修正 CFI。
+	 * 只存内存、不写 sidecar；绘制高亮与卡片回查都以此为准。
+	 */
+	private cfiOverrides = new Map<string, string>();
 	private currentCfi = "";
 	private currentSectionIndex = 0;
 
@@ -425,6 +439,8 @@ export class EpubReaderView extends FileView {
 		this.currentChapter = "";
 		this.onTocChanged();
 		this.destroyRendition();
+		this.bookReady = false;
+		this.pendingCfi = null;
 
 		try {
 			const arrayBuffer = await this.app.vault.readBinary(file);
@@ -443,7 +459,18 @@ export class EpubReaderView extends FileView {
 
 			this.renderToolbar();
 			this.renderSidebar();
+
+			// 书与进度都已就绪：此前被暂存的外侧跳转在这里统一执行，
+			// 保证不会再被 restoreProgress 的 goTo 覆盖。
+			this.bookReady = true;
+			const pending = this.pendingCfi;
+			this.pendingCfi = null;
+			if (pending) {
+				void this.performAnnotationJump(pending);
+			}
 		} catch (error) {
+			this.bookReady = false;
+			this.pendingCfi = null;
 			console.error("yh-inklight: EPUB load failed", error);
 			new Notice(`墨光 EPUB 加载失败: ${error instanceof Error ? error.message : String(error)}`);
 		}
@@ -1288,7 +1315,8 @@ export class EpubReaderView extends FileView {
 		}
 
 		const meta = {
-			value: annotation.anchor.cfiRange,
+			// 历史 CFI 失效时按原文内容兜底得到的修正值优先；否则用 sidecar 原值
+			value: this.cfiOverrides.get(annotation.id) ?? annotation.anchor.cfiRange,
 			id: annotation.id,
 			color: annotation.color,
 			style: annotation.style,
@@ -1806,7 +1834,8 @@ export class EpubReaderView extends FileView {
 			return;
 		}
 
-		void this.foliateView.goTo(annotation.anchor.cfiRange);
+		// 与外侧栏跳转共用同一入口：就绪等待与跨章节高亮重绘只维护一份
+		this.navigateToCfi(annotation.anchor.cfiRange);
 	}
 
 	// ================================================================
@@ -1971,21 +2000,201 @@ export class EpubReaderView extends FileView {
 	// ================================================================
 
 	/**
-	 * 导航到指定 CFI 位置。
-	 * 供共用 AnnotationSidebarView 的「跳转」按钮调用，
-	 * 实现从总览面板跳回 EPUB 正文对应位置。
+	 * 导航到指定 CFI 位置（外侧栏/摘录回跳/内嵌侧栏共用的唯一入口）。
+	 * 书尚未完成 open + 进度恢复时先暂存，onLoadFile 结束后再执行；
+	 * 否则 goTo 会与 restoreProgress 的 goTo 竞争，停在旧进度位置。
 	 *
 	 * @param cfiRange - CFI 范围字符串
 	 */
 	navigateToCfi(cfiRange: string): void {
-		if (!this.foliateView) {
+		if (!cfiRange) {
 			return;
 		}
-		try {
-			void this.foliateView.goTo(cfiRange);
-		} catch (error) {
-			console.warn("yh-inklight: navigateToCfi failed", error);
+		if (!this.bookReady || !this.foliateView) {
+			this.pendingCfi = cfiRange;
+			return;
 		}
+		void this.performAnnotationJump(cfiRange);
+	}
+
+	/**
+	 * 执行一次批注跳转：goTo → 内容校验/兜底 → 重绘高亮层。
+	 * 1) 历史批注的 CFI 可能因书换版而指向错误章节，goTo 后按原文内容校验，命中不到就按内容重定位；
+	 * 2) foliate 的 addAnnotation 只作用于「已渲染且已挂 overlayer」的 section，
+	 *    跨章节跳转时目标 overlayer 可能还没 attach，所以立即重绘一次再延时补绘一次。
+	 * 只按「跳转」这一显式事件重绘，不恢复进度保存时的周期性全量刷新。
+	 */
+	private async performAnnotationJump(cfiRange: string): Promise<void> {
+		const view = this.foliateView;
+		if (!view || !this.bookReady) {
+			this.pendingCfi = cfiRange;
+			return;
+		}
+
+		if (this.file) {
+			try {
+				await this.store.getDocument(this.file);
+			} catch (error) {
+				console.warn("yh-inklight: EPUB annotation load failed", error);
+			}
+		}
+
+		// 同一条批注已兜底过就直接用修正 CFI，避免每次点击都全书扫描
+		const annotation = this.findAnnotationByCfi(cfiRange);
+		const cachedOverride = annotation ? this.cfiOverrides.get(annotation.id) : undefined;
+		try {
+			await view.goTo(cachedOverride ?? cfiRange);
+		} catch (error) {
+			console.warn("yh-inklight: EPUB annotation jump failed", error);
+		}
+		// 跳转期间可能换书或关闭视图，别对已销毁的 rendition 继续处理
+		if (this.foliateView !== view || !this.bookReady) {
+			return;
+		}
+
+		if (!cachedOverride) {
+			const corrected = await this.correctJumpIfNeeded(cfiRange);
+			if (this.foliateView !== view || !this.bookReady) {
+				return;
+			}
+			if (corrected && corrected !== cfiRange) {
+				try {
+					await view.goTo(corrected);
+				} catch (error) {
+					console.warn("yh-inklight: EPUB fallback jump failed", error);
+				}
+			}
+		}
+
+		this.restoreAnnotations();
+		this.scheduleAnnotationRedraw();
+	}
+
+	/**
+	 * goTo 之后校验落点：当前章节找不到批注原文，说明这条 CFI 已失效，
+	 * 按原文内容全书重定位，并记下修正值供高亮绘制使用。返回 null 表示原 CFI 有效。
+	 */
+	private async correctJumpIfNeeded(cfiRange: string): Promise<string | null> {
+		const annotation = this.findAnnotationByCfi(cfiRange);
+		const selectedText = annotation?.anchor.selectedText ?? "";
+		const needle = this.normalizeMatchText(selectedText).slice(0, 24);
+		if (!annotation || needle.length < 8) {
+			return null;
+		}
+
+		const contents = this.foliateView?.renderer?.getContents?.() ?? [];
+		for (const content of contents) {
+			const body = content.doc?.body?.textContent ?? "";
+			if (this.normalizeMatchText(body).includes(needle)) {
+				return null;
+			}
+		}
+
+		const corrected = await this.findCfiByText(needle);
+		if (!corrected) {
+			return null;
+		}
+		this.cfiOverrides.set(annotation.id, corrected);
+		return corrected;
+	}
+
+	/** 归一化用于内容匹配：去掉空白与标点，只保留文字/数字，避开脚注标记与排版差异。 */
+	private normalizeMatchText(text: string): string {
+		return text.replace(/[\s\u00a0]+/g, "").replace(/[^\p{L}\p{N}]/gu, "");
+	}
+
+	private findAnnotationByCfi(cfiRange: string): { id: string; anchor: EpubCfiAnchor } | null {
+		if (!this.file) {
+			return null;
+		}
+		const document = this.store.getCachedDocument(this.file.path);
+		if (!document) {
+			return null;
+		}
+		return [...document.epubHighlights, ...document.epubComments].find(
+			(item) => item.anchor.cfiRange === cfiRange,
+		) ?? null;
+	}
+
+	/**
+	 * 按原文片段全书重定位：逐 section 解析 XHTML，用树遍历构造 Range，
+	 * 再交给 foliate 的 getCFI 生成与选区标注同格式的范围 CFI。
+	 * 只在原 CFI 失效时执行；命中即停。
+	 */
+	private async findCfiByText(needle: string): Promise<string | null> {
+		const view = this.foliateView;
+		const sections = view?.book?.sections;
+		if (!view?.getCFI || !Array.isArray(sections)) {
+			return null;
+		}
+
+		for (const [index, section] of sections.entries()) {
+			if (typeof section.createDocument !== "function") {
+				continue;
+			}
+			let doc: Document;
+			try {
+				doc = await section.createDocument();
+			} catch {
+				continue;
+			}
+			if (!doc?.body) {
+				continue;
+			}
+			const range = this.buildTextRange(doc, needle);
+			if (!range) {
+				continue;
+			}
+			try {
+				const cfi = normalizeCfi(view.getCFI(index, range));
+				if (cfi) {
+					return cfi;
+				}
+			} catch (error) {
+				console.warn("yh-inklight: EPUB fallback CFI failed", error);
+			}
+		}
+		return null;
+	}
+
+	/** 在文档里按归一化文本找 needle，构造覆盖该片段的 Range（可跨文本节点）。 */
+	private buildTextRange(doc: Document, needle: string): Range | null {
+		const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+		const chars: Array<{ node: Text; offset: number }> = [];
+		let text = "";
+		let node: Node | null;
+		while ((node = walker.nextNode())) {
+			const raw = node.nodeValue ?? "";
+			for (let i = 0; i < raw.length; i++) {
+				if (!/[\p{L}\p{N}]/u.test(raw[i])) {
+					continue;
+				}
+				text += raw[i];
+				chars.push({ node: node as Text, offset: i });
+			}
+		}
+
+		const start = text.indexOf(needle);
+		if (start < 0) {
+			return null;
+		}
+		const from = chars[start];
+		const to = chars[Math.min(start + needle.length, chars.length) - 1];
+		const range = doc.createRange();
+		range.setStart(from.node, from.offset);
+		range.setEnd(to.node, Math.min(to.offset + 1, to.node.length));
+		return range;
+	}
+
+	/** 延时补绘：合并连续跳转，等目标 section 的 overlayer 挂上后把所有标注再画一遍。 */
+	private scheduleAnnotationRedraw(): void {
+		if (this.annotationRedrawTimer !== null) {
+			window.clearTimeout(this.annotationRedrawTimer);
+		}
+		this.annotationRedrawTimer = window.setTimeout(() => {
+			this.annotationRedrawTimer = null;
+			this.restoreAnnotations();
+		}, 160);
 	}
 
 	/**
@@ -2072,6 +2281,13 @@ export class EpubReaderView extends FileView {
 	 * 销毁 foliate-view 实例，释放资源。
 	 */
 	private destroyRendition(): void {
+		this.bookReady = false;
+		this.pendingCfi = null;
+		this.cfiOverrides.clear();
+		if (this.annotationRedrawTimer !== null) {
+			window.clearTimeout(this.annotationRedrawTimer);
+			this.annotationRedrawTimer = null;
+		}
 		if (this.progressSaveTimer !== null) {
 			window.clearTimeout(this.progressSaveTimer);
 			this.progressSaveTimer = null;
@@ -2254,8 +2470,15 @@ export class EpubReaderView extends FileView {
 			return;
 		}
 
-		const comment = document.epubComments.find((c) => c.anchor.cfiRange === cfiRange);
-		const highlight = comment ?? document.epubHighlights.find((h) => h.anchor.cfiRange === cfiRange);
+		// 兜底重绘过的标注，foliate 回传的是修正后的 CFI；先反查回 sidecar 原值，
+		// 否则详情卡片与「编辑想法/加笔记」都找不到这条批注。
+		const overrideId = [...this.cfiOverrides.entries()].find(([, cfi]) => cfi === cfiRange)?.[0];
+		const allAnnotations = [...document.epubHighlights, ...document.epubComments];
+		const overridden = overrideId ? allAnnotations.find((item) => item.id === overrideId) : null;
+		const sidecarCfi = overridden?.anchor.cfiRange ?? cfiRange;
+
+		const comment = document.epubComments.find((c) => c.anchor.cfiRange === sidecarCfi);
+		const highlight = comment ?? document.epubHighlights.find((h) => h.anchor.cfiRange === sidecarCfi);
 		if (!highlight) {
 			return;
 		}
@@ -2274,8 +2497,8 @@ export class EpubReaderView extends FileView {
 				hasNote: comment != null,
 			},
 			{
-				onEdit: () => this.editComment(cfiRange),
-				onAddNote: () => this.addNoteToHighlight(cfiRange),
+				onEdit: () => this.editComment(sidecarCfi),
+				onAddNote: () => this.addNoteToHighlight(sidecarCfi),
 				onDelete: () => {
 					void this.deleteAnnotation(highlight.id);
 				},

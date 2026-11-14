@@ -12201,7 +12201,18 @@ var RelationModel = class {
 
 // src/views/navigation.ts
 var import_obsidian10 = require("obsidian");
+var EPUB_READER_VIEW_TYPE = "inklight-epub-reader";
 async function openAnnotationTarget(app, target, navigateEpub) {
+  if (target.mode === "epub") {
+    const existing = findOpenEpubLeaf(app, target.file);
+    if (existing) {
+      app.workspace.revealLeaf(existing);
+      if (target.cfiRange) {
+        navigateEpub(target.file, target.cfiRange);
+      }
+      return;
+    }
+  }
   const leaf = app.workspace.getLeaf(false);
   await leaf.openFile(target.file);
   if (target.mode === "epub" && target.cfiRange) {
@@ -12223,6 +12234,17 @@ async function openAnnotationTarget(app, target, navigateEpub) {
   view.editor.scrollIntoView({ from: pos, to: pos }, true);
   view.containerEl.addClass("yh-flash-target");
   window.setTimeout(() => view.containerEl.removeClass("yh-flash-target"), 850);
+}
+function findOpenEpubLeaf(app, file) {
+  const matches = app.workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE).filter((leaf) => {
+    const viewFile = leaf.view?.file?.path;
+    if (viewFile === file.path) {
+      return true;
+    }
+    const state = leaf.getViewState().state;
+    return state?.file === file.path;
+  });
+  return matches[0] ?? null;
 }
 
 // src/views/sidebarView.ts
@@ -14982,7 +15004,7 @@ var EpubImageViewer = class {
 };
 
 // src/epub/EpubReaderView.ts
-var EPUB_READER_VIEW_TYPE = "inklight-epub-reader";
+var EPUB_READER_VIEW_TYPE2 = "inklight-epub-reader";
 var READING_TIME_FLUSH_INTERVAL_MS = 6e4;
 var WHEEL_DEBOUNCE_MS = 400;
 var DOUBLE_TAP_INTERVAL_MS = 300;
@@ -15019,6 +15041,20 @@ var EpubReaderView = class extends import_obsidian17.FileView {
     // 跟踪 foliate 高亮层实际已渲染的标注（id → 渲染时传入 foliate 的 meta）。
     // 全量刷新时据此 remove，不依赖 sidecar 缓存——否则外部删除（侧栏）后被删的标注无法从 foliate 层移除。
     this.renderedAnnotationMeta = /* @__PURE__ */ new Map();
+    /**
+     * 书籍是否已完成 open + 进度恢复。外部跳转必须等它置 true，
+     * 否则 goTo 会与 restoreProgress 的 goTo 竞争，被跳回上次阅读位置。
+     */
+    this.bookReady = false;
+    /** 书未就绪时暂存的最近一次跳转目标，就绪后统一执行（连点以最后一次为准） */
+    this.pendingCfi = null;
+    /** 跳转后高亮层补绘的防抖计时器：目标 section 的 overlayer 可能晚于 load 事件才 attach */
+    this.annotationRedrawTimer = null;
+    /**
+     * 历史 CFI 失效（书换版后 spine 编号漂移）时按原文内容重新定位的结果：annotationId → 修正 CFI。
+     * 只存内存、不写 sidecar；绘制高亮与卡片回查都以此为准。
+     */
+    this.cfiOverrides = /* @__PURE__ */ new Map();
     this.currentCfi = "";
     this.currentSectionIndex = 0;
     // ---- 状态 ----
@@ -15305,7 +15341,7 @@ var EpubReaderView = class extends import_obsidian17.FileView {
   }
   /** 视图类型标识，供 Obsidian workspace 路由 */
   getViewType() {
-    return EPUB_READER_VIEW_TYPE;
+    return EPUB_READER_VIEW_TYPE2;
   }
   /** leaf 标签页显示的标题 */
   getDisplayText() {
@@ -15364,6 +15400,8 @@ var EpubReaderView = class extends import_obsidian17.FileView {
     this.currentChapter = "";
     this.onTocChanged();
     this.destroyRendition();
+    this.bookReady = false;
+    this.pendingCfi = null;
     try {
       const arrayBuffer = await this.app.vault.readBinary(file);
       this.foliateView = await createFoliateView(this.readerContainerEl);
@@ -15379,7 +15417,15 @@ var EpubReaderView = class extends import_obsidian17.FileView {
       this.baselineReaderScroll();
       this.renderToolbar();
       this.renderSidebar();
+      this.bookReady = true;
+      const pending = this.pendingCfi;
+      this.pendingCfi = null;
+      if (pending) {
+        void this.performAnnotationJump(pending);
+      }
     } catch (error) {
+      this.bookReady = false;
+      this.pendingCfi = null;
       console.error("yh-inklight: EPUB load failed", error);
       new import_obsidian17.Notice(`\u58A8\u5149 EPUB \u52A0\u8F7D\u5931\u8D25: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -16054,7 +16100,8 @@ var EpubReaderView = class extends import_obsidian17.FileView {
       return;
     }
     const meta = {
-      value: annotation.anchor.cfiRange,
+      // 历史 CFI 失效时按原文内容兜底得到的修正值优先；否则用 sidecar 原值
+      value: this.cfiOverrides.get(annotation.id) ?? annotation.anchor.cfiRange,
       id: annotation.id,
       color: annotation.color,
       style: annotation.style
@@ -16485,7 +16532,7 @@ var EpubReaderView = class extends import_obsidian17.FileView {
     if (!annotation?.anchor.cfiRange) {
       return;
     }
-    void this.foliateView.goTo(annotation.anchor.cfiRange);
+    this.navigateToCfi(annotation.anchor.cfiRange);
   }
   // ================================================================
   // 字号 & 主题
@@ -16625,21 +16672,184 @@ var EpubReaderView = class extends import_obsidian17.FileView {
   // 外部跳转（供共用 AnnotationSidebarView 的 jumpTo 调用）
   // ================================================================
   /**
-   * 导航到指定 CFI 位置。
-   * 供共用 AnnotationSidebarView 的「跳转」按钮调用，
-   * 实现从总览面板跳回 EPUB 正文对应位置。
+   * 导航到指定 CFI 位置（外侧栏/摘录回跳/内嵌侧栏共用的唯一入口）。
+   * 书尚未完成 open + 进度恢复时先暂存，onLoadFile 结束后再执行；
+   * 否则 goTo 会与 restoreProgress 的 goTo 竞争，停在旧进度位置。
    *
    * @param cfiRange - CFI 范围字符串
    */
   navigateToCfi(cfiRange) {
-    if (!this.foliateView) {
+    if (!cfiRange) {
       return;
     }
-    try {
-      void this.foliateView.goTo(cfiRange);
-    } catch (error) {
-      console.warn("yh-inklight: navigateToCfi failed", error);
+    if (!this.bookReady || !this.foliateView) {
+      this.pendingCfi = cfiRange;
+      return;
     }
+    void this.performAnnotationJump(cfiRange);
+  }
+  /**
+   * 执行一次批注跳转：goTo → 内容校验/兜底 → 重绘高亮层。
+   * 1) 历史批注的 CFI 可能因书换版而指向错误章节，goTo 后按原文内容校验，命中不到就按内容重定位；
+   * 2) foliate 的 addAnnotation 只作用于「已渲染且已挂 overlayer」的 section，
+   *    跨章节跳转时目标 overlayer 可能还没 attach，所以立即重绘一次再延时补绘一次。
+   * 只按「跳转」这一显式事件重绘，不恢复进度保存时的周期性全量刷新。
+   */
+  async performAnnotationJump(cfiRange) {
+    const view = this.foliateView;
+    if (!view || !this.bookReady) {
+      this.pendingCfi = cfiRange;
+      return;
+    }
+    if (this.file) {
+      try {
+        await this.store.getDocument(this.file);
+      } catch (error) {
+        console.warn("yh-inklight: EPUB annotation load failed", error);
+      }
+    }
+    const annotation = this.findAnnotationByCfi(cfiRange);
+    const cachedOverride = annotation ? this.cfiOverrides.get(annotation.id) : void 0;
+    try {
+      await view.goTo(cachedOverride ?? cfiRange);
+    } catch (error) {
+      console.warn("yh-inklight: EPUB annotation jump failed", error);
+    }
+    if (this.foliateView !== view || !this.bookReady) {
+      return;
+    }
+    if (!cachedOverride) {
+      const corrected = await this.correctJumpIfNeeded(cfiRange);
+      if (this.foliateView !== view || !this.bookReady) {
+        return;
+      }
+      if (corrected && corrected !== cfiRange) {
+        try {
+          await view.goTo(corrected);
+        } catch (error) {
+          console.warn("yh-inklight: EPUB fallback jump failed", error);
+        }
+      }
+    }
+    this.restoreAnnotations();
+    this.scheduleAnnotationRedraw();
+  }
+  /**
+   * goTo 之后校验落点：当前章节找不到批注原文，说明这条 CFI 已失效，
+   * 按原文内容全书重定位，并记下修正值供高亮绘制使用。返回 null 表示原 CFI 有效。
+   */
+  async correctJumpIfNeeded(cfiRange) {
+    const annotation = this.findAnnotationByCfi(cfiRange);
+    const selectedText = annotation?.anchor.selectedText ?? "";
+    const needle = this.normalizeMatchText(selectedText).slice(0, 24);
+    if (!annotation || needle.length < 8) {
+      return null;
+    }
+    const contents = this.foliateView?.renderer?.getContents?.() ?? [];
+    for (const content of contents) {
+      const body = content.doc?.body?.textContent ?? "";
+      if (this.normalizeMatchText(body).includes(needle)) {
+        return null;
+      }
+    }
+    const corrected = await this.findCfiByText(needle);
+    if (!corrected) {
+      return null;
+    }
+    this.cfiOverrides.set(annotation.id, corrected);
+    return corrected;
+  }
+  /** 归一化用于内容匹配：去掉空白与标点，只保留文字/数字，避开脚注标记与排版差异。 */
+  normalizeMatchText(text) {
+    return text.replace(/[\s\u00a0]+/g, "").replace(/[^\p{L}\p{N}]/gu, "");
+  }
+  findAnnotationByCfi(cfiRange) {
+    if (!this.file) {
+      return null;
+    }
+    const document2 = this.store.getCachedDocument(this.file.path);
+    if (!document2) {
+      return null;
+    }
+    return [...document2.epubHighlights, ...document2.epubComments].find(
+      (item) => item.anchor.cfiRange === cfiRange
+    ) ?? null;
+  }
+  /**
+   * 按原文片段全书重定位：逐 section 解析 XHTML，用树遍历构造 Range，
+   * 再交给 foliate 的 getCFI 生成与选区标注同格式的范围 CFI。
+   * 只在原 CFI 失效时执行；命中即停。
+   */
+  async findCfiByText(needle) {
+    const view = this.foliateView;
+    const sections = view?.book?.sections;
+    if (!view?.getCFI || !Array.isArray(sections)) {
+      return null;
+    }
+    for (const [index, section] of sections.entries()) {
+      if (typeof section.createDocument !== "function") {
+        continue;
+      }
+      let doc;
+      try {
+        doc = await section.createDocument();
+      } catch {
+        continue;
+      }
+      if (!doc?.body) {
+        continue;
+      }
+      const range = this.buildTextRange(doc, needle);
+      if (!range) {
+        continue;
+      }
+      try {
+        const cfi = normalizeCfi(view.getCFI(index, range));
+        if (cfi) {
+          return cfi;
+        }
+      } catch (error) {
+        console.warn("yh-inklight: EPUB fallback CFI failed", error);
+      }
+    }
+    return null;
+  }
+  /** 在文档里按归一化文本找 needle，构造覆盖该片段的 Range（可跨文本节点）。 */
+  buildTextRange(doc, needle) {
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    const chars = [];
+    let text = "";
+    let node;
+    while (node = walker.nextNode()) {
+      const raw = node.nodeValue ?? "";
+      for (let i3 = 0; i3 < raw.length; i3++) {
+        if (!/[\p{L}\p{N}]/u.test(raw[i3])) {
+          continue;
+        }
+        text += raw[i3];
+        chars.push({ node, offset: i3 });
+      }
+    }
+    const start = text.indexOf(needle);
+    if (start < 0) {
+      return null;
+    }
+    const from = chars[start];
+    const to = chars[Math.min(start + needle.length, chars.length) - 1];
+    const range = doc.createRange();
+    range.setStart(from.node, from.offset);
+    range.setEnd(to.node, Math.min(to.offset + 1, to.node.length));
+    return range;
+  }
+  /** 延时补绘：合并连续跳转，等目标 section 的 overlayer 挂上后把所有标注再画一遍。 */
+  scheduleAnnotationRedraw() {
+    if (this.annotationRedrawTimer !== null) {
+      window.clearTimeout(this.annotationRedrawTimer);
+    }
+    this.annotationRedrawTimer = window.setTimeout(() => {
+      this.annotationRedrawTimer = null;
+      this.restoreAnnotations();
+    }, 160);
   }
   /**
    * 外部标注变更后刷新本视图。
@@ -16722,6 +16932,13 @@ var EpubReaderView = class extends import_obsidian17.FileView {
    * 销毁 foliate-view 实例，释放资源。
    */
   destroyRendition() {
+    this.bookReady = false;
+    this.pendingCfi = null;
+    this.cfiOverrides.clear();
+    if (this.annotationRedrawTimer !== null) {
+      window.clearTimeout(this.annotationRedrawTimer);
+      this.annotationRedrawTimer = null;
+    }
     if (this.progressSaveTimer !== null) {
       window.clearTimeout(this.progressSaveTimer);
       this.progressSaveTimer = null;
@@ -16848,8 +17065,12 @@ var EpubReaderView = class extends import_obsidian17.FileView {
     if (!document2) {
       return;
     }
-    const comment = document2.epubComments.find((c2) => c2.anchor.cfiRange === cfiRange);
-    const highlight = comment ?? document2.epubHighlights.find((h3) => h3.anchor.cfiRange === cfiRange);
+    const overrideId = [...this.cfiOverrides.entries()].find(([, cfi]) => cfi === cfiRange)?.[0];
+    const allAnnotations = [...document2.epubHighlights, ...document2.epubComments];
+    const overridden = overrideId ? allAnnotations.find((item) => item.id === overrideId) : null;
+    const sidecarCfi = overridden?.anchor.cfiRange ?? cfiRange;
+    const comment = document2.epubComments.find((c2) => c2.anchor.cfiRange === sidecarCfi);
+    const highlight = comment ?? document2.epubHighlights.find((h3) => h3.anchor.cfiRange === sidecarCfi);
     if (!highlight) {
       return;
     }
@@ -16866,8 +17087,8 @@ var EpubReaderView = class extends import_obsidian17.FileView {
         hasNote: comment != null
       },
       {
-        onEdit: () => this.editComment(cfiRange),
-        onAddNote: () => this.addNoteToHighlight(cfiRange),
+        onEdit: () => this.editComment(sidecarCfi),
+        onAddNote: () => this.addNoteToHighlight(sidecarCfi),
         onDelete: () => {
           void this.deleteAnnotation(highlight.id);
         },
@@ -18021,12 +18242,12 @@ var EpubTocView = class extends import_obsidian19.ItemView {
     if (recent) {
       pool.push(recent);
     }
-    pool.push(...workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE));
+    pool.push(...workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE2));
     for (const leaf of pool) {
       if (leaf.view instanceof EpubReaderView) {
         return leaf.view;
       }
-      if (leaf.view?.getViewType() !== EPUB_READER_VIEW_TYPE) {
+      if (leaf.view?.getViewType() !== EPUB_READER_VIEW_TYPE2) {
         continue;
       }
       try {
@@ -18837,7 +19058,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian23.Plugin {
     await this.loadMdOpenStats();
     this.registerView(ANNOTATION_SIDEBAR_VIEW, (leaf) => new AnnotationSidebarView(leaf, this));
     this.registerView(TAG_BOARD_VIEW_TYPE, (leaf) => new TagBoardView(leaf, this));
-    this.registerView(EPUB_READER_VIEW_TYPE, (leaf) => new EpubReaderView({
+    this.registerView(EPUB_READER_VIEW_TYPE2, (leaf) => new EpubReaderView({
       leaf,
       store: this.store,
       settings: this.settings,
@@ -18847,7 +19068,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian23.Plugin {
       tagSuggestions: () => this.getTagSuggestions()
     }));
     try {
-      this.registerExtensions([...SUPPORTED_BOOK_EXTENSIONS], EPUB_READER_VIEW_TYPE);
+      this.registerExtensions([...SUPPORTED_BOOK_EXTENSIONS], EPUB_READER_VIEW_TYPE2);
     } catch (error) {
       console.warn("yh-inklight: \u6CE8\u518C\u7535\u5B50\u4E66\u6269\u5C55\u540D\u5931\u8D25\uFF08\u53EF\u80FD\u4E0E\u5176\u4ED6\u63D2\u4EF6\u51B2\u7A81\uFF09", error);
     }
@@ -19007,7 +19228,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian23.Plugin {
         view.refresh();
       }
     }
-    for (const leaf of this.app.workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE)) {
+    for (const leaf of this.app.workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE2)) {
       const view = leaf.view;
       if (view instanceof EpubReaderView) {
         view.refreshExternalAnnotations();
@@ -19030,7 +19251,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian23.Plugin {
    * 设置页 onChange 调用，改完无需重开电子书。
    */
   refreshEpubReaderAppearance(remeasureFontScale = false) {
-    for (const leaf of this.app.workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE)) {
+    for (const leaf of this.app.workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE2)) {
       const view = leaf.view;
       if (view instanceof EpubReaderView) {
         view.refreshAppearance(remeasureFontScale);
@@ -19061,7 +19282,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian23.Plugin {
     }
     const workspace = this.app.workspace;
     const tocLeaves = workspace.getLeavesOfType(EPUB_TOC_VIEW_TYPE);
-    const hasEpub = workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE).length > 0;
+    const hasEpub = workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE2).length > 0;
     if (!hasEpub) {
       if (tocLeaves.length > 0) {
         workspace.detachLeavesOfType(EPUB_TOC_VIEW_TYPE);
@@ -19792,19 +20013,29 @@ ${lines.slice(0, 8).join("\n")}`);
   }
   /**
    * 在已打开的 EPUB 视图中导航到指定 CFI。
-   * 统一的跳转入口：openEpubAtCfi（摘录回跳/协议跳转）与侧栏 jumpTo 的 epub 分支都走这里，
-   * 避免重复的「查 leaf → 调 navigateToCfi → 重试」逻辑散落多处。
-   * 含轮询重试：视图刚 openFile 后 navigateToCfi 可能尚未就绪，每 200ms 重试直至成功。
+   * 统一的跳转入口：openEpubAtCfi（摘录回跳/协议跳转）与侧栏 jumpTo 的 epub 分支都走这里。
+   * 这里只负责「找到正确的 leaf」；书是否加载完成由 EpubReaderView 自己暂存 pendingCfi 处理。
    */
   navigateEpubToCfi(file, cfi) {
+    const matchesFile = (leaf) => {
+      const viewFile = leaf.view?.file?.path;
+      if (viewFile === file.path) {
+        return true;
+      }
+      const state = leaf.getViewState().state;
+      return state?.file === file.path;
+    };
+    let attempts = 0;
     const tryNavigate = () => {
-      const epubLeaf = this.app.workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE).find(
-        (l3) => l3.view.file?.path === file.path
-      );
+      const leaves = this.app.workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE2).filter(matchesFile);
+      const activeLeaf = this.app.workspace.activeLeaf;
+      const epubLeaf = leaves.find((leaf) => leaf === activeLeaf) ?? leaves[0];
       const epubView = epubLeaf?.view;
       if (typeof epubView?.navigateToCfi === "function") {
         epubView.navigateToCfi(cfi);
-      } else {
+        return;
+      }
+      if (++attempts < 40) {
         window.setTimeout(tryNavigate, 200);
       }
     };

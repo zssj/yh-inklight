@@ -2,7 +2,7 @@
 > L2 | 父级: ../AGENTS.md
 
 成员清单
-EpubReaderView.ts: EPUB 阅读器主视图（ItemView，注册为 inklight-epub-reader），编排 foliate-view 生命周期、工具栏、侧栏、进度/阅读时长、选区菜单、标注卡片、AI 入口、书签、点击/滑动翻页、手机端沉浸式导航栏；文件顶部含 CFI 跳转统一入口常量。只打标签不写想法时保持划线形态（updateEpubHighlight），不生成 note 为空的 comment。进度保存（saveCurrentProgress，relocate 后 2s 防抖）只写 sidecar，**不得调 refreshAnnotations**：位置/时长未变时直接跳过写盘，否则移动端会形成「每 2 秒全量重绘侧栏 + 输入法自动弹起」的自激循环。
+EpubReaderView.ts: EPUB 阅读器主视图（ItemView，注册为 inklight-epub-reader），编排 foliate-view 生命周期、工具栏、侧栏、进度/阅读时长、选区菜单、标注卡片、AI 入口、书签、点击/滑动翻页、手机端沉浸式导航栏；文件顶部含 CFI 跳转统一入口常量。只打标签不写想法时保持划线形态（updateEpubHighlight），不生成 note 为空的 comment。进度保存（saveCurrentProgress，relocate 后 2s 防抖）只写 sidecar，**不得调 refreshAnnotations**：位置/时长未变时直接跳过写盘，否则移动端会形成「每 2 秒全量重绘侧栏 + 输入法自动弹起」的自激循环。外部批注跳转统一走 navigateToCfi：书未完成 open + 进度恢复时用 pendingCfi 暂存（bookReady 后执行），防止 goTo 被 restoreProgress 覆盖；就绪后 performAnnotationJump 执行 goTo 并显式重绘高亮层（立即 + 160ms 补绘），补上「foliate addAnnotation 只作用于已渲染 section」导致的跨章节标注丢失，且不恢复周期性全量刷新。内嵌侧栏 navigateToAnnotation 复用同一入口。历史 CFI 因书换版而指向错误章节时，goTo 后用批注原文归一化前缀校验落点，未命中则遍历 book.sections 的 createDocument、构造 Range 并交给 getCFI 生成修正 CFI，存 cfiOverrides（annotationId → 新 CFI，仅内存、不写 sidecar）；高亮绘制与详情卡片回查都走该覆盖表。
 EpubFoliateLoader.ts: foliate-js 加载器，从 npm 包构造 foliate-view、从二进制打开书籍，并安装自定义元素与 iframe patch。
 EpubFoliateGuard.ts: customElements 注册守卫，防止 foliate 自定义元素与其他插件（obsidian-weave-reader）重复注册冲突。
 EpubFoliatePatches.ts: foliate iframe 运行时 patch，覆盖 sandbox 检测、选区与内部行为以适配 Obsidian 移动端。

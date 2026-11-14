@@ -1212,19 +1212,33 @@ export default class OverlayAnnotationsPlugin extends Plugin {
 
   /**
    * 在已打开的 EPUB 视图中导航到指定 CFI。
-   * 统一的跳转入口：openEpubAtCfi（摘录回跳/协议跳转）与侧栏 jumpTo 的 epub 分支都走这里，
-   * 避免重复的「查 leaf → 调 navigateToCfi → 重试」逻辑散落多处。
-   * 含轮询重试：视图刚 openFile 后 navigateToCfi 可能尚未就绪，每 200ms 重试直至成功。
+   * 统一的跳转入口：openEpubAtCfi（摘录回跳/协议跳转）与侧栏 jumpTo 的 epub 分支都走这里。
+   * 这里只负责「找到正确的 leaf」；书是否加载完成由 EpubReaderView 自己暂存 pendingCfi 处理。
    */
   navigateEpubToCfi(file: TFile, cfi: string): void {
+    const matchesFile = (leaf: WorkspaceLeaf): boolean => {
+      const viewFile = (leaf.view as { file?: TFile } | undefined)?.file?.path;
+      if (viewFile === file.path) {
+        return true;
+      }
+      // openFile 早期 / deferred leaf 的 view.file 可能还没就绪，用 viewState 兜底
+      const state = leaf.getViewState().state as { file?: unknown } | undefined;
+      return state?.file === file.path;
+    };
+
+    let attempts = 0;
     const tryNavigate = (): void => {
-      const epubLeaf = this.app.workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE).find(
-        (l) => (l.view as { file?: TFile }).file?.path === file.path,
-      );
+      const leaves = this.app.workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE).filter(matchesFile);
+      const activeLeaf = this.app.workspace.activeLeaf;
+      // 同一本书可能在多个 leaf 打开；优先激活的那个，别把跳转送到后台视图
+      const epubLeaf = leaves.find((leaf) => leaf === activeLeaf) ?? leaves[0];
       const epubView = epubLeaf?.view as { navigateToCfi?: (cfi: string) => void } | undefined;
       if (typeof epubView?.navigateToCfi === "function") {
         epubView.navigateToCfi(cfi);
-      } else {
+        return;
+      }
+      // 有界重试：视图晚到时等一等，但找不到视图不能无限轮询
+      if (++attempts < 40) {
         window.setTimeout(tryNavigate, 200);
       }
     };

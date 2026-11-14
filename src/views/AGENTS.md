@@ -2,7 +2,8 @@
 > L2 | 父级: /Users/epiphanyxiao/Documents/Playground/obsidian-annotation-plugin/src/AGENTS.md
 
 成员清单
-annotationPopover.ts: 点击高亮后的弹层视图，在窄屏或阅读模式显示高亮原文与 Markdown 便签。
+annotationCard.ts: 标注详情浮层，md/pdf/epub 三端共用（点击高亮弹出）：类型徽章 + 颜色 + 原文 + 笔记 + 标签行 + 元信息 + 编辑/添加笔记/添加标签/删除，移动端为底部卡片并跟随软键盘；样式类名沿用 .yh-epub-*（历史命名，改名会破坏用户自定义 CSS）；导出 annotationBadge / formatAnnotationTime 供三端统一文案。
+popoverPlacement.ts: 浮层定位纯函数（无 DOM），输入划线矩形 + 浮层实测尺寸 + 可用区域，输出 left/top/width/maxHeight/side；四侧都放不下时压缩 maxHeight 由卡片内部滚动，绝不压到选区上；三端共用。
 cardModel.ts: 卡片模型纯函数，把一份 sidecar 文档拍平成 SidebarCard（高亮挂笔记、孤儿笔记单独成卡、标签取并集），无 IO。
 markdownStatsView.ts: 笔记使用统计视图，列出全库 md 笔记并支持跳转/删除；顶部提供 1 天复习（openCount==1）/ 7 天复习（openCount>=2）/ 上月今日 / 去年今日 四张卡片（各 Top 5，日差精确匹配，空卡隐藏）。
 navigation.ts: 三端跳转单点（md 偏移 / pdf 页码 / epub CFI），侧栏与标签总览共用；epub 分支先复用已打开该书的 leaf（view.file 或 viewState.state.file 匹配，含 deferred），避免重复 openFile 二次触发 onLoadFile 造成进度恢复与批注跳转互相覆盖；视图类型常量在本文件内定义，**不要 import EpubReaderView**（会让 esbuild 模块图整体重排，main.js diff 从几百行涨到八千行）。

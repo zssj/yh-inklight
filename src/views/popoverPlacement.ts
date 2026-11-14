@@ -1,31 +1,31 @@
 /**
  * [INPUT]: 视口坐标下的选区矩形（划线并集）、浮层实测尺寸、可用区域（视口 ∩ 阅读区 − 安全区）
  * [OUTPUT]: computePopoverPlacement 返回 left/top/width/maxHeight/side，保证浮层避开选区、不越界
- * [POS]: epub 模块浮层定位单点，被 EpubAnnotationCard 使用；纯函数，不碰 DOM
+ * [POS]: views 模块浮层定位单点，被 AnnotationCard（md/pdf/epub 三端共用）使用；纯函数，不碰 DOM
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
-export interface EpubRect {
+export interface PopoverRect {
   left: number;
   top: number;
   right: number;
   bottom: number;
 }
 
-export interface EpubPopoverSize {
+export interface PopoverSize {
   width: number;
   height: number;
 }
 
-export type EpubPopoverSide = "below" | "above" | "end" | "start" | "overlay";
+export type PopoverSide = "below" | "above" | "end" | "start" | "overlay";
 
-export interface EpubPopoverPlacement {
+export interface PopoverPlacement {
   left: number;
   top: number;
   width: number;
   /** 浮层允许的最大高度；超出时由卡片内部滚动消化 */
   maxHeight: number;
-  side: EpubPopoverSide;
+  side: PopoverSide;
 }
 
 /** 浮层与划线之间的留白 */
@@ -42,18 +42,28 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(value, hi));
 }
 
-function intersectionArea(a: EpubRect, b: EpubRect): number {
+function intersectionArea(a: PopoverRect, b: PopoverRect): number {
   const w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
   const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
   return w > 0 && h > 0 ? w * h : 0;
 }
 
 interface Candidate {
-  side: EpubPopoverSide;
+  side: PopoverSide;
   left: number;
   top: number;
   height: number;
   overlap: number;
+}
+
+/** 视口安全区（8px 留白），没有更精确的区域时用它 */
+export function viewportRect(): PopoverRect {
+  return { left: 8, top: 8, right: window.innerWidth - 8, bottom: window.innerHeight - 8 };
+}
+
+/** DOMRect / Rect 转成定位用的普通矩形 */
+export function toPopoverRect(rect: { left: number; top: number; right: number; bottom: number }): PopoverRect {
+  return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
 }
 
 /**
@@ -66,10 +76,10 @@ interface Candidate {
  * - 选区几乎占满阅读区（极端情况）才退化为贴边 overlay，此时允许重叠但保证不全屏外溢。
  */
 export function computePopoverPlacement(
-  avoid: EpubRect,
-  size: EpubPopoverSize,
-  bounds: EpubRect,
-): EpubPopoverPlacement {
+  avoid: PopoverRect,
+  size: PopoverSize,
+  bounds: PopoverRect,
+): PopoverPlacement {
   const boundsWidth = Math.max(MIN_WIDTH + 2 * EDGE, bounds.right - bounds.left);
   const width = clamp(size.width, MIN_WIDTH, boundsWidth - 2 * EDGE);
   const height = Math.max(MIN_HEIGHT, size.height);
@@ -80,7 +90,7 @@ export function computePopoverPlacement(
   const minTop = bounds.top + EDGE;
 
   // 选区可能部分在阅读区外（跨页/滚动），先裁到可用区域再算空间
-  const a: EpubRect = {
+  const a: PopoverRect = {
     left: clamp(avoid.left, bounds.left, bounds.right),
     top: clamp(avoid.top, bounds.top, bounds.bottom),
     right: clamp(avoid.right, bounds.left, bounds.right),
@@ -91,7 +101,7 @@ export function computePopoverPlacement(
 
   const centerLeft = clamp((a.left + a.right) / 2 - width / 2, minLeft, maxLeft);
   const candidates: Candidate[] = [];
-  const push = (side: EpubPopoverSide, left: number, top: number, h: number): void => {
+  const push = (side: PopoverSide, left: number, top: number, h: number): void => {
     candidates.push({
       side,
       left,

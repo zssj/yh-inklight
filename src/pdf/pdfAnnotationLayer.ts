@@ -1,11 +1,13 @@
 /**
- * [INPUT]: 依赖 Obsidian workspace/vault、PDF viewer DOM selection、storage/types 的 PDF 注释模型
+ * [INPUT]: 依赖 Obsidian workspace/vault、PDF viewer DOM selection、storage/types 的 PDF 注释模型、
+ *          views/annotationCard 的三端共用标注卡片
  * [OUTPUT]: 对外提供 PdfAnnotationLayer，在 PDF 页面上绘制非侵入式高亮与弹层批注
- * [POS]: pdf 模块的渲染与选区控制器，与 Markdown/CM6 通道并列，共享 sidecar store
+ * [POS]: pdf 模块的渲染与选区控制器，与 Markdown/CM6 通道并列，共享 sidecar store；
+ *        点击高亮的详情浮层不再自绘，统一交给 AnnotationCard
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
-import { App, Component, MarkdownRenderer, Notice, setIcon, TFile } from "obsidian";
+import { App, Component, MarkdownRenderer, Notice, Platform, TFile } from "obsidian";
 
 import {
   AnnotationColor,
@@ -16,6 +18,10 @@ import {
   PdfHighlightAnnotation,
   PdfReadingProgress,
 } from "../storage/types";
+import { normalizeTags } from "../storage/tags";
+import { AnnotationCard, annotationBadge, formatAnnotationTime } from "../views/annotationCard";
+import { toPopoverRect } from "../views/popoverPlacement";
+import { TagSuggestion } from "../views/tagInput";
 import { PdfViewerAdapter } from "./pdfViewerAdapter";
 
 interface PdfAnnotationLayerOptions {
@@ -31,6 +37,13 @@ interface PdfAnnotationLayerOptions {
   saveProgress: (file: TFile, progress: PdfReadingProgress) => Promise<void>;
   getProgress: (file: TFile) => Promise<PdfReadingProgress | null>;
   viewerAdapter: PdfViewerAdapter;
+  /** 详情浮层「编辑」：交给插件打开便签编辑弹窗并落盘 */
+  editPdfComment?: (file: TFile, comment: PdfCommentAnnotation) => Promise<void> | void;
+  /** 详情浮层「添加笔记」：给已有划线补一条便签 */
+  addNoteToPdfHighlight?: (file: TFile, highlight: PdfHighlightAnnotation) => Promise<void> | void;
+  /** 详情浮层内编辑标签：按 annotationId 关联到 sidecar */
+  setTags?: (file: TFile, annotationId: string, tags: readonly string[]) => Promise<void> | void;
+  getTagSuggestions?: () => TagSuggestion[];
 }
 
 interface PdfSelectionSnapshot {
@@ -42,7 +55,7 @@ const PDF_VIEWER_SELECTOR = ".pdf-container, .pdf-viewer, .pdf-embed, .workspace
 
 export class PdfAnnotationLayer {
   private root: HTMLElement | null = null;
-  private popover: HTMLElement | null = null;
+  private card: AnnotationCard | null = null;
   private observer: MutationObserver | null = null;
   private frame: number | null = null;
   private lastSelection: PdfSelectionSnapshot | null = null;
@@ -272,7 +285,8 @@ export class PdfAnnotationLayer {
     }
     this.observer?.disconnect();
     this.root?.remove();
-    this.popover?.remove();
+    this.card?.dismiss();
+    this.card = null;
   }
 
   private scheduleRender = (): void => {
@@ -424,9 +438,7 @@ export class PdfAnnotationLayer {
 
     const highlight = target.closest<HTMLElement>(".yh-pdf-highlight");
     if (!highlight) {
-      if (!target.closest(".yh-pdf-popover")) {
-        this.hidePopover();
-      }
+      // 详情卡片自己监听外部 pointerdown 关闭，这里不必再管点空白处
       return;
     }
 
@@ -445,37 +457,76 @@ export class PdfAnnotationLayer {
 
     event.preventDefault();
     event.stopPropagation();
-    this.showPopover(file.path, highlight.getBoundingClientRect(), annotation);
+    this.showCard(file, highlight.getBoundingClientRect(), annotation);
   }
 
-  private showPopover(sourcePath: string, rect: DOMRect, annotation: PdfHighlightAnnotation | PdfCommentAnnotation): void {
-    this.hidePopover();
-    this.popover = document.body.createDiv({ cls: "yh-pdf-popover yh-annotation-popover is-visible" });
-    const header = this.popover.createDiv({ cls: "yh-popover-header" });
-    header.createSpan({ cls: "yh-popover-title", text: `PDF 第 ${annotation.anchor.pageNumber} 页` });
-    const close = header.createEl("button", { cls: "yh-icon-button", attr: { type: "button", title: "关闭" } });
-    setIcon(close, "x");
-    close.addEventListener("click", () => this.hidePopover());
+  /**
+   * 点击划线弹出的详情卡片：与 Markdown / EPUB 共用 AnnotationCard，
+   * 样式、标签编辑、移动端底部弹出都由共用卡片保证，本方法只做 PDF 字段映射。
+   */
+  private showCard(
+    file: TFile,
+    rect: DOMRect,
+    annotation: PdfHighlightAnnotation | PdfCommentAnnotation,
+  ): void {
+    this.card?.dismiss();
+    const comment = "content" in annotation ? annotation : null;
+    const highlight = comment ? null : (annotation as PdfHighlightAnnotation);
+    const noteContent = comment?.content ?? "";
+    const tags = normalizeTags(annotation.tags ?? []);
 
-    const card = this.popover.createDiv({
-      cls: "yh-popover-card",
-      attr: { "data-yh-color": annotation.color, "data-yh-id": annotation.id },
-    });
-    card.createDiv({ cls: "yh-popover-quote", text: annotation.anchor.selectedText });
-    if ("content" in annotation && annotation.content) {
-      const body = card.createDiv({ cls: "yh-popover-body" });
-      MarkdownRenderer.render(this.options.app, annotation.content, body, sourcePath, this.options.component);
+    const metaParts = [comment?.author, formatAnnotationTime(annotation.createdAt)].filter(
+      (part): part is string => Boolean(part),
+    );
+
+    const card = new AnnotationCard(
+      {
+        quote: annotation.anchor.selectedText,
+        note: noteContent,
+        renderNote: comment
+          ? (container) => {
+              void MarkdownRenderer.render(this.options.app, noteContent, container, file.path, this.options.component);
+            }
+          : undefined,
+        tags,
+        color: annotation.color,
+        badge: annotationBadge(comment?.title),
+        meta: `第 ${annotation.anchor.pageNumber} 页${metaParts.length > 0 ? ` · ${metaParts.join(" · ")}` : ""}`,
+        hasNote: comment !== null,
+      },
+      {
+        onEdit:
+          comment && this.options.editPdfComment
+            ? () => void this.options.editPdfComment?.(file, comment)
+            : undefined,
+        onAddNote:
+          highlight && this.options.addNoteToPdfHighlight
+            ? () => void this.options.addNoteToPdfHighlight?.(file, highlight)
+            : undefined,
+        onDelete: () => void this.removeAnnotation(file, annotation.id),
+        onTagsChange: this.options.setTags
+          ? (next) => this.options.setTags?.(file, annotation.id, next)
+          : undefined,
+        tagSuggestions: () => this.options.getTagSuggestions?.() ?? [],
+        onDismiss: () => {
+          if (this.card === card) {
+            this.card = null;
+          }
+        },
+      },
+    );
+    card.show({ avoid: toPopoverRect(rect), isMobile: Platform.isMobile });
+    this.card = card;
+  }
+
+  /** 删除失败必须让用户看见，绝不静默吞掉 */
+  private async removeAnnotation(file: TFile, annotationId: string): Promise<void> {
+    try {
+      await this.options.deleteAnnotation(file, annotationId);
+    } catch (error) {
+      console.error("yh-inklight: PDF annotation deletion failed", error);
+      new Notice("标注删除失败");
     }
-
-    const width = Math.min(320, window.innerWidth - 24);
-    this.popover.style.width = `${width}px`;
-    this.popover.style.left = `${Math.max(12, Math.min(window.innerWidth - width - 12, rect.left))}px`;
-    this.popover.style.top = `${Math.max(12, Math.min(window.innerHeight - 240, rect.bottom + 8))}px`;
-  }
-
-  private hidePopover(): void {
-    this.popover?.remove();
-    this.popover = null;
   }
 
   private resolveSelection(): PdfSelectionSnapshot | null {

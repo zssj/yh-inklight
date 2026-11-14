@@ -758,98 +758,6 @@ span.yh-ov-expand-btn:hover {
   width: 112px;
 }
 
-/* ===== Annotation popover ===== */
-.yh-annotation-popover {
-  position: fixed;
-  z-index: 1001;
-  display: none;
-  max-height: min(420px, calc(100vh - 24px));
-  overflow: auto;
-  border: 1px solid var(--yh-border);
-  border-radius: 12px;
-  background: var(--background-primary);
-  box-shadow: var(--yh-shadow-lg);
-}
-
-.yh-annotation-popover.is-visible {
-  display: block;
-}
-
-.yh-popover-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--yh-border);
-}
-
-.yh-popover-title {
-  font-weight: 700;
-  font-size: var(--yh-font-base);
-}
-
-.yh-popover-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-}
-
-.yh-popover-card {
-  border: 1px solid var(--yh-border);
-  border-radius: var(--yh-radius);
-  padding: 10px;
-  background: var(--background-secondary);
-}
-
-.yh-popover-meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-muted);
-  font-size: var(--yh-font-xs);
-  margin-bottom: 6px;
-}
-
-.yh-color-chip {
-  border-radius: 999px;
-  padding: 2px 7px;
-  font-weight: 600;
-}
-
-.yh-color-chip[data-yh-color="yellow"] { background: #fff3c4; color: #92700a; }
-.yh-color-chip[data-yh-color="orange"] { background: #ffe8d0; color: #a04b00; }
-.yh-color-chip[data-yh-color="pink"] { background: #ffd6e8; color: #a0006b; }
-.yh-color-chip[data-yh-color="green"] { background: #d0f0d8; color: #006b2b; }
-.yh-color-chip[data-yh-color="blue"] { background: #d0e4ff; color: #003da0; }
-.yh-color-chip[data-yh-color="purple"] { background: #e8d0ff; color: #5500a0; }
-
-.yh-popover-quote {
-  border-radius: var(--yh-radius-sm);
-  background: rgba(0, 0, 0, 0.05);
-  color: var(--text-normal);
-  font-size: var(--yh-font-sm);
-  font-weight: 600;
-  line-height: 1.5;
-  padding: 6px 8px;
-  margin-bottom: 6px;
-}
-
-.theme-dark .yh-popover-quote {
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.yh-popover-body {
-  color: var(--text-normal);
-  font-size: var(--yh-font-sm);
-  line-height: 1.6;
-}
-
-.yh-popover-empty {
-  color: var(--text-muted);
-  font-size: var(--yh-font-sm);
-}
-
 /* ===== PDF overlay compatibility ===== */
 .yh-pdf-host {
   position: relative;
@@ -882,17 +790,6 @@ span.yh-ov-expand-btn:hover {
 .yh-pdf-highlight--blue { background-color: rgba(22, 119, 255, 0.35) !important; }
 .yh-pdf-highlight[data-yh-color="purple"],
 .yh-pdf-highlight--purple { background-color: rgba(114, 46, 209, 0.35) !important; }
-
-.yh-pdf-popover {
-  position: fixed;
-  z-index: 1002;
-  max-width: 320px;
-  border: 1px solid var(--yh-border);
-  border-radius: 12px;
-  background: var(--background-primary);
-  box-shadow: var(--yh-shadow-lg);
-  padding: 10px;
-}
 
 /* ===== Comment modal ===== */
 .yh-modal-row {
@@ -985,14 +882,6 @@ span.yh-ov-expand-btn:hover {
 .yh-modal-cancel:hover {
   background: var(--background-modifier-hover);
   color: var(--text-normal);
-}
-
-@media (max-width: 800px) {
-  .yh-annotation-popover {
-    left: 12px !important;
-    right: 12px;
-    width: auto !important;
-  }
 }
 
 /* ===== Sticky Note Lane ===== */
@@ -1683,8 +1572,9 @@ body.yh-epub-nav-hidden .mobile-navbar {
 }
 
 /* ============================================================
-   EPUB — 标注详情浮层（点击高亮弹出，EpubAnnotationCard）
-   位置/宽度/max-height 由 EpubPopoverPlacement 计算后写成行内样式
+   标注详情浮层（点击高亮弹出，Markdown / PDF / EPUB 三端共用 AnnotationCard）
+   - 类名保留 .yh-epub-* 历史前缀：三端已统一到同一套 DOM，改名只会破坏用户自定义 CSS 片段
+   - 位置/宽度/max-height 由 views/popoverPlacement 计算后写成行内样式
    ============================================================ */
 
 .yh-epub-annotation-popover {
@@ -1785,6 +1675,19 @@ body.yh-epub-nav-hidden .mobile-navbar {
 .yh-epub-card-note.is-empty {
   color: var(--text-muted);
   font-style: italic;
+}
+
+/* MD/PDF 的笔记是 markdown 渲染结果：块级元素自带外边距，需抵消 pre-wrap 与首尾间距 */
+.yh-epub-card-note.is-markdown {
+  white-space: normal;
+}
+
+.yh-epub-card-note.is-markdown > :first-child {
+  margin-top: 0;
+}
+
+.yh-epub-card-note.is-markdown > :last-child {
+  margin-bottom: 0;
 }
 
 /* 标签行：只读 chip 与内联编辑器共用一个容器 */

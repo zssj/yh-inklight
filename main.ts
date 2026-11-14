@@ -1,11 +1,11 @@
 /**
  * [INPUT]: 依赖 Obsidian Plugin API、CM6 扩展、sidecar AnnotationStore、锚点算法、视图与设置模块
- * [OUTPUT]: 对外提供 OverlayAnnotationsPlugin 主类，注册 ribbon 图标、命令、浮动工具栏、高亮、窄屏弹层、侧栏、设置和 vault 事件
+ * [OUTPUT]: 对外提供 OverlayAnnotationsPlugin 主类，注册 ribbon 图标、命令、浮动工具栏、高亮、标注详情浮层（三端共用 AnnotationCard）、侧栏、设置和 vault 事件
  * [POS]: 插件装配根，协调模块但不修改用户 Markdown 原文
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
-import { addIcon, Editor, MarkdownPostProcessorContext, MarkdownView, Modal, Notice, Platform, Plugin, TFile, WorkspaceLeaf } from "obsidian";
+import { addIcon, Editor, MarkdownPostProcessorContext, MarkdownRenderer, MarkdownView, Modal, Notice, Platform, Plugin, TFile, WorkspaceLeaf } from "obsidian";
 
 import { createTextAnchor, relocateDocumentAnchors } from "./src/anchor/textAnchor";
 import { foldWhitespaceWithMap, stripWithMap, strippedScore } from "./src/anchor/textStrip";
@@ -27,7 +27,8 @@ import {
   SelectionSnapshot,
   SUPPORTED_BOOK_EXTENSIONS,
 } from "./src/storage/types";
-import { AnnotationPopover } from "./src/views/annotationPopover";
+import { AnnotationCard, annotationBadge, formatAnnotationTime } from "./src/views/annotationCard";
+import { toPopoverRect } from "./src/views/popoverPlacement";
 import { ANNOTATION_SIDEBAR_VIEW, AnnotationSidebarView } from "./src/views/sidebarView";
 import { StickyNoteLane } from "./src/views/stickyNoteLane";
 import { EpubReaderView, EPUB_READER_VIEW_TYPE } from "./src/epub/EpubReaderView";
@@ -96,7 +97,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   store!: AnnotationStore;
 
   private toolbar!: SelectionToolbar;
-  private popover!: AnnotationPopover;
+  private popoverCard: AnnotationCard | null = null;
   private pdfLayer!: PdfAnnotationLayer;
   private pdfViewerAdapter!: PdfViewerAdapter;
   private stickyLane!: StickyNoteLane;
@@ -172,7 +173,6 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       onAi: () => this.openAiForSelection(),
       onOpenSidebar: () => this.activateSidebar(),
     });
-    this.popover = new AnnotationPopover({ app: this.app, component: this });
     this.pdfViewerAdapter = new PdfViewerAdapter(this.app, this);
     this.pdfLayer = new PdfAnnotationLayer({
       app: this.app,
@@ -201,6 +201,68 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       },
       getProgress: (file) => this.store.getPdfProgress(file),
       viewerAdapter: this.pdfViewerAdapter,
+      editPdfComment: async (file, comment) => {
+        try {
+          const value = await new CommentModal(
+            this.app,
+            comment.title ?? "",
+            comment.content,
+            normalizeTags(comment.tags ?? []),
+            this.getTagSuggestions(),
+          ).openAndRead();
+          if (value === null) {
+            return;
+          }
+          await this.store.updatePdfCommentContent(file, comment.id, value.content, value.title);
+          if (!sameTagList(value.tags, comment.tags ?? [])) {
+            await this.store.setTags([{ filePath: file.path, annotationId: comment.id }], value.tags);
+          }
+          await this.refreshAnnotations();
+        } catch (error) {
+          console.error("yh-inklight: PDF annotation edit failed", error);
+          new Notice("批注保存失败");
+        }
+      },
+      addNoteToPdfHighlight: async (file, highlight) => {
+        try {
+          const value = await new CommentModal(this.app, "", "", [], this.getTagSuggestions()).openAndRead();
+          if (value === null) {
+            return;
+          }
+          const now = new Date().toISOString();
+          await this.store.addPdfComment(file, {
+            id: crypto.randomUUID(),
+            highlightId: highlight.id,
+            anchor: highlight.anchor,
+            title: value.title,
+            content: value.content,
+            color: highlight.color,
+            position: { offsetX: 0, offsetY: 0 },
+            collapsed: false,
+            author: this.settings.defaultAuthor,
+            createdAt: now,
+            updatedAt: now,
+            replies: [],
+            resolved: false,
+            ...(value.tags.length > 0 ? { tags: [...value.tags] } : {}),
+          });
+          await this.refreshAnnotations();
+        } catch (error) {
+          console.error("yh-inklight: PDF note creation failed", error);
+          new Notice("笔记保存失败");
+        }
+      },
+      setTags: async (file, annotationId, tags) => {
+        try {
+          await this.store.setTags([{ filePath: file.path, annotationId }], tags);
+          await this.refreshAnnotations();
+        } catch (error) {
+          console.error("yh-inklight: PDF annotation tags update failed", error);
+          new Notice("标签保存失败");
+          throw error;
+        }
+      },
+      getTagSuggestions: () => this.getTagSuggestions(),
     });
 
     this.stickyLane = new StickyNoteLane({
@@ -271,7 +333,8 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     }
     this.mdModifyTimers.clear();
     this.toolbar?.destroy();
-    this.popover?.destroy();
+    this.popoverCard?.dismiss();
+    this.popoverCard = null;
     this.stickyLane?.destroy();
     this.app.workspace.detachLeavesOfType(ANNOTATION_SIDEBAR_VIEW);
     this.app.workspace.detachLeavesOfType(EPUB_BOOKSHELF_VIEW_TYPE);
@@ -609,7 +672,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on("file-open", async (file) => {
         if (file instanceof TFile && ["md", "pdf"].includes(file.extension.toLowerCase())) {
-          this.popover.hide();
+          this.popoverCard?.dismiss();
           await this.store.getDocument(file);
           await this.refreshAnnotations();
         }
@@ -1248,15 +1311,12 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   private async handleAnnotationClick(event: MouseEvent): Promise<void> {
     const target = event.target;
     if (!(target instanceof HTMLElement)) {
-      this.popover.hide();
       return;
     }
 
     const mark = target.closest<HTMLElement>(".yh-highlight, .yh-reading-highlight");
     if (!mark) {
-      if (!target.closest(".yh-annotation-popover")) {
-        this.popover.hide();
-      }
+      // 详情卡片自己监听外部 pointerdown 关闭，点空白处不必在这里处理
       return;
     }
 
@@ -1266,16 +1326,16 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       return;
     }
 
-    const document = this.store.getCachedDocument(file.path) ?? (await this.store.getDocument(file));
+    const doc = this.store.getCachedDocument(file.path) ?? (await this.store.getDocument(file));
     const primary =
-      document.comments.find((comment) => comment.id === annotationId) ??
-      document.highlights.find((highlight) => highlight.id === annotationId);
+      doc.comments.find((comment) => comment.id === annotationId) ??
+      doc.highlights.find((highlight) => highlight.id === annotationId);
     if (!primary) {
       unwrapStaleHighlight(mark);
       return;
     }
 
-    const sameAnchorComments = document.comments.filter((comment) => {
+    const sameAnchorComments = doc.comments.filter((comment) => {
       return (
         comment.id !== primary.id &&
         !comment.orphaned &&
@@ -1283,15 +1343,151 @@ export default class OverlayAnnotationsPlugin extends Plugin {
         comment.anchor.endOffset === primary.anchor.endOffset
       );
     });
-    const items = [primary, ...sameAnchorComments].map((annotation) => AnnotationPopover.itemFromAnnotation(annotation));
 
     event.preventDefault();
     event.stopPropagation();
-    this.popover.show({
-      rect: mark.getBoundingClientRect(),
-      sourcePath: file.path,
-      items,
-    });
+    this.showMarkdownAnnotationCard(file, primary, sameAnchorComments, mark.getBoundingClientRect());
+  }
+
+  /**
+   * 点击 Markdown 高亮弹出的详情卡片：与 PDF / EPUB 共用 AnnotationCard，
+   * 本方法只做 md 批注字段映射，样式与交互由共用卡片统一。
+   */
+  private showMarkdownAnnotationCard(
+    file: TFile,
+    annotation: HighlightAnnotation | CommentAnnotation,
+    extras: readonly CommentAnnotation[],
+    rect: DOMRect,
+  ): void {
+    this.popoverCard?.dismiss();
+    const comment = "content" in annotation ? annotation : null;
+    const highlight = comment ? null : (annotation as HighlightAnnotation);
+    const noteContent = comment?.content ?? "";
+    const metaParts = [comment?.author, formatAnnotationTime(annotation.createdAt)].filter(
+      (part): part is string => Boolean(part),
+    );
+
+    const card = new AnnotationCard(
+      {
+        quote: annotation.anchor.selectedText,
+        note: noteContent,
+        renderNote: comment
+          ? (container) => {
+              void MarkdownRenderer.render(this.app, noteContent, container, file.path, this);
+            }
+          : undefined,
+        tags: normalizeTags(annotation.tags ?? []),
+        color: annotation.color,
+        badge: annotationBadge(comment?.title),
+        meta: metaParts.join(" · "),
+        hasNote: comment !== null,
+      },
+      {
+        onEdit: comment ? () => void this.editMarkdownComment(file, comment) : undefined,
+        onAddNote: highlight ? () => void this.addNoteToMarkdownHighlight(file, highlight) : undefined,
+        onDelete: () => void this.deleteMarkdownAnnotation(file, annotation.id),
+        onTagsChange: (next) => this.saveMarkdownAnnotationTags(file, annotation.id, next),
+        tagSuggestions: () => this.getTagSuggestions(),
+        extraActions:
+          extras.length > 0
+            ? [{ label: `同段另有 ${extras.length} 条批注`, onClick: () => void this.activateSidebar() }]
+            : undefined,
+        onDismiss: () => {
+          if (this.popoverCard === card) {
+            this.popoverCard = null;
+          }
+        },
+      },
+    );
+    card.show({ avoid: toPopoverRect(rect), isMobile: Platform.isMobile });
+    this.popoverCard = card;
+  }
+
+  /** 「编辑」：复用便签弹窗改内容/类型/标签，保存后才落盘 */
+  private async editMarkdownComment(file: TFile, comment: CommentAnnotation): Promise<void> {
+    try {
+      const value = await new CommentModal(
+        this.app,
+        comment.title ?? "",
+        comment.content,
+        normalizeTags(comment.tags ?? []),
+        this.getTagSuggestions(),
+      ).openAndRead();
+      if (value === null) {
+        return;
+      }
+      await this.store.updateCommentContent(file, comment.id, value.content, value.title);
+      if (!sameTagList(value.tags, comment.tags ?? [])) {
+        await this.store.setTags([{ filePath: file.path, annotationId: comment.id }], value.tags);
+      }
+      await this.afterMarkdownAnnotationChange(file);
+    } catch (error) {
+      console.error("yh-inklight: markdown annotation edit failed", error);
+      new Notice("批注保存失败");
+    }
+  }
+
+  /** 「添加笔记」：给已有纯划线补一条同锚点的便签，锚点直接复用划线本身 */
+  private async addNoteToMarkdownHighlight(file: TFile, highlight: HighlightAnnotation): Promise<void> {
+    try {
+      const value = await new CommentModal(this.app, "", "", [], this.getTagSuggestions()).openAndRead();
+      if (value === null) {
+        return;
+      }
+      const now = new Date().toISOString();
+      await this.store.addComment(file, {
+        id: crypto.randomUUID(),
+        highlightId: highlight.id,
+        anchor: highlight.anchor,
+        title: value.title,
+        content: value.content,
+        color: highlight.color,
+        position: { offsetX: 20, offsetY: 0 },
+        collapsed: false,
+        author: this.settings.defaultAuthor,
+        createdAt: now,
+        updatedAt: now,
+        replies: [],
+        resolved: false,
+        ...(value.tags.length > 0 ? { tags: [...value.tags] } : {}),
+      });
+      await this.afterMarkdownAnnotationChange(file);
+    } catch (error) {
+      console.error("yh-inklight: markdown note creation failed", error);
+      new Notice("笔记保存失败");
+    }
+  }
+
+  private async deleteMarkdownAnnotation(file: TFile, annotationId: string): Promise<void> {
+    try {
+      await this.store.removeAnnotation(file, annotationId);
+      await this.afterMarkdownAnnotationChange(file);
+    } catch (error) {
+      console.error("yh-inklight: markdown annotation deletion failed", error);
+      new Notice("标注删除失败");
+    }
+  }
+
+  private async saveMarkdownAnnotationTags(
+    file: TFile,
+    annotationId: string,
+    tags: readonly string[],
+  ): Promise<void> {
+    try {
+      await this.store.setTags([{ filePath: file.path, annotationId }], tags);
+      await this.refreshAnnotations();
+    } catch (error) {
+      console.error("yh-inklight: markdown annotation tags update failed", error);
+      new Notice("标签保存失败");
+      throw error;
+    }
+  }
+
+  /** md 批注增删改后的统一收尾：编辑模式装饰、阅读模式高亮、侧栏/标签板都要跟着变 */
+  private async afterMarkdownAnnotationChange(file: TFile): Promise<void> {
+    this.forceEditorDecorationsRefresh(file.path);
+    await this.refreshActiveReadingViewHighlights(file.path);
+    await this.refreshAnnotations();
   }
 
   private async renderReadingHighlights(element: HTMLElement, context: MarkdownPostProcessorContext): Promise<void> {
@@ -1721,6 +1917,13 @@ function nthIndexOf(source: string, target: string, occurrenceIndex: number): nu
     cursor = source.indexOf(target, cursor + target.length);
   }
   return -1;
+}
+
+/** 标签顺序敏感的比较：只在真的变了才写 sidecar，避免无意义落盘 */
+function sameTagList(a: readonly string[], b: readonly string[]): boolean {
+  const left = normalizeTags(a);
+  const right = normalizeTags(b);
+  return left.length === right.length && left.every((tag, index) => tag === right[index]);
 }
 
 class CommentModal extends Modal {

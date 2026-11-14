@@ -2,7 +2,7 @@
 > L2 | 父级: /Users/epiphanyxiao/Documents/Playground/obsidian-annotation-plugin/src/AGENTS.md
 
 成员清单
-pdfAnnotationLayer.ts: PDF 注释控制器，捕获 PDF 文本选区、保存页内矩形锚点并渲染 overlay 高亮与右侧便签栏。
+pdfAnnotationLayer.ts: PDF 注释控制器，捕获 PDF 文本选区、保存页内矩形锚点并渲染 overlay 高亮与右侧便签栏；点击高亮的详情浮层不自绘，统一交给 views/annotationCard（样式/标签编辑/移动端底部弹出与 md、epub 一致），本文件只做 PDF 字段映射与回调接线。
 pdfViewerAdapter.ts: Obsidian 原生 PDF viewer 适配层，封装当前文件、当前页、页面跳转、pdf.js eventBus 与页面生命周期。
 
 法则: PDF 坐标独立·文件不写入·矩形投影·DOM 适配保守

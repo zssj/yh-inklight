@@ -49,7 +49,7 @@ import type { TagSuggestion } from "../views/tagInput";
 import { normalizeTags } from "../storage/tags";
 import { EpubAiModal } from "./EpubAiModal";
 import { EpubAnnotationCard, EpubAnnotationCardAnchor } from "./EpubAnnotationCard";
-import { EpubRect } from "./EpubPopoverPlacement";
+import { PopoverRect } from "../views/popoverPlacement";
 import { EpubImageViewer } from "./EpubImageViewer";
 
 // ---- 常量 ----
@@ -2554,11 +2554,11 @@ export class EpubReaderView extends FileView {
 	}
 
 	/** 可用区域：阅读区与视口的交集，再扣掉移动端安全区（状态栏/导航栏）。 */
-	private resolveCardBounds(): EpubRect {
+	private resolveCardBounds(): PopoverRect {
 		const style = getComputedStyle(this.containerEl);
 		const safeTop = parseInt(style.getPropertyValue("--yh-safe-top")) || 0;
 		const safeBottom = parseInt(style.getPropertyValue("--yh-safe-bottom")) || 0;
-		const viewport: EpubRect = {
+		const viewport: PopoverRect = {
 			left: 8,
 			top: 8 + safeTop,
 			right: window.innerWidth - 8,
@@ -2568,7 +2568,7 @@ export class EpubReaderView extends FileView {
 		if (!area) {
 			return viewport;
 		}
-		const bounds: EpubRect = {
+		const bounds: PopoverRect = {
 			left: Math.max(viewport.left, area.left),
 			top: Math.max(viewport.top, area.top),
 			right: Math.min(viewport.right, area.right),
@@ -3215,7 +3215,7 @@ export class EpubReaderView extends FileView {
 	 * 选区所有行矩形的外接框（视口坐标）。
 	 * 上下文菜单只需最后一行，标注卡片必须整块避开，否则跨行划线会被浮层压住中间几行。
 	 */
-	private createSelectionAvoidRect(doc: Document, range: Range): EpubRect | null {
+	private createSelectionAvoidRect(doc: Document, range: Range): PopoverRect | null {
 		const rects = Array.from(range.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
 		const fallback = range.getBoundingClientRect();
 		const list = rects.length > 0

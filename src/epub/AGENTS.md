@@ -10,8 +10,7 @@ EpubBookshelfView.ts: 书架视图（ItemView），扫描 vault 内电子书文�
 EpubTocView.ts: 目录侧栏，构建 TOC 树、随阅读位置高亮当前章节、点击跳转 CFI。
 EpubChapterResolver.ts: TOC/spine 章节解析，把 TOC 链接解析为 spine index，规范化 CFI 与进度百分比（0–1）。
 EpubProgressManager.ts: 死代码——全仓无引用，勿改动勿依赖（进度恢复逻辑已在 EpubReaderView 内实现）。
-EpubAnnotationCard.ts: 点击高亮弹出的标注详情浮层；按选区外接矩形四侧择优定位（避开划线、工具栏、屏幕边界与安全区），展示原文/想法/标签，提供「添加笔记或编辑 + 添加标签 + 删除」，标签内联编辑态存类字段（savedTags/draftTags/tagEditing），提交走 onTagsChange。移动端为底部卡片，bottom 由 visualViewport 键盘 inset + `.mobile-navbar/.mobile-toolbar` 实测占用高度共同决定（隐藏态滑出屏外则计 0），不得只扣键盘 inset，否则按钮与 Obsidian 底部导航栏重合。
-EpubPopoverPlacement.ts: 纯函数定位器，输入选区矩形 + 浮层实测尺寸 + 可用区域，输出 left/top/width/maxHeight/side；四侧都放不下时压缩 maxHeight 由卡片内部滚动，绝不压到选区上。
+EpubAnnotationCard.ts: 薄适配层——把 EPUB 批注字段（chapter / createdAt / noteType）翻译成 views/annotationCard 的 AnnotationCardData，样式与交互全部由共用卡片提供（md / pdf / epub 三端一致），本文件不再自绘 DOM；新增 EPUB 专属展示字段走这里，不要再把样式逻辑搬回来。
 EpubNoteModal.ts: 便签/想法输入弹窗，移动端用 visualViewport 定位避开键盘；提交前 flush 标签输入框里未回车的文本；补全候选为 TagSuggestion[]（带来源）。
 EpubAiModal.ts: AI 解释/翻译/改写弹窗，内置动作预设与自定义提问，回复可存为便签。
 EpubImageViewer.ts: EPUB 内图片全屏放大查看器，点击放大、再点/Esc 关闭。

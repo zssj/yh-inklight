@@ -565,7 +565,7 @@ export class AnnotationSidebarView extends ItemView {
   }
 
   /**
-   * 字面相关的其他批注：默认折叠，每条标出命中的词（让 2-gram 的噪音可解释），
+   * 字面相关的其他批注：默认折叠，每条标出命中的短语（说明为什么相关），
    * 点击跳转到原文。无命中时整个区块不渲染。
    */
   private renderRelated(card: HTMLElement, cardData: SidebarCard): void {

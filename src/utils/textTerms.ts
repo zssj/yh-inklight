@@ -1,9 +1,9 @@
 /**
  * [INPUT]: 无外部依赖，纯字符串处理
- * [OUTPUT]: 对外提供 extractTerms（中文 2/3-gram + ASCII 词，全量去重）、rankTerms（按全库文档频率挑稀有词）、
- *           termOverlap（共享词与覆盖率）、isRelatedOverlap（稀有连续片段双通道判定）、
- *           isRelationEligible（短文本 / 代码选区过滤），以及常量 MIN_RELATION_TEXT_CHARS / MIN_SHARED_TERMS / RARE_TERM_DF
- * [POS]: utils 模块的字面抽词单点，供 views/relationModel 的标签推荐与相关批注共用；
+ * [OUTPUT]: 对外提供 extractTerms（中文 2/3-gram + ASCII 词，全量去重）、rankTerms（按全库文档频率挑稀有词），
+ *           以及常量 MIN_RELATION_TEXT_CHARS
+ * [POS]: utils 模块的抽词单点，现仅供 views/relationModel 的标签推荐（getRecommendedTags）使用；
+ *        相关批注的匹配已改走 utils/textPhrases 的短语级算法，本文件不再承担判定职责；
  *        不引分词库、不联网、不做语义；换个说法认不出是已知且接受的限制
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
@@ -16,12 +16,6 @@ const MAX_TEXT_CHARS = 600;
 const MAX_RAW_TERMS = 400;
 /** 参与匹配的词条数（先按全库稀有度排序再截断） */
 export const MAX_TERMS = 24;
-/** 判定为「有信息量」的文档频率上限：全库中出现在不超过 8 条卡片里的词 */
-export const RARE_TERM_DF = 8;
-/** 两条划线至少要共享这么多词条才算相关 */
-export const MIN_SHARED_TERMS = 2;
-/** 若无连续长片段，需要这么多稀有词共现才认（防零散通用词凑数） */
-export const MIN_RARE_TERMS_FOR_SHORT = 3;
 
 /**
  * 无区分度的双字词。2-gram 会把「目的」「的了」一起切出来，
@@ -120,44 +114,4 @@ export function rankTerms(
       || right.length - left.length
       || left.localeCompare(right))
     .slice(0, limit);
-}
-
-export interface TermOverlap {
-  /** 两边都出现的词，用于给用户解释「为什么相关」 */
-  shared: string[];
-  /** 共享词 / 较小词集：比 Jaccard 更适合长度差异大的 EPUB 段落 */
-  coverage: number;
-}
-
-/** 两组词条的字面重合度。任一组为空直接返回空结果。 */
-export function termOverlap(a: readonly string[], b: readonly string[]): TermOverlap {
-  if (a.length === 0 || b.length === 0) {
-    return { shared: [], coverage: 0 };
-  }
-  const setB = new Set(b);
-  const shared = a.filter((term) => setB.has(term));
-  const base = Math.min(a.length, b.length);
-  return { shared, coverage: base > 0 ? shared.length / base : 0 };
-}
-
-/**
- * 字面相关的最终判定（纯函数，便于单独验证）：
- * - 主通道：共享了一个稀有的 3-gram 及以上片段，即连续 3 个汉字相同，属于术语复现；
- * - 兜底通道：多个稀有词同时共现，用于若干 2 字术语密集出现在两条划线里的情况。
- * 只靠零散通用 2-gram 凑够数量不算——那正是「换个说法」会误命中的来源。
- */
-export function isRelatedOverlap(overlap: TermOverlap, df: ReadonlyMap<string, number>): boolean {
-  if (overlap.shared.length < MIN_SHARED_TERMS) {
-    return false;
-  }
-  const rare = overlap.shared.filter((term) => (df.get(term) ?? 0) <= RARE_TERM_DF);
-  if (rare.length === 0) {
-    return false;
-  }
-  return rare.some((term) => term.length >= 3) || rare.length >= MIN_RARE_TERMS_FOR_SHORT;
-}
-
-/** 代码选区与过短划线一律不参与关联，避免符号噪音和乱配 */
-export function isRelationEligible(text: string, isCode: boolean): boolean {
-  return !isCode && text.trim().length >= MIN_RELATION_TEXT_CHARS;
 }

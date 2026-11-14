@@ -12290,14 +12290,315 @@ function isCodeAnchor(anchor) {
   return "isCode" in anchor && Boolean(anchor.isCode);
 }
 
-// src/utils/textTerms.ts
+// src/utils/textPhrases.ts
 var MIN_RELATION_TEXT_CHARS = 8;
 var MAX_TEXT_CHARS = 600;
+var MIN_PHRASE_LENGTH = 4;
+var SEED_LENGTH = 4;
+var MIN_LATIN_PHRASE_LENGTH = 8;
+var FUNCTION_CHARS = new Set(
+  "\u7684\u4E86\u7740\u8FC7\u662F\u5728\u548C\u4E0E\u4E5F\u90FD\u5C31\u800C\u4F46\u8FD8\u66F4\u4E0D\u5F88\u8BE5\u6B64\u8FD9\u90A3\u6709\u4EE5\u6240\u5176\u4E4B\u4E8E\u4E3A\u628A\u88AB\u8BA9\u5411\u4ECE\u5230\u5BF9\u7ED9\u6BD4\u624D\u53C8\u518D\u53EA\u4E2A\u79CD\u4E9B\u5E76\u6216\u5982\u82E5\u5219\u53CA\u5417\u5462\u5427\u554A\u5440\u54E6\u561B\u5457\u4E48\u4F60\u60A8\u6211\u4ED6\u5979\u5B83\u4EEC".split("")
+);
+var GENERIC_CHARS = new Set(
+  "\u91CD\u8981\u5B9E\u9645\u751F\u6D3B\u5E94\u8BE5\u53EF\u80FD\u9700\u8981\u7814\u7A76\u8868\u7ED3\u679C\u95EE\u9898\u65B9\u9762\u5DE5\u4F5C\u65B9\u5F0F\u65B9\u6CD5\u611F\u89C9\u4F53\u9A8C\u4E1C\u897F\u90E8\u5206\u6761\u4EF6\u72B6\u6001\u6570\u91CF\u8FC7\u7A0B\u9636\u6BB5\u4E00\u79CD\u65F6\u95F4\u793E\u4F1A\u4EBA\u4EEC\u4E8B\u60C5\u60C5\u51B5\u5730\u65B9\u4E16\u754C\u8FDB\u884C\u51FA\u73B0\u5177\u6709\u6210\u4E3A\u4F7F\u7528\u4F5C\u7528\u5F71\u54CD\u53D8\u5316\u53D1\u5C55".split("")
+);
+var PHRASE_STOP = /* @__PURE__ */ new Set([
+  "\u4E00\u65B9\u9762",
+  "\u53E6\u4E00\u65B9\u9762",
+  "\u4E00\u822C\u6765\u8BF4",
+  "\u4E00\u822C\u800C\u8A00",
+  "\u6362\u53E5\u8BDD\u8BF4",
+  "\u6362\u8A00\u4E4B",
+  "\u4E8B\u5B9E\u4E0A",
+  "\u5B9E\u9645\u4E0A",
+  "\u503C\u5F97\u6CE8\u610F\u7684\u662F",
+  "\u9700\u8981\u6CE8\u610F\u7684\u662F",
+  "\u7EFC\u4E0A\u6240\u8FF0",
+  "\u603B\u800C\u8A00\u4E4B",
+  "\u6240\u8C13",
+  "\u4EE5\u4E0B",
+  "\u5982\u4E0B",
+  "\u4E0A\u8FF0",
+  "\u4E0D\u8A00\u800C\u55BB",
+  "\u6BCB\u5EB8\u7F6E\u7591",
+  "\u4F17\u6240\u5468\u77E5"
+]);
+var META_WORDS = [
+  "\u539F\u6587",
+  "\u51FA\u5904",
+  "\u51FA\u81EA",
+  "\u6765\u6E90",
+  "\u80CC\u666F",
+  "\u4F5C\u8005",
+  "\u8BFB\u8005",
+  "\u5212\u7EBF",
+  "\u6279\u6CE8",
+  "\u5907\u6CE8",
+  "\u7B14\u8BB0",
+  "\u6458\u5F55",
+  "\u5F15\u7528",
+  "\u53C2\u89C1",
+  "\u8865\u5145\u8BF4\u660E",
+  "\u5C55\u5F00\u8BF4\u660E",
+  "\u8FD9\u6BB5",
+  "\u8FD9\u53E5",
+  "\u90A3\u53E5",
+  "\u672C\u53E5",
+  "\u4E0B\u53E5",
+  "\u4E0A\u53E5"
+];
+var PRONOUN_WORDS = [
+  "\u81EA\u5DF1",
+  "\u522B\u4EBA",
+  "\u4ED6\u4EBA",
+  "\u5F7C\u6B64",
+  "\u4EBA\u4EEC",
+  "\u5927\u5BB6",
+  "\u6709\u4EBA",
+  "\u54B1\u4EEC",
+  "\u4EBA\u5BB6",
+  "\u8C01",
+  "\u4EC0\u4E48",
+  "\u600E\u4E48",
+  "\u600E\u6837"
+];
+var LATIN_STOP = /* @__PURE__ */ new Set([
+  "about",
+  "there",
+  "their",
+  "which",
+  "would",
+  "could",
+  "should",
+  "other",
+  "these",
+  "those",
+  "what",
+  "when",
+  "where",
+  "while",
+  "because",
+  "however",
+  "therefore",
+  "whether",
+  "everything",
+  "something",
+  "anything",
+  "nothing",
+  "really",
+  "always",
+  "never",
+  "often",
+  "sometimes",
+  "indeed",
+  "perhaps",
+  "rather",
+  "certain",
+  "single",
+  "another",
+  "through",
+  "before",
+  "people",
+  "system",
+  "market",
+  "effect",
+  "theory",
+  "value",
+  "level",
+  "issue",
+  "change",
+  "result",
+  "process",
+  "become",
+  "business",
+  "government",
+  "important",
+  "different"
+]);
+var TERM_SUFFIXES = [
+  "\u5173\u7CFB",
+  "\u7406\u8BBA",
+  "\u6548\u5E94",
+  "\u539F\u5219",
+  "\u89C4\u5F8B",
+  "\u6210\u672C",
+  "\u5FAA\u73AF",
+  "\u56DE\u8DEF",
+  "\u673A\u5236",
+  "\u6A21\u578B",
+  "\u7CFB\u7EDF",
+  "\u7ED3\u6784",
+  "\u6CD5\u5219",
+  "\u5B9A\u5F8B",
+  "\u9636\u7EA7",
+  "\u4E3B\u4E49",
+  "\u8D8B\u52BF",
+  "\u6307\u6570",
+  "\u58C1\u5792",
+  "\u8303\u5F0F",
+  "\u7B56\u7565",
+  "\u4F18\u52BF",
+  "\u5DEE\u5F02",
+  "\u969C\u788D",
+  "\u56E0\u7D20",
+  "\u5FC3\u7406",
+  "\u751F\u7406",
+  "\u53CD\u5E94",
+  "\u9700\u6C42",
+  "\u4F9B\u7ED9",
+  "\u5E02\u573A",
+  "\u5546\u54C1",
+  "\u6CE2\u52A8",
+  "\u589E\u957F",
+  "\u9605\u8BFB",
+  "\u601D\u7EF4",
+  "\u601D\u8003",
+  "\u611F\u60C5",
+  "\u611F\u53D7",
+  "\u4E60\u60EF",
+  "\u80FD\u529B",
+  "\u5B66"
+];
+var WEAK_NUMBER_PREFIX = new Set(
+  "\u4E00\u4E8C\u4E09\u56DB\u4E94\u516D\u4E03\u516B\u4E5D\u5341\u767E\u5343\u4E24\u6570\u6BCF\u67D0\u8BE5\u672C\u6B21\u4E2A\u70B9\u4F4D\u540D\u904D\u79CD\u4EF6\u51E0\u7B2C\u5404\u53E6\u540C\u6BCF\u53E6".split("")
+);
+var WEAK_NEGATION_PREFIX = new Set("\u65E0\u4E0D\u6CA1\u672A\u975E\u83AB\u52FF\u6BCB".split(""));
+var TRIM_CHARS = new Set("\u4E2D\u4E0A\u4E0B\u91CC\u524D\u65F6\u540E\u5185\u4EFD\u70B9\u4E9B\u4E2A".split(""));
+var CJK_PATTERN = /[\u3400-\u9fff]/;
+var LATIN_PATTERN = /[a-z0-9]/;
+function cleanText(text) {
+  return text.replace(/```[\s\S]*?```/g, " ").replace(/!?\[\[[^\]]*\]\]/g, " ").replace(/<[^>]+>/g, " ").replace(/&(?:nbsp|amp|lt|gt|quot|#\d+|#x[0-9a-f]+);/gi, " ").replace(/[#>*_`~|]/g, " ").replace(/[\s\u00a0]+/g, " ").toLowerCase().slice(0, MAX_TEXT_CHARS).replace(/[^0-9a-z\u3400-\u9fff]+/g, " ").replace(/\s+/g, " ").trim();
+}
+function splitSegments(dense) {
+  const segments = [];
+  let latinRun = [];
+  const flushLatin = () => {
+    if (latinRun.length > 0) {
+      segments.push(latinRun.join(" "));
+      latinRun = [];
+    }
+  };
+  for (const token of dense.split(" ")) {
+    if (!token) {
+      continue;
+    }
+    if (CJK_PATTERN.test(token)) {
+      flushLatin();
+      let current = "";
+      const flushCjk = () => {
+        if (current.length >= 2) {
+          segments.push(current);
+        }
+        current = "";
+      };
+      for (const ch of token) {
+        if (FUNCTION_CHARS.has(ch)) {
+          flushCjk();
+          continue;
+        }
+        current += ch;
+      }
+      flushCjk();
+      continue;
+    }
+    if (/^\d+$/.test(token)) {
+      flushLatin();
+      continue;
+    }
+    latinRun.push(token);
+  }
+  flushLatin();
+  return segments;
+}
+function phraseSpecificity(phrase) {
+  let cjk = 0;
+  let latin = 0;
+  for (const ch of phrase) {
+    if (CJK_PATTERN.test(ch)) {
+      if (!GENERIC_CHARS.has(ch)) {
+        cjk += 1;
+      }
+    } else if (LATIN_PATTERN.test(ch)) {
+      latin += 1;
+    }
+  }
+  return { cjk, latin };
+}
+function isNoisePhrase(phrase) {
+  if (phrase.length < MIN_PHRASE_LENGTH) {
+    return true;
+  }
+  if (PHRASE_STOP.has(phrase)) {
+    return true;
+  }
+  if (META_WORDS.some((word) => phrase.includes(word))) {
+    return true;
+  }
+  if (PRONOUN_WORDS.some((word) => phrase.includes(word))) {
+    return true;
+  }
+  const { cjk, latin } = phraseSpecificity(phrase);
+  if (cjk > 0) {
+    return cjk < 2;
+  }
+  const words = phrase.split(" ").filter(Boolean);
+  if (words.length === 1) {
+    return latin < MIN_LATIN_PHRASE_LENGTH || LATIN_STOP.has(phrase);
+  }
+  if (latin < MIN_LATIN_PHRASE_LENGTH) {
+    return true;
+  }
+  if (words.some((word) => word.length < 3)) {
+    return true;
+  }
+  return LATIN_STOP.has(phrase);
+}
+function trimPhrase(phrase) {
+  let result = phrase;
+  while (result.length > MIN_PHRASE_LENGTH && TRIM_CHARS.has(result[0])) {
+    result = result.slice(1);
+  }
+  while (result.length > MIN_PHRASE_LENGTH && TRIM_CHARS.has(result[result.length - 1])) {
+    result = result.slice(0, -1);
+  }
+  return result;
+}
+function hasTermSuffix(phrase) {
+  return TERM_SUFFIXES.some((suffix) => phrase.endsWith(suffix));
+}
+function startsWithWeakToken(phrase) {
+  const first = phrase[0];
+  if (!first) {
+    return true;
+  }
+  if (WEAK_NUMBER_PREFIX.has(first)) {
+    return true;
+  }
+  if (phrase.length === MIN_PHRASE_LENGTH && WEAK_NEGATION_PREFIX.has(first)) {
+    return true;
+  }
+  return false;
+}
+function expandPhrase(left, leftOffset, right, rightOffset, maxLength) {
+  let start = 0;
+  while (start < maxLength && leftOffset - start - 1 >= 0 && rightOffset - start - 1 >= 0 && left[leftOffset - start - 1] === right[rightOffset - start - 1]) {
+    start += 1;
+  }
+  let end = SEED_LENGTH;
+  while (end < maxLength && leftOffset + end < left.length && rightOffset + end < right.length && left[leftOffset + end] === right[rightOffset + end]) {
+    end += 1;
+  }
+  return left.slice(leftOffset - start, leftOffset + end);
+}
+function isRelationEligible(text, isCode) {
+  return !isCode && text.trim().length >= MIN_RELATION_TEXT_CHARS;
+}
+
+// src/utils/textTerms.ts
+var MIN_RELATION_TEXT_CHARS2 = 8;
+var MAX_TEXT_CHARS2 = 600;
 var MAX_RAW_TERMS = 400;
 var MAX_TERMS = 24;
-var RARE_TERM_DF = 8;
-var MIN_SHARED_TERMS = 2;
-var MIN_RARE_TERMS_FOR_SHORT = 3;
 var STOP_GRAMS = /* @__PURE__ */ new Set([
   "\u6211\u4EEC",
   "\u4F60\u4EEC",
@@ -12358,11 +12659,11 @@ var STOP_GRAMS = /* @__PURE__ */ new Set([
 var CJK_RUN = /[\u3400-\u9fff]+/g;
 var ASCII_WORD = /[a-z0-9][a-z0-9_-]*/g;
 function normalize2(text) {
-  return text.replace(/```[\s\S]*?```/g, " ").replace(/!?\[\[[^\]]*\]\]/g, " ").replace(/<[^>]+>/g, " ").replace(/&(?:nbsp|amp|lt|gt|quot|#\d+|#x[0-9a-f]+);/gi, " ").replace(/[#>*_`~|]/g, " ").replace(/[\s\u00a0]+/g, " ").toLowerCase().slice(0, MAX_TEXT_CHARS);
+  return text.replace(/```[\s\S]*?```/g, " ").replace(/!?\[\[[^\]]*\]\]/g, " ").replace(/<[^>]+>/g, " ").replace(/&(?:nbsp|amp|lt|gt|quot|#\d+|#x[0-9a-f]+);/gi, " ").replace(/[#>*_`~|]/g, " ").replace(/[\s\u00a0]+/g, " ").toLowerCase().slice(0, MAX_TEXT_CHARS2);
 }
 function extractTerms(text) {
   const clean = normalize2(text);
-  if (clean.trim().length < MIN_RELATION_TEXT_CHARS) {
+  if (clean.trim().length < MIN_RELATION_TEXT_CHARS2) {
     return [];
   }
   const terms = /* @__PURE__ */ new Set();
@@ -12400,28 +12701,6 @@ function rankTerms(terms, df, limit = MAX_TERMS) {
   };
   return Array.from(new Set(terms)).sort((left, right) => priority(left) - priority(right) || right.length - left.length || left.localeCompare(right)).slice(0, limit);
 }
-function termOverlap(a3, b3) {
-  if (a3.length === 0 || b3.length === 0) {
-    return { shared: [], coverage: 0 };
-  }
-  const setB = new Set(b3);
-  const shared = a3.filter((term) => setB.has(term));
-  const base = Math.min(a3.length, b3.length);
-  return { shared, coverage: base > 0 ? shared.length / base : 0 };
-}
-function isRelatedOverlap(overlap, df) {
-  if (overlap.shared.length < MIN_SHARED_TERMS) {
-    return false;
-  }
-  const rare = overlap.shared.filter((term) => (df.get(term) ?? 0) <= RARE_TERM_DF);
-  if (rare.length === 0) {
-    return false;
-  }
-  return rare.some((term) => term.length >= 3) || rare.length >= MIN_RARE_TERMS_FOR_SHORT;
-}
-function isRelationEligible(text, isCode) {
-  return !isCode && text.trim().length >= MIN_RELATION_TEXT_CHARS;
-}
 
 // src/views/relationModel.ts
 var RELATED_LIMIT = 5;
@@ -12429,11 +12708,17 @@ var RECOMMEND_LIMIT = 3;
 var COLD_START_MIN_TAGS = 3;
 var COLD_START_MIN_CARDS = 10;
 var CACHE_TTL_MS = 3e3;
-var MAX_ENTRIES = 800;
-var SAME_DOCUMENT_ORDER_FACTOR = 0.85;
+var MAX_ENTRIES = 4e3;
+var MAX_PHRASE_DOCUMENTS = 3;
+var CROSS_MIN_PHRASE_LENGTH = 5;
+var RARE_CHAR_DOCUMENTS = 5;
+var MAX_SEED_POSTINGS = 60;
+var SAME_DOCUMENT_ORDER_FACTOR = 0.9;
+var MAX_EXTENSION = 40;
 function cardKey(card) {
   return `${card.sourcePath}#${card.id}`;
 }
+var CJK_PATTERN2 = /[\u3400-\u9fff]/;
 function isAdjacent(self, selfOrder, entry) {
   const other = entry.card;
   if (self.sourcePath !== other.sourcePath) {
@@ -12453,24 +12738,55 @@ function isAdjacent(self, selfOrder, entry) {
   }
   return false;
 }
+function buildEntry(card, order) {
+  const textOk = isRelationEligible(card.text, card.isCode);
+  const contentOk = card.content.trim().length >= MIN_RELATION_TEXT_CHARS;
+  if (!textOk && !contentOk) {
+    return null;
+  }
+  const segments = [
+    ...textOk ? splitSegments(cleanText(card.text)) : [],
+    ...splitSegments(cleanText(card.content))
+  ];
+  if (segments.length === 0) {
+    return null;
+  }
+  return { card, key: cardKey(card), segments, order };
+}
+function selectDistinctPhrases(phrases) {
+  const sorted = [...new Set(phrases)].sort((left, right) => right.length - left.length || left.localeCompare(right));
+  const selected = [];
+  for (const phrase of sorted) {
+    if (selected.some((kept) => kept.includes(phrase))) {
+      continue;
+    }
+    selected.push(phrase);
+  }
+  return selected;
+}
 var RelationModel = class {
   constructor(store) {
     this.store = store;
     this.entries = [];
-    /** 词条 → 出现在多少条卡片里，用于稀有度加权与命中理由排序 */
-    this.documentFrequency = /* @__PURE__ */ new Map();
-    /** 标签比较键 → 该标签下所有卡片的词频，用于按内容推荐 */
-    this.tagTerms = /* @__PURE__ */ new Map();
+    /** 卡片键 → 该卡的相关命中，快照时一次性算好 */
+    this.related = /* @__PURE__ */ new Map();
+    /** 汉字 → 出现在哪些源文档里，用于跨文档短语的罕见字判定 */
+    this.charDocuments = /* @__PURE__ */ new Map();
+    /** 标签比较键 → 该标签下所有卡片的词频，用于按内容推荐（懒建） */
+    this.tagTerms = null;
+    /** 标签推荐用的全库词频（与 tagTerms 同步懒建） */
+    this.tagFrequency = /* @__PURE__ */ new Map();
     this.version = -1;
     this.builtAt = 0;
   }
   invalidate() {
     this.version = -1;
+    this.tagTerms = null;
   }
   /**
    * 构建（或复用）快照。documents 是全库时直接复用，当前文件模式则补拉全库——
    * getIndexedDocuments 走 store 的文档缓存，冷启动后只付一次读盘代价。
-   * 两遍：先抽全量词并统计文档频率，再按稀有度裁剪每条卡片的匹配词集。
+   * 四步：切词段 → 4 字种子倒排找候选对 → 逐对扩展出最长公共短语 → 按跨文档稀有度筛选。
    */
   async prepare(documents) {
     const now = Date.now();
@@ -12478,95 +12794,246 @@ var RelationModel = class {
       return;
     }
     const all = documents.length > 1 ? documents : await this.store.getIndexedDocuments();
-    const df = /* @__PURE__ */ new Map();
-    const raw = [];
-    let order = 0;
+    const entries = [];
     for (const document2 of all) {
       for (const card of buildCards(document2)) {
-        if (!isRelationEligible(card.text, card.isCode)) {
+        const entry = buildEntry(card, entries.length);
+        if (!entry) {
           continue;
         }
-        const allTerms = extractTerms(`${card.text} ${card.content}`);
-        if (allTerms.length === 0) {
-          continue;
-        }
-        for (const term of allTerms) {
-          df.set(term, (df.get(term) ?? 0) + 1);
-        }
-        raw.push({ card, key: cardKey(card), allTerms, order: order++ });
-        if (raw.length >= MAX_ENTRIES) {
+        entries.push(entry);
+        if (entries.length >= MAX_ENTRIES) {
           break;
         }
       }
-      if (raw.length >= MAX_ENTRIES) {
+      if (entries.length >= MAX_ENTRIES) {
         break;
       }
     }
-    const entries = [];
-    const tagTerms = /* @__PURE__ */ new Map();
-    for (const item of raw) {
-      const terms = rankTerms(item.allTerms, df);
-      entries.push({ card: item.card, key: item.key, terms, order: item.order });
-      for (const tag of item.card.tags) {
-        const key = tagKey(tag);
-        if (!key) {
-          continue;
-        }
-        let counts = tagTerms.get(key);
-        if (!counts) {
-          counts = /* @__PURE__ */ new Map();
-          tagTerms.set(key, counts);
-        }
-        for (const term of terms) {
-          counts.set(term, (counts.get(term) ?? 0) + 1);
-        }
-      }
-    }
     this.entries = entries;
-    this.documentFrequency = df;
-    this.tagTerms = tagTerms;
+    this.charDocuments = this.buildCharDocuments(entries);
+    this.related = this.buildRelations(entries);
+    this.tagTerms = null;
     this.version = this.store.version;
     this.builtAt = now;
   }
-  /** 与当前卡片字面相关的其他批注，按重合度降序，带命中理由 */
+  /** 汉字 → 源文档集合：同一本书里的几十张卡不会把本稀有的字刷成常见字 */
+  buildCharDocuments(entries) {
+    const map = /* @__PURE__ */ new Map();
+    for (const entry of entries) {
+      const seen = /* @__PURE__ */ new Set();
+      for (const segment of entry.segments) {
+        for (const ch of segment) {
+          if (CJK_PATTERN2.test(ch)) {
+            seen.add(ch);
+          }
+        }
+      }
+      for (const ch of seen) {
+        let sources = map.get(ch);
+        if (!sources) {
+          sources = /* @__PURE__ */ new Set();
+          map.set(ch, sources);
+        }
+        sources.add(entry.card.sourcePath);
+      }
+    }
+    return map;
+  }
+  /** 短语里是否含有罕见字（出现在不超过 RARE_CHAR_DOCUMENTS 个源文档里） */
+  hasRareCharacter(phrase) {
+    for (const ch of phrase) {
+      if (!CJK_PATTERN2.test(ch)) {
+        continue;
+      }
+      const documents = this.charDocuments.get(ch)?.size ?? 0;
+      if (documents <= RARE_CHAR_DOCUMENTS) {
+        return true;
+      }
+    }
+    return false;
+  }
+  /**
+   * 找出共享「跨书罕见具体短语」的卡片对。
+   * 先用 4 字种子倒排筛出候选对（避免全库两两比对），再逐对把种子扩展成最长公共短语，
+   * 最后按短语出现的源文档数过滤：出现在很多书里的说法（『一般来说』『一般情况下』）
+   * 不构成共同话题，直接丢弃。
+   */
+  buildRelations(entries) {
+    const related = /* @__PURE__ */ new Map();
+    if (entries.length < 2) {
+      return related;
+    }
+    const postings = /* @__PURE__ */ new Map();
+    entries.forEach((entry, cardIndex) => {
+      const seeds = /* @__PURE__ */ new Set();
+      for (const segment of entry.segments) {
+        for (let i3 = 0; i3 + SEED_LENGTH <= segment.length; i3 += 1) {
+          seeds.add(segment.slice(i3, i3 + SEED_LENGTH));
+        }
+      }
+      for (const seed of seeds) {
+        const list = postings.get(seed);
+        if (list) {
+          list.push(cardIndex);
+        } else {
+          postings.set(seed, [cardIndex]);
+        }
+      }
+    });
+    const pairs = /* @__PURE__ */ new Map();
+    for (const list of postings.values()) {
+      const cardIndexes = Array.from(new Set(list));
+      if (cardIndexes.length < 2 || cardIndexes.length > MAX_SEED_POSTINGS) {
+        continue;
+      }
+      for (let i3 = 0; i3 < cardIndexes.length; i3 += 1) {
+        for (let j2 = i3 + 1; j2 < cardIndexes.length; j2 += 1) {
+          const low = Math.min(cardIndexes[i3], cardIndexes[j2]);
+          const high = Math.max(cardIndexes[i3], cardIndexes[j2]);
+          pairs.set(`${low}:${high}`, [low, high]);
+        }
+      }
+    }
+    const pairPhrases = /* @__PURE__ */ new Map();
+    const allPhrases = /* @__PURE__ */ new Set();
+    for (const [pair, [low, high]] of pairs) {
+      const shared = selectDistinctPhrases(
+        this.expandCommonPhrases(entries[low].segments, entries[high].segments)
+      );
+      if (shared.length === 0) {
+        continue;
+      }
+      pairPhrases.set(pair, shared);
+      for (const phrase of shared) {
+        allPhrases.add(phrase);
+      }
+    }
+    const phraseDocuments = /* @__PURE__ */ new Map();
+    for (const phrase of allPhrases) {
+      const candidates = /* @__PURE__ */ new Set();
+      for (let i3 = 0; i3 + SEED_LENGTH <= phrase.length; i3 += 1) {
+        for (const item of postings.get(phrase.slice(i3, i3 + SEED_LENGTH)) ?? []) {
+          candidates.add(item);
+        }
+      }
+      const sources = /* @__PURE__ */ new Set();
+      for (const index of candidates) {
+        if (entries[index].segments.some((segment) => segment.includes(phrase))) {
+          sources.add(entries[index].card.sourcePath);
+        }
+      }
+      phraseDocuments.set(phrase, sources);
+    }
+    for (const [pair, phrases] of pairPhrases) {
+      const [low, high] = pairs.get(pair) ?? [0, 0];
+      const cross = entries[low].card.sourcePath !== entries[high].card.sourcePath;
+      const usable = phrases.filter((phrase) => {
+        const documents = phraseDocuments.get(phrase)?.size ?? 0;
+        if (documents > MAX_PHRASE_DOCUMENTS) {
+          return false;
+        }
+        if (!cross) {
+          return true;
+        }
+        return this.isCrossPhraseUsable(phrase);
+      });
+      if (usable.length === 0) {
+        continue;
+      }
+      const score = usable.reduce((sum, phrase) => {
+        const documents = phraseDocuments.get(phrase)?.size ?? 1;
+        return sum + phrase.length * (MAX_PHRASE_DOCUMENTS + 1 - documents);
+      }, 0);
+      const reasons = usable.slice(0, 2);
+      pushHit(related, entries[low], entries[high], score, reasons);
+      pushHit(related, entries[high], entries[low], score, reasons);
+    }
+    for (const hits of related.values()) {
+      hits.sort((left, right) => right.score - left.score);
+    }
+    return related;
+  }
+  /**
+   * 跨文档短语是否可用：跨书撞词的概率高得多，光靠长度和稀有度不够，
+   * 还得看短语本身是不是术语。
+   * 5 字以上直接放行；4 字短语必须带术语特征（罕见字 / 术语后缀），
+   * 并且不能是「一篇文章」「无忧无虑」这类数量词或否定词开头的通用说法。
+   */
+  isCrossPhraseUsable(phrase) {
+    if (phrase.length >= CROSS_MIN_PHRASE_LENGTH) {
+      return true;
+    }
+    if (startsWithWeakToken(phrase)) {
+      return false;
+    }
+    return this.hasRareCharacter(phrase) || hasTermSuffix(phrase);
+  }
+  /** 两组词段之间的公共短语：在共同种子上向两侧扩展，取最长的那些 */
+  expandCommonPhrases(left, right) {
+    const found = /* @__PURE__ */ new Set();
+    const seeds = /* @__PURE__ */ new Map();
+    right.forEach((segment, segmentIndex) => {
+      for (let i3 = 0; i3 + SEED_LENGTH <= segment.length; i3 += 1) {
+        const seed = segment.slice(i3, i3 + SEED_LENGTH);
+        const list = seeds.get(seed);
+        if (list) {
+          list.push(segmentIndex, i3);
+        } else {
+          seeds.set(seed, [segmentIndex, i3]);
+        }
+      }
+    });
+    for (const segment of left) {
+      if (segment.length < MIN_PHRASE_LENGTH) {
+        continue;
+      }
+      for (let i3 = 0; i3 + SEED_LENGTH <= segment.length; i3 += 1) {
+        const positions = seeds.get(segment.slice(i3, i3 + SEED_LENGTH));
+        if (!positions) {
+          continue;
+        }
+        for (let p3 = 0; p3 < positions.length; p3 += 2) {
+          const other = right[positions[p3]];
+          const expanded = expandPhrase(segment, i3, other, positions[p3 + 1], MAX_EXTENSION);
+          const phrase = trimPhrase(expanded);
+          if (phrase.length >= MIN_PHRASE_LENGTH && !isNoisePhrase(phrase)) {
+            found.add(phrase);
+          }
+        }
+      }
+    }
+    return Array.from(found);
+  }
+  /**
+   * 与当前卡片字面相关的其他批注，按共享短语的区分度排序，带命中理由。
+   * 只有「跨书罕见的具体短语」才算相关：出现在很多书里的说法会被稀有度过滤掉，
+   * 避免推荐出一堆不相干的划线。
+   */
   getRelated(card, limit = RELATED_LIMIT) {
-    const selfTerms = rankTerms(extractTerms(`${card.text} ${card.content}`), this.documentFrequency);
-    if (selfTerms.length === 0) {
+    const hits = this.related.get(cardKey(card));
+    if (!hits || hits.length === 0) {
       return [];
     }
-    const self = cardKey(card);
-    const selfOrder = this.entries.find((entry) => entry.key === self)?.order ?? -1;
-    const hits = [];
-    for (const entry of this.entries) {
-      if (entry.key === self || isAdjacent(card, selfOrder, entry)) {
-        continue;
-      }
-      const overlap = termOverlap(selfTerms, entry.terms);
-      if (!isRelatedOverlap(overlap, this.documentFrequency)) {
-        continue;
-      }
-      const rawScore = overlap.shared.length + overlap.coverage * 2;
-      const score = rawScore * (entry.card.sourcePath === card.sourcePath ? SAME_DOCUMENT_ORDER_FACTOR : 1);
-      const reasons = [...overlap.shared].sort((left, right) => right.length - left.length || (this.documentFrequency.get(left) ?? 0) - (this.documentFrequency.get(right) ?? 0) || left.localeCompare(right)).slice(0, 2);
-      hits.push({ card: entry.card, score, reasons });
-    }
-    return hits.sort((left, right) => right.score - left.score).slice(0, limit);
+    return hits.slice(0, limit);
   }
   /**
    * 按当前划线内容推荐历史标签。只从用户已经用过的标签里挑，
    * 不发明新词；冷启动或命中词不足 2 个时静默返回空。
+   * 词频索引按需构建：只有打开标签编辑态才会用到，不拖慢常规渲染。
    */
   getRecommendedTags(card, limit = RECOMMEND_LIMIT) {
-    if (this.tagTerms.size < COLD_START_MIN_TAGS || this.entries.length < COLD_START_MIN_CARDS) {
+    const tagTerms = this.ensureTagIndex();
+    if (tagTerms.size < COLD_START_MIN_TAGS || this.entries.length < COLD_START_MIN_CARDS) {
       return [];
     }
-    const terms = rankTerms(extractTerms(`${card.text} ${card.content}`), this.documentFrequency);
+    const terms = rankTerms(extractTerms(`${card.text} ${card.content}`), this.tagFrequency);
     if (terms.length === 0) {
       return [];
     }
     const existing = new Set(card.tags.map((tag) => tagKey(tag)));
     const ranked = [];
-    for (const [key, counts] of this.tagTerms) {
+    for (const [key, counts] of tagTerms) {
       if (existing.has(key)) {
         continue;
       }
@@ -12583,7 +13050,55 @@ var RelationModel = class {
     }
     return ranked.sort((left, right) => right.score - left.score || left.key.localeCompare(right.key)).slice(0, limit).map((item) => this.store.getTagDisplayName(item.key));
   }
+  /** 标签推荐用的词频索引：标签 → 该标签下卡片出现的词条及次数 */
+  ensureTagIndex() {
+    if (this.tagTerms) {
+      return this.tagTerms;
+    }
+    const frequency = /* @__PURE__ */ new Map();
+    const cardTerms = [];
+    for (const entry of this.entries) {
+      const terms = extractTerms(`${entry.card.text} ${entry.card.content}`);
+      cardTerms.push(terms);
+      for (const term of terms) {
+        frequency.set(term, (frequency.get(term) ?? 0) + 1);
+      }
+    }
+    const tagTerms = /* @__PURE__ */ new Map();
+    this.entries.forEach((entry, index) => {
+      const terms = rankTerms(cardTerms[index], frequency);
+      for (const tag of entry.card.tags) {
+        const key = tagKey(tag);
+        if (!key) {
+          continue;
+        }
+        let counts = tagTerms.get(key);
+        if (!counts) {
+          counts = /* @__PURE__ */ new Map();
+          tagTerms.set(key, counts);
+        }
+        for (const term of terms) {
+          counts.set(term, (counts.get(term) ?? 0) + 1);
+        }
+      }
+    });
+    this.tagFrequency = frequency;
+    this.tagTerms = tagTerms;
+    return tagTerms;
+  }
 };
+function pushHit(related, owner, target, score, reasons) {
+  if (isAdjacent(owner.card, owner.order, target)) {
+    return;
+  }
+  const adjusted = owner.card.sourcePath === target.card.sourcePath ? score * SAME_DOCUMENT_ORDER_FACTOR : score;
+  let list = related.get(owner.key);
+  if (!list) {
+    list = [];
+    related.set(owner.key, list);
+  }
+  list.push({ card: target.card, score: adjusted, reasons });
+}
 
 // src/views/navigation.ts
 var import_obsidian9 = require("obsidian");
@@ -13086,7 +13601,7 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
     editActions.createEl("button", { cls: "yh-ov-cancel", text: "\u53D6\u6D88", attr: { type: "button" } });
   }
   /**
-   * 字面相关的其他批注：默认折叠，每条标出命中的词（让 2-gram 的噪音可解释），
+   * 字面相关的其他批注：默认折叠，每条标出命中的短语（说明为什么相关），
    * 点击跳转到原文。无命中时整个区块不渲染。
    */
   renderRelated(card, cardData) {

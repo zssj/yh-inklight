@@ -21,12 +21,13 @@ views/navigation.ts: 三端跳转单点（md 偏移 / pdf 页码 / epub CFI）�
 views/sidebarView.ts: 右侧总览面板，使用彩色卡片合并 highlight 与关联 note，并承载搜索、标签筛选、过滤、排序、导出、跳转与内联编辑；移动端标签编辑态处理软键盘遮挡，不改阅读区；编辑期间延后重绘、重绘不抢焦点，避免输入法自弹。
 views/tagBoardView.ts: 标签总览视图，按「标签 → 文档 → 批注」三栏主从跨文档聚合批注，窄屏降级为单栏 + 面包屑。
 views/tagInput.ts: 标签 UI 组件（只读 chip 行 + chip 编辑器与补全下拉），侧栏、标签总览与两个弹窗共用；候选为 TagSuggestion[]（可含 OB 标签与按内容推荐项，推荐独立配额最多 3 个），支持 quickApply 一键沿用当前文档标签、showSuggestionsOnOpen（侧栏空内容即显示候选）、initialQuery / onQueryChange（重绘后回填未提交输入）；空内容折叠为「推荐 3 + 常用 5」并可展开其余；处理中文输入法组合态，拼音选词不会误建标签。
-views/relationModel.ts: 字面关联派生层（与 cardModel 同层），按需内存快照随 store.version 失效；两遍构建（全量抽词统计文档频率 → 按稀有度裁剪），提供 getRelated（稀有连续片段双通道判定 + 命中理由 + 近邻排除含 EPUB、同文档只降序不设门槛）与 getRecommendedTags（标签→词频、冷启动静默、只推荐用过的标签）；不落盘、不写 sidecar、不升 index 版本。
+views/relationModel.ts: 字面关联派生层（与 cardModel 同层），按需内存快照随 store.version 失效；相关批注改走短语级匹配（utils/textPhrases）：4 字种子倒排找候选对 → 扩展出最长公共短语 → 文档级稀有度过滤（出现在超过 3 个源文档的短语视为通用说法丢弃）→ 同文档只要求短语够长够罕见，跨文档另加术语特征门槛（5 字以上直接放行，4 字短语须含罕见字或术语后缀且非数量词/否定词开头）；提供 getRelated（短语级判定 + 命中理由 + 近邻排除含 EPUB、同文档只降序不设门槛）与 getRecommendedTags（标签→词频、冷启动静默、只推荐用过的标签）；不落盘、不写 sidecar、不升 index 版本。
 views/stickyNoteLane.ts: 编辑/阅读模式的便签泳道，基于 positioning 布局算法渲染可编辑便签条，支持窄屏自适应。
 views/stickyNoteView.ts: 兼容型便利贴卡片组件，保留 Markdown 渲染、折叠与编辑。
 settings/settingsTab.ts: 插件设置页，管理默认颜色、便签栏、窄屏折叠、连接线、作者、迁移策略、Markdown 统计与「与 Obsidian 标签互通」开关（默认关）。
 utils/format.ts: 通用格式化工具（时间等），供 sidebarView / stickyNoteView 等共用。
-utils/textTerms.ts: 字面抽词与判定纯函数（中文 2/3-gram + ASCII 词 + 停用 gram 表 + EPUB 文本清洗）、rankTerms（按全库文档频率挑稀有词）、termOverlap（共享词与覆盖率）、isRelatedOverlap（稀有连续片段双通道判定）、短文本/代码选区过滤；无依赖、不联网、不做语义。
+utils/textTerms.ts: 字面抽词纯函数（中文 2/3-gram + ASCII 词 + 停用 gram 表 + EPUB 文本清洗）、rankTerms（按全库文档频率挑稀有词）、termOverlap、isRelatedOverlap、短文本/代码选区过滤；无依赖、不联网、不做语义；现仅供 views/relationModel 的标签推荐使用，相关批注匹配已改走 utils/textPhrases 的短语级算法。
+utils/textPhrases.ts: 短语级匹配纯函数（相关批注的唯一判定基础）：cleanText（清洗归一）、splitSegments（中文按功能字切词段、拉丁按空白合并成多词段）、expandPhrase（从共同种子向两侧扩展成最长公共短语）、trimPhrase（修剪首尾虚词残段）、isNoisePhrase（套话/元话语/代词/通用字/拉丁常见词过滤）、hasTermSuffix（术语后缀判定）、startsWithWeakToken（数量词或否定词开头判定）、phraseSpecificity；不引分词库、不联网、不做语义。
 utils/keyboardInset.ts: 软键盘可见区域探测（visualViewport + virtualKeyboard + focusin 重测，带 isAlive 自动卸载），只回调遮挡高度、不碰 DOM。
 utils/positioning.ts: 便签避让布局纯函数，保留给后续便签栏实验复用。
 ai/EpubAiClient.ts: OpenAI 兼容聊天客户端，用 requestUrl 绕过安卓 CORS，内置服务商/动作预设与中文错误映射；推理模型固定关闭 thinking。

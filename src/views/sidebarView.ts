@@ -1,8 +1,10 @@
 /**
  * [INPUT]: 依赖 Obsidian ItemView、AnnotationStore 数据与插件主类回调
  * [OUTPUT]: 对外提供 AnnotationSidebarView，将当前文件或全库 annotation 合并为可筛选、可跳转、可导出的总览卡片，卡片可挂标签；
- *           标签编辑按内容推荐历史标签，卡片底部折叠展示字面相关的其他批注（受 contentRelations 设置控制）
- * [POS]: views 模块的右侧 Leaf 总览面板，承载搜索、颜色/类型/标签筛选、排序、行内编辑、标签编辑、跳转、删除、导出模板与字面关联；
+ *           标签编辑按内容推荐历史标签，卡片底部折叠展示字面相关的其他批注（受 contentRelations 设置控制）；
+ *           相关行可「确认关联」：把一个共享标签写入两侧批注（行内选择条挑标签，可见可改可取消），
+ *           已确认的关联显示为「已关联 xx」chip，点 chip 从两侧断开——确认结果落在 tags 字段上，是 MOC 的共享标签
+ * [POS]: views 模块的右侧 Leaf 总览面板，承载搜索、颜色/类型/标签筛选、排序、行内编辑、标签编辑、跳转、删除、导出模板、字面关联与确认关联；
  *        顶部搜索/范围/筛选/排序/导出统一收进单一折叠菜单（默认收起，展开态记在视图字段上），列表区域常驻不被菜单挤压；
  *        移动端标签编辑态额外处理软键盘遮挡（列表补底部留白 + 输入框滚入可视区），不触碰阅读区；
  *        标签编辑期间 requestRender / refreshList 只登记不重绘，退出编辑后才补，且重绘重建不抢焦点
@@ -23,6 +25,7 @@ import {
   CommentAnnotation,
   EpubCommentAnnotation,
   EpubHighlightAnnotation,
+  FileAnnotationDocument,
   HighlightAnnotation,
   PdfCommentAnnotation,
   PdfHighlightAnnotation,
@@ -31,7 +34,7 @@ import { AnnotationKind, AnnotationMode, buildCards, SidebarCard } from "./cardM
 import { renderTagChips, renderTagInput, TagSuggestion } from "./tagInput";
 import { RelationModel } from "./relationModel";
 import { openAnnotationTarget } from "./navigation";
-import { tagKey, hasTag } from "../storage/tags";
+import { hasTag, normalizeTag, tagKey, unionTags } from "../storage/tags";
 import type { TagRef } from "../storage/annotationStore";
 
 export const ANNOTATION_SIDEBAR_VIEW = "yh-inklight-sidebar";
@@ -73,6 +76,8 @@ export class AnnotationSidebarView extends ItemView {
   private tagEditorAutoFocus = false;
   /** 编辑态里尚未提交的输入，重绘回填用，避免一次刷新吞掉正在打的标签 */
   private pendingTagQuery = "";
+  /** 相关区 details 的展开态记在视图字段上：确认关联触发的重绘不会把用户刚展开的相关区折回去 */
+  private readonly openRelated = new Set<string>();
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: OverlayAnnotationsPlugin) {
     super(leaf);
@@ -107,6 +112,7 @@ export class AnnotationSidebarView extends ItemView {
     this.pendingRender = false;
     this.pendingTagQuery = "";
     this.tagEditorAutoFocus = false;
+    this.openRelated.clear();
     if (this.renderTimer !== null) {
       window.clearTimeout(this.renderTimer);
       this.renderTimer = null;
@@ -566,7 +572,8 @@ export class AnnotationSidebarView extends ItemView {
 
   /**
    * 字面相关的其他批注：默认折叠，每条标出命中的短语（说明为什么相关），
-   * 点击跳转到原文。无命中时整个区块不渲染。
+   * 点击跳转到原文。行尾「关联」把确认动作物化为两侧共享标签（MOC 雏形），
+   * 已确认的关联显示为「已关联 xx」chip，点 chip 从两侧断开。无命中时整个区块不渲染。
    */
   private renderRelated(card: HTMLElement, cardData: SidebarCard): void {
     const hits = this.relations.getRelated(cardData);
@@ -575,8 +582,20 @@ export class AnnotationSidebarView extends ItemView {
     }
 
     const box = card.createEl("details", { cls: "yh-ov-related" });
+    // 展开态记在视图字段：确认关联后的 refreshAnnotations 会整表重绘，
+    // 不希望用户刚展开的相关区被折回去
+    box.open = this.openRelated.has(cardData.id);
+    box.addEventListener("toggle", () => {
+      if (box.open) {
+        this.openRelated.add(cardData.id);
+      } else {
+        this.openRelated.delete(cardData.id);
+      }
+    });
     box.createEl("summary", { text: `相关的 ${hits.length} 条` });
     const list = box.createDiv({ cls: "yh-ov-related-list" });
+
+    const selfFile = this.fileForCard(cardData);
 
     for (const hit of hits) {
       const row = list.createDiv({ cls: "yh-ov-related-row" });
@@ -588,6 +607,48 @@ export class AnnotationSidebarView extends ItemView {
       const source = this.fileForCard(hit.card);
       meta.createSpan({ cls: "yh-ov-related-file", text: source?.basename ?? hit.card.sourcePath });
 
+      // 已确认的关联 = 两侧共享的标签（确认动作的持久结果）；点 chip 从两侧移除该标签
+      for (const tag of this.sharedTags(cardData, hit.card)) {
+        const chip = meta.createSpan({
+          cls: "yh-ov-related-chip",
+          text: `已关联 ${tag}`,
+          attr: { title: "点击断开该关联标签（两侧同时移除）" },
+        });
+        chip.addEventListener("click", (event) => {
+          event.stopPropagation();
+          void this.removeRelationTag(cardData, hit.card, tag);
+        });
+      }
+
+      // 确认关联：两侧源文件都在才可用；打开行内选择条挑标签，绝不静默写入
+      const linkDisabled = !selfFile || !source;
+      const link = meta.createSpan({
+        cls: "yh-ov-related-link",
+        text: "关联",
+        attr: linkDisabled
+          ? { "aria-disabled": "true", title: "源文件缺失，无法建立关联" }
+          : { role: "button", tabindex: "0", "aria-label": "确认关联", title: "确认关联：把一个共享标签写入两侧批注" },
+      });
+      if (linkDisabled) {
+        link.addClass("is-disabled");
+      }
+      link.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (!linkDisabled) {
+          this.mountRelationPicker(row, cardData, hit.card, hit.reasons);
+        }
+      });
+      link.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        if (!linkDisabled) {
+          this.mountRelationPicker(row, cardData, hit.card, hit.reasons);
+        }
+      });
+
       if (source) {
         row.addClass("is-clickable");
         row.setAttribute("role", "button");
@@ -596,6 +657,129 @@ export class AnnotationSidebarView extends ItemView {
         });
       }
     }
+  }
+
+  /** 两侧已共享的标签（按比较键判同、去重展示写法）：这就是「确认关联」落在数据上的样子 */
+  private sharedTags(a: SidebarCard, b: SidebarCard): string[] {
+    const keys = new Set(b.tags.map(tagKey));
+    const seen = new Set<string>();
+    const shared: string[] = [];
+    for (const tag of a.tags) {
+      const key = tagKey(tag);
+      if (!key || !keys.has(key) || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      shared.push(tag);
+    }
+    return shared;
+  }
+
+  /**
+   * 相关行的确认关联选择条：候选第一位是命中最长的公共短语（算法已保证术语性），
+   * 其后是历史标签，最后一个输入框接受自定义。点候选或回车才写入，Esc / 点外收起。
+   */
+  private mountRelationPicker(row: HTMLElement, self: SidebarCard, other: SidebarCard, reasons: readonly string[]): void {
+    const picker = row.createDiv({ cls: "yh-ov-related-picker" });
+    // 不让行级点击跳转吃掉选择条上的点击
+    picker.addEventListener("click", (event) => event.stopPropagation());
+
+    const listeners = new AbortController();
+    const close = (): void => {
+      listeners.abort();
+      picker.remove();
+    };
+
+    const chips = picker.createDiv({ cls: "yh-ov-related-picker-chips" });
+    const candidates: string[] = [];
+    const phrase = reasons[0]; // selectDistinctPhrases 按长度降序，第一条即最长短语
+    if (phrase) {
+      candidates.push(phrase);
+    }
+    for (const suggestion of this.plugin.getTagSuggestions()) {
+      if (candidates.length >= 6) {
+        break;
+      }
+      if (suggestion.kind !== "used") {
+        continue;
+      }
+      const key = tagKey(suggestion.name);
+      if (!key) {
+        continue;
+      }
+      // 已经共享的标签再点一次是空操作，不作为候选
+      if (hasTag(self.tags, key) && hasTag(other.tags, key)) {
+        continue;
+      }
+      if (!candidates.some((item) => tagKey(item) === key)) {
+        candidates.push(suggestion.name);
+      }
+    }
+    for (const name of candidates) {
+      const chip = chips.createSpan({
+        cls: "yh-ov-related-picker-chip",
+        text: name,
+        attr: { title: name === phrase ? "用这个共同短语作为关联标签" : "用这个历史标签建立关联" },
+      });
+      chip.addEventListener("click", () => {
+        close();
+        void this.applyRelationTag(self, other, name);
+      });
+    }
+
+    const input = chips.createEl("input", {
+      cls: "yh-ov-related-picker-input",
+      attr: { type: "text", placeholder: "自定义标签", "aria-label": "自定义关联标签" },
+    });
+    let composing = false;
+    input.addEventListener("compositionstart", () => {
+      composing = true;
+    });
+    input.addEventListener("compositionend", () => {
+      composing = false;
+    });
+    input.addEventListener("click", (event) => event.stopPropagation());
+    input.addEventListener("keydown", (event) => {
+      // IME 选词阶段的 Enter 必须还给输入法；keyCode 229 是安卓 WebView 的兜底
+      if (composing || event.isComposing || event.keyCode === 229) {
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        const value = input.value.trim();
+        if (!value) {
+          return;
+        }
+        close();
+        void this.applyRelationTag(self, other, value);
+      }
+    });
+
+    // 点选择条外收起（capture 先于行跳转）；行被重绘销毁时顺手清监听
+    document.addEventListener(
+      "pointerdown",
+      (event) => {
+        if (!row.isConnected) {
+          listeners.abort();
+          return;
+        }
+        if (event.target instanceof Node && picker.contains(event.target)) {
+          return;
+        }
+        close();
+      },
+      { capture: true, signal: listeners.signal },
+    );
+    picker.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.key === "Escape" && !event.defaultPrevented) {
+          event.preventDefault();
+          close();
+        }
+      },
+      { signal: listeners.signal },
+    );
   }
 
   /** 标签行：默认只读 chip + 加号；点加号原地切编辑态，不弹窗 */
@@ -770,13 +954,7 @@ export class AnnotationSidebarView extends ItemView {
       return;
     }
 
-    const refs: TagRef[] = [];
-    if (cardData.highlight) {
-      refs.push({ filePath: cardData.sourcePath, annotationId: cardData.highlight.id });
-    }
-    if (cardData.note) {
-      refs.push({ filePath: cardData.sourcePath, annotationId: cardData.note.id });
-    }
+    const refs = this.tagRefs(cardData);
     if (refs.length === 0) {
       return;
     }
@@ -788,6 +966,107 @@ export class AnnotationSidebarView extends ItemView {
     } catch (error) {
       console.warn("yh-inklight: 保存标签失败", error);
       new Notice("标签保存失败，请检查写入权限或同步状态");
+    }
+  }
+
+  /** 卡片的标签 refs：高亮与其笔记共享同一份标签数组，写入时两者都要覆盖 */
+  private tagRefs(card: SidebarCard): TagRef[] {
+    const refs: TagRef[] = [];
+    if (card.highlight) {
+      refs.push({ filePath: card.sourcePath, annotationId: card.highlight.id });
+    }
+    if (card.note) {
+      refs.push({ filePath: card.sourcePath, annotationId: card.note.id });
+    }
+    return refs;
+  }
+
+  /**
+   * 活读一张卡的最新标签（高亮与其笔记的并集）。
+   * 渲染快照可能滞后于其他入口的写入，确认关联必须以落盘数据为准取并集，否则会覆盖掉新标签。
+   * 返回 null 表示该侧不可用（源文件或批注缺失，已给 Notice）。
+   */
+  private async readLiveCardTags(card: SidebarCard, action: string): Promise<{ refs: TagRef[]; live: string[] } | null> {
+    const file = this.fileForCard(card);
+    if (!file) {
+      new Notice(`源文件缺失，无法${action}`);
+      return null;
+    }
+    const refs = this.tagRefs(card);
+    const document = await this.plugin.store.getDocument(file);
+    const live: string[] = [];
+    let found = false;
+    for (const ref of refs) {
+      const annotation = findAnnotationById(document, ref.annotationId);
+      if (annotation) {
+        found = true;
+        live.push(...(annotation.tags ?? []));
+      }
+    }
+    if (!found) {
+      new Notice(`该批注已不存在，无法${action}`);
+      return null;
+    }
+    return { refs, live };
+  }
+
+  /** 确认关联：把同一个标签写入两侧；先两侧都活读成功再写，避免一侧成功一侧失败的不对称 */
+  private async applyRelationTag(self: SidebarCard, other: SidebarCard, rawTag: string): Promise<void> {
+    const tag = normalizeTag(rawTag);
+    if (!tag) {
+      return;
+    }
+    const preparedSelf = await this.readLiveCardTags(self, "建立关联");
+    if (!preparedSelf) {
+      return;
+    }
+    const preparedOther = await this.readLiveCardTags(other, "建立关联");
+    if (!preparedOther) {
+      return;
+    }
+    try {
+      // setTags 是覆盖式：每侧单独一次调用，写入「该侧最新 tags ∪ 确认标签」
+      await this.plugin.store.setTags(preparedSelf.refs, unionTags(preparedSelf.live, [tag]));
+      await this.plugin.store.setTags(preparedOther.refs, unionTags(preparedOther.live, [tag]));
+      // 标签字典变了，「标签 → 词频」索引不等 3 秒 TTL
+      this.relations.invalidate();
+      new Notice(`已用「${tag}」关联两侧批注`);
+      await this.plugin.refreshAnnotations();
+    } catch (error) {
+      console.warn("yh-inklight: 写入关联标签失败", error);
+      new Notice("关联标签写入失败，请检查写入权限或同步状态");
+    }
+  }
+
+  /** 断开关联：把该标签从两侧移除；其他批注上的同名标签不受影响（setTags 只动指定 refs） */
+  private async removeRelationTag(self: SidebarCard, other: SidebarCard, rawTag: string): Promise<void> {
+    const key = tagKey(rawTag);
+    if (!key) {
+      return;
+    }
+    const preparedSelf = await this.readLiveCardTags(self, "断开关联");
+    if (!preparedSelf) {
+      return;
+    }
+    const preparedOther = await this.readLiveCardTags(other, "断开关联");
+    if (!preparedOther) {
+      return;
+    }
+    try {
+      await this.plugin.store.setTags(
+        preparedSelf.refs,
+        unionTags(preparedSelf.live).filter((item) => tagKey(item) !== key),
+      );
+      await this.plugin.store.setTags(
+        preparedOther.refs,
+        unionTags(preparedOther.live).filter((item) => tagKey(item) !== key),
+      );
+      this.relations.invalidate();
+      new Notice(`已断开关联标签「${rawTag}」`);
+      await this.plugin.refreshAnnotations();
+    } catch (error) {
+      console.warn("yh-inklight: 断开关联标签失败", error);
+      new Notice("断开关联失败，请检查写入权限或同步状态");
     }
   }
 
@@ -1029,6 +1308,25 @@ export class AnnotationSidebarView extends ItemView {
       this.plugin.navigateEpubToCfi(target, cfi),
     );
   }
+}
+
+/** 在 sidecar 文档的 6 个批注数组里按 id 找标签载体；找不到说明该批注已被删除 */
+function findAnnotationById(document: FileAnnotationDocument, annotationId: string): { tags?: string[] } | null {
+  const pools = [
+    document.highlights,
+    document.comments,
+    document.pdfHighlights,
+    document.pdfComments,
+    document.epubHighlights,
+    document.epubComments,
+  ];
+  for (const pool of pools) {
+    const found = pool.find((item) => item.id === annotationId);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
 }
 
 function getTitleLabel(title: string): string {

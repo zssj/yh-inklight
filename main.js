@@ -13185,6 +13185,8 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
     this.tagEditorAutoFocus = false;
     /** 编辑态里尚未提交的输入，重绘回填用，避免一次刷新吞掉正在打的标签 */
     this.pendingTagQuery = "";
+    /** 相关区 details 的展开态记在视图字段上：确认关联触发的重绘不会把用户刚展开的相关区折回去 */
+    this.openRelated = /* @__PURE__ */ new Set();
     this.relations = new RelationModel(plugin.store);
   }
   getViewType() {
@@ -13209,6 +13211,7 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
     this.pendingRender = false;
     this.pendingTagQuery = "";
     this.tagEditorAutoFocus = false;
+    this.openRelated.clear();
     if (this.renderTimer !== null) {
       window.clearTimeout(this.renderTimer);
       this.renderTimer = null;
@@ -13602,7 +13605,8 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
   }
   /**
    * 字面相关的其他批注：默认折叠，每条标出命中的短语（说明为什么相关），
-   * 点击跳转到原文。无命中时整个区块不渲染。
+   * 点击跳转到原文。行尾「关联」把确认动作物化为两侧共享标签（MOC 雏形），
+   * 已确认的关联显示为「已关联 xx」chip，点 chip 从两侧断开。无命中时整个区块不渲染。
    */
   renderRelated(card, cardData) {
     const hits = this.relations.getRelated(cardData);
@@ -13610,8 +13614,17 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
       return;
     }
     const box = card.createEl("details", { cls: "yh-ov-related" });
+    box.open = this.openRelated.has(cardData.id);
+    box.addEventListener("toggle", () => {
+      if (box.open) {
+        this.openRelated.add(cardData.id);
+      } else {
+        this.openRelated.delete(cardData.id);
+      }
+    });
     box.createEl("summary", { text: `\u76F8\u5173\u7684 ${hits.length} \u6761` });
     const list = box.createDiv({ cls: "yh-ov-related-list" });
+    const selfFile = this.fileForCard(cardData);
     for (const hit of hits) {
       const row = list.createDiv({ cls: "yh-ov-related-row" });
       const excerpt = hit.card.text.length > 60 ? `${hit.card.text.slice(0, 60)}\u2026` : hit.card.text;
@@ -13620,6 +13633,42 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
       meta.createSpan({ cls: "yh-ov-related-reason", text: `\u90FD\u63D0\u5230\u300C${hit.reasons.join("\u300D\u300C")}\u300D` });
       const source = this.fileForCard(hit.card);
       meta.createSpan({ cls: "yh-ov-related-file", text: source?.basename ?? hit.card.sourcePath });
+      for (const tag of this.sharedTags(cardData, hit.card)) {
+        const chip = meta.createSpan({
+          cls: "yh-ov-related-chip",
+          text: `\u5DF2\u5173\u8054 ${tag}`,
+          attr: { title: "\u70B9\u51FB\u65AD\u5F00\u8BE5\u5173\u8054\u6807\u7B7E\uFF08\u4E24\u4FA7\u540C\u65F6\u79FB\u9664\uFF09" }
+        });
+        chip.addEventListener("click", (event) => {
+          event.stopPropagation();
+          void this.removeRelationTag(cardData, hit.card, tag);
+        });
+      }
+      const linkDisabled = !selfFile || !source;
+      const link = meta.createSpan({
+        cls: "yh-ov-related-link",
+        text: "\u5173\u8054",
+        attr: linkDisabled ? { "aria-disabled": "true", title: "\u6E90\u6587\u4EF6\u7F3A\u5931\uFF0C\u65E0\u6CD5\u5EFA\u7ACB\u5173\u8054" } : { role: "button", tabindex: "0", "aria-label": "\u786E\u8BA4\u5173\u8054", title: "\u786E\u8BA4\u5173\u8054\uFF1A\u628A\u4E00\u4E2A\u5171\u4EAB\u6807\u7B7E\u5199\u5165\u4E24\u4FA7\u6279\u6CE8" }
+      });
+      if (linkDisabled) {
+        link.addClass("is-disabled");
+      }
+      link.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (!linkDisabled) {
+          this.mountRelationPicker(row, cardData, hit.card, hit.reasons);
+        }
+      });
+      link.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        if (!linkDisabled) {
+          this.mountRelationPicker(row, cardData, hit.card, hit.reasons);
+        }
+      });
       if (source) {
         row.addClass("is-clickable");
         row.setAttribute("role", "button");
@@ -13628,6 +13677,119 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
         });
       }
     }
+  }
+  /** 两侧已共享的标签（按比较键判同、去重展示写法）：这就是「确认关联」落在数据上的样子 */
+  sharedTags(a3, b3) {
+    const keys = new Set(b3.tags.map(tagKey));
+    const seen = /* @__PURE__ */ new Set();
+    const shared = [];
+    for (const tag of a3.tags) {
+      const key = tagKey(tag);
+      if (!key || !keys.has(key) || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      shared.push(tag);
+    }
+    return shared;
+  }
+  /**
+   * 相关行的确认关联选择条：候选第一位是命中最长的公共短语（算法已保证术语性），
+   * 其后是历史标签，最后一个输入框接受自定义。点候选或回车才写入，Esc / 点外收起。
+   */
+  mountRelationPicker(row, self, other, reasons) {
+    const picker = row.createDiv({ cls: "yh-ov-related-picker" });
+    picker.addEventListener("click", (event) => event.stopPropagation());
+    const listeners = new AbortController();
+    const close = () => {
+      listeners.abort();
+      picker.remove();
+    };
+    const chips = picker.createDiv({ cls: "yh-ov-related-picker-chips" });
+    const candidates = [];
+    const phrase = reasons[0];
+    if (phrase) {
+      candidates.push(phrase);
+    }
+    for (const suggestion of this.plugin.getTagSuggestions()) {
+      if (candidates.length >= 6) {
+        break;
+      }
+      if (suggestion.kind !== "used") {
+        continue;
+      }
+      const key = tagKey(suggestion.name);
+      if (!key) {
+        continue;
+      }
+      if (hasTag(self.tags, key) && hasTag(other.tags, key)) {
+        continue;
+      }
+      if (!candidates.some((item) => tagKey(item) === key)) {
+        candidates.push(suggestion.name);
+      }
+    }
+    for (const name of candidates) {
+      const chip = chips.createSpan({
+        cls: "yh-ov-related-picker-chip",
+        text: name,
+        attr: { title: name === phrase ? "\u7528\u8FD9\u4E2A\u5171\u540C\u77ED\u8BED\u4F5C\u4E3A\u5173\u8054\u6807\u7B7E" : "\u7528\u8FD9\u4E2A\u5386\u53F2\u6807\u7B7E\u5EFA\u7ACB\u5173\u8054" }
+      });
+      chip.addEventListener("click", () => {
+        close();
+        void this.applyRelationTag(self, other, name);
+      });
+    }
+    const input = chips.createEl("input", {
+      cls: "yh-ov-related-picker-input",
+      attr: { type: "text", placeholder: "\u81EA\u5B9A\u4E49\u6807\u7B7E", "aria-label": "\u81EA\u5B9A\u4E49\u5173\u8054\u6807\u7B7E" }
+    });
+    let composing = false;
+    input.addEventListener("compositionstart", () => {
+      composing = true;
+    });
+    input.addEventListener("compositionend", () => {
+      composing = false;
+    });
+    input.addEventListener("click", (event) => event.stopPropagation());
+    input.addEventListener("keydown", (event) => {
+      if (composing || event.isComposing || event.keyCode === 229) {
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        const value = input.value.trim();
+        if (!value) {
+          return;
+        }
+        close();
+        void this.applyRelationTag(self, other, value);
+      }
+    });
+    document.addEventListener(
+      "pointerdown",
+      (event) => {
+        if (!row.isConnected) {
+          listeners.abort();
+          return;
+        }
+        if (event.target instanceof Node && picker.contains(event.target)) {
+          return;
+        }
+        close();
+      },
+      { capture: true, signal: listeners.signal }
+    );
+    picker.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.key === "Escape" && !event.defaultPrevented) {
+          event.preventDefault();
+          close();
+        }
+      },
+      { signal: listeners.signal }
+    );
   }
   /** 标签行：默认只读 chip + 加号；点加号原地切编辑态，不弹窗 */
   mountTagRow(row, file, cardData) {
@@ -13773,13 +13935,7 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
     if (!file) {
       return;
     }
-    const refs = [];
-    if (cardData.highlight) {
-      refs.push({ filePath: cardData.sourcePath, annotationId: cardData.highlight.id });
-    }
-    if (cardData.note) {
-      refs.push({ filePath: cardData.sourcePath, annotationId: cardData.note.id });
-    }
+    const refs = this.tagRefs(cardData);
     if (refs.length === 0) {
       return;
     }
@@ -13789,6 +13945,101 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
     } catch (error) {
       console.warn("yh-inklight: \u4FDD\u5B58\u6807\u7B7E\u5931\u8D25", error);
       new import_obsidian10.Notice("\u6807\u7B7E\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u5199\u5165\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001");
+    }
+  }
+  /** 卡片的标签 refs：高亮与其笔记共享同一份标签数组，写入时两者都要覆盖 */
+  tagRefs(card) {
+    const refs = [];
+    if (card.highlight) {
+      refs.push({ filePath: card.sourcePath, annotationId: card.highlight.id });
+    }
+    if (card.note) {
+      refs.push({ filePath: card.sourcePath, annotationId: card.note.id });
+    }
+    return refs;
+  }
+  /**
+   * 活读一张卡的最新标签（高亮与其笔记的并集）。
+   * 渲染快照可能滞后于其他入口的写入，确认关联必须以落盘数据为准取并集，否则会覆盖掉新标签。
+   * 返回 null 表示该侧不可用（源文件或批注缺失，已给 Notice）。
+   */
+  async readLiveCardTags(card, action) {
+    const file = this.fileForCard(card);
+    if (!file) {
+      new import_obsidian10.Notice(`\u6E90\u6587\u4EF6\u7F3A\u5931\uFF0C\u65E0\u6CD5${action}`);
+      return null;
+    }
+    const refs = this.tagRefs(card);
+    const document2 = await this.plugin.store.getDocument(file);
+    const live = [];
+    let found = false;
+    for (const ref of refs) {
+      const annotation = findAnnotationById(document2, ref.annotationId);
+      if (annotation) {
+        found = true;
+        live.push(...annotation.tags ?? []);
+      }
+    }
+    if (!found) {
+      new import_obsidian10.Notice(`\u8BE5\u6279\u6CE8\u5DF2\u4E0D\u5B58\u5728\uFF0C\u65E0\u6CD5${action}`);
+      return null;
+    }
+    return { refs, live };
+  }
+  /** 确认关联：把同一个标签写入两侧；先两侧都活读成功再写，避免一侧成功一侧失败的不对称 */
+  async applyRelationTag(self, other, rawTag) {
+    const tag = normalizeTag(rawTag);
+    if (!tag) {
+      return;
+    }
+    const preparedSelf = await this.readLiveCardTags(self, "\u5EFA\u7ACB\u5173\u8054");
+    if (!preparedSelf) {
+      return;
+    }
+    const preparedOther = await this.readLiveCardTags(other, "\u5EFA\u7ACB\u5173\u8054");
+    if (!preparedOther) {
+      return;
+    }
+    try {
+      await this.plugin.store.setTags(preparedSelf.refs, unionTags(preparedSelf.live, [tag]));
+      await this.plugin.store.setTags(preparedOther.refs, unionTags(preparedOther.live, [tag]));
+      this.relations.invalidate();
+      new import_obsidian10.Notice(`\u5DF2\u7528\u300C${tag}\u300D\u5173\u8054\u4E24\u4FA7\u6279\u6CE8`);
+      await this.plugin.refreshAnnotations();
+    } catch (error) {
+      console.warn("yh-inklight: \u5199\u5165\u5173\u8054\u6807\u7B7E\u5931\u8D25", error);
+      new import_obsidian10.Notice("\u5173\u8054\u6807\u7B7E\u5199\u5165\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u5199\u5165\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001");
+    }
+  }
+  /** 断开关联：把该标签从两侧移除；其他批注上的同名标签不受影响（setTags 只动指定 refs） */
+  async removeRelationTag(self, other, rawTag) {
+    const key = tagKey(rawTag);
+    if (!key) {
+      return;
+    }
+    const preparedSelf = await this.readLiveCardTags(self, "\u65AD\u5F00\u5173\u8054");
+    if (!preparedSelf) {
+      return;
+    }
+    const preparedOther = await this.readLiveCardTags(other, "\u65AD\u5F00\u5173\u8054");
+    if (!preparedOther) {
+      return;
+    }
+    try {
+      await this.plugin.store.setTags(
+        preparedSelf.refs,
+        unionTags(preparedSelf.live).filter((item) => tagKey(item) !== key)
+      );
+      await this.plugin.store.setTags(
+        preparedOther.refs,
+        unionTags(preparedOther.live).filter((item) => tagKey(item) !== key)
+      );
+      this.relations.invalidate();
+      new import_obsidian10.Notice(`\u5DF2\u65AD\u5F00\u5173\u8054\u6807\u7B7E\u300C${rawTag}\u300D`);
+      await this.plugin.refreshAnnotations();
+    } catch (error) {
+      console.warn("yh-inklight: \u65AD\u5F00\u5173\u8054\u6807\u7B7E\u5931\u8D25", error);
+      new import_obsidian10.Notice("\u65AD\u5F00\u5173\u8054\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u5199\u5165\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001");
     }
   }
   /** 把侧栏切到「只看该标签」：跨文档，并同步更新筛选下拉 */
@@ -14003,6 +14254,23 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
     );
   }
 };
+function findAnnotationById(document2, annotationId) {
+  const pools = [
+    document2.highlights,
+    document2.comments,
+    document2.pdfHighlights,
+    document2.pdfComments,
+    document2.epubHighlights,
+    document2.epubComments
+  ];
+  for (const pool of pools) {
+    const found = pool.find((item) => item.id === annotationId);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+}
 function getTitleLabel(title) {
   const labels = {
     Insight: "\u6D1E\u5BDF",

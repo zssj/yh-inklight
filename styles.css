@@ -3358,3 +3358,66 @@ a.yh-epub-goto-link:hover {
 .yh-ov-related-reason {
   color: var(--text-accent);
 }
+
+/* 相关行：确认关联（写入共享标签）与已关联状态 */
+.yh-ov-related-link {
+  color: var(--text-accent);
+  cursor: pointer;
+  user-select: none;
+}
+
+.yh-ov-related-link.is-disabled {
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+
+.yh-ov-related-chip {
+  padding: 0 6px;
+  border: 0.5px solid var(--yh-border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.yh-ov-related-picker {
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 0.5px solid var(--yh-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+}
+
+.yh-ov-related-picker-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.yh-ov-related-picker-chip {
+  padding: 1px 8px;
+  border: 0.5px solid var(--yh-border);
+  border-radius: 10px;
+  color: var(--text-normal);
+  cursor: pointer;
+  user-select: none;
+}
+
+.yh-ov-related-picker-chip:hover {
+  border-color: var(--text-accent);
+  color: var(--text-accent);
+}
+
+.yh-ov-related-picker-input {
+  flex: 1 1 80px;
+  min-width: 80px;
+  max-width: 140px;
+  padding: 1px 6px;
+  border: 0.5px solid var(--yh-border);
+  border-radius: 4px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  /* input 不继承父级字号，显式跟上 meta 的 0.75em */
+  font-size: inherit;
+}

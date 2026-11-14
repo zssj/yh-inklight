@@ -10999,6 +10999,7 @@ var MAX_LEGACY_SIDECAR_NAME_LENGTH = 180;
 var MAX_COMPACT_SIDECAR_PREFIX_LENGTH = 96;
 var TAG_BLOCK_START = "  # inklight:tags:start";
 var TAG_BLOCK_END = "  # inklight:tags:end";
+var MOC_DIR = "MOC";
 var AnnotationStoreReadError = class extends Error {
   constructor(path, originalError) {
     super(`Failed to read annotation sidecar JSON: ${path}`);
@@ -11589,6 +11590,56 @@ var AnnotationStore = class {
     }
     return this.app.vault.create(targetPath, lines.join("\n"));
   }
+  /**
+   * 按标签导出 MOC 页：把带该标签的全部批注写成 vault 根 MOC/<标签>.md。
+   * 目标已存在且非墨光生成时拒绝覆盖（skipped-foreign）；是墨光生成页则按 exportAllNotes 同款规则刷新。
+   */
+  async exportTagMoc(tagKeyFilter, format = "summary", obTagBridge = false) {
+    const documents = await this.getIndexedDocuments();
+    const sources = documents.map((document2) => ({ filePath: document2.filePath, document: document2 }));
+    const filterKey = tagKey(tagKeyFilter);
+    const matched = sources.flatMap((source) => collectExportEntries(source)).filter((entry) => entry.tags.some((item) => tagKey(item) === filterKey));
+    if (!matched.length) {
+      return { status: "empty" };
+    }
+    const displayName = this.getTagDictionary().find((item) => item.key === filterKey)?.name ?? filterKey;
+    const entries = obTagBridge ? matched : matched.map((entry) => ({ ...entry, tags: [] }));
+    const frontmatter = obTagBridge ? renderTagFrontmatter(entries, "marker-only", toObsidianTag(tagKeyFilter) ?? void 0) : [];
+    const rendered = format === "by-color" ? renderByColor(entries) : format === "notes-only" ? renderNotesOnly(entries) : format === "reading-notes" ? renderReadingNotes(entries) : renderSummary(entries);
+    const lines = [
+      ...frontmatter,
+      `# ${displayName}`,
+      "",
+      `Exported: ${(/* @__PURE__ */ new Date()).toISOString()} \xB7 \u5171 ${matched.length} \u6761\u6279\u6CE8`,
+      "",
+      ...rendered
+    ];
+    const targetPath = (0, import_obsidian8.normalizePath)(`${MOC_DIR}/${toTagFileName(filterKey)}.md`);
+    const existing = this.app.vault.getAbstractFileByPath(targetPath);
+    if (existing instanceof import_obsidian8.TFile) {
+      if (!isGeneratedMocPage(await this.app.vault.cachedRead(existing), displayName)) {
+        return { status: "skipped-foreign", path: targetPath };
+      }
+      const generated = lines.join("\n");
+      const content = obTagBridge ? mergeExportFrontmatter(await this.app.vault.cachedRead(existing), generated) : generated;
+      await this.app.vault.modify(existing, content);
+      return { status: "written", file: existing };
+    }
+    await this.ensureMocDir();
+    const file = await this.app.vault.create(targetPath, lines.join("\n"));
+    return { status: "written", file };
+  }
+  async ensureMocDir() {
+    const existing = this.app.vault.getAbstractFileByPath(MOC_DIR);
+    if (existing) {
+      if (existing instanceof import_obsidian8.TFile) {
+        new import_obsidian8.Notice(`\u65E0\u6CD5\u521B\u5EFA\u6587\u4EF6\u5939\uFF1Avault \u6839\u76EE\u5F55\u5DF2\u5B58\u5728\u540C\u540D\u6587\u4EF6 ${MOC_DIR}`);
+        throw new AnnotationStoreWriteError(MOC_DIR, new Error("A file with the same name already exists"));
+      }
+      return;
+    }
+    await this.app.vault.createFolder(MOC_DIR);
+  }
   async testWriteAccess() {
     await this.ensureStoreDir();
     const testPath = (0, import_obsidian8.normalizePath)(`${STORE_DIR}/.write-test.json`);
@@ -11952,8 +12003,8 @@ function renderReadingNotes(entries) {
     })
   ];
 }
-function renderTagFrontmatter(entries, mode) {
-  const tags = mode === "full" ? toObsidianTags(entries.flatMap((entry) => entry.tags)) : [];
+function renderTagFrontmatter(entries, mode, fixedTag) {
+  const tags = fixedTag ? [fixedTag] : mode === "full" ? toObsidianTags(entries.flatMap((entry) => entry.tags)) : [];
   const merged = ["inklight", ...tags.filter((tag) => tag !== "inklight")];
   return [
     "---",
@@ -11964,6 +12015,14 @@ function renderTagFrontmatter(entries, mode) {
     "---",
     ""
   ];
+}
+function toTagFileName(raw) {
+  const sanitized = raw.split(/[\\/]/).join("-").replace(/[<>:"|?*\u0000-\u001F]/g, "").replace(/[. ]+$/, "").trim();
+  return sanitized || "untagged";
+}
+function isGeneratedMocPage(text, displayName) {
+  const heading = `# ${displayName}`;
+  return text.split(/\r?\n/).some((line) => line.trim() === heading);
 }
 function splitFrontmatter(text) {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
@@ -13472,9 +13531,26 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
     });
     panel.createDiv({ cls: "yh-ov-menu-sep" });
     const exportRow = panel.createDiv({ cls: "yh-ov-menu-row yh-ov-menu-export" });
-    const exportButton = exportRow.createEl("button", { cls: "yh-export-btn", text: "\u2191 \u5BFC\u51FA\u6279\u6CE8", attr: { type: "button" } });
-    exportButton.disabled = this.annotationScope === "current" && !file;
+    const tagFilterActive = this.tagFilter !== "";
+    const tagFilterName = tagFilterActive ? this.plugin.store.getTagDictionary().find((item) => item.key === this.tagFilter)?.name ?? this.tagFilter : "";
+    const exportButton = exportRow.createEl("button", {
+      cls: "yh-export-btn",
+      text: tagFilterActive ? `\u2191 \u5BFC\u51FA\u300C${tagFilterName}\u300D` : "\u2191 \u5BFC\u51FA\u6279\u6CE8",
+      attr: { type: "button", title: tagFilterActive ? "\u5BFC\u51FA\u5F53\u524D\u7B5B\u9009\u6807\u7B7E\u7684 MOC \u9875\uFF08vault \u6839 MOC \u6587\u4EF6\u5939\uFF09" : "\u5BFC\u51FA\u6279\u6CE8" }
+    });
+    exportButton.disabled = tagFilterActive ? false : this.annotationScope === "current" && !file;
     exportButton.addEventListener("click", async () => {
+      if (tagFilterActive) {
+        const result = await this.plugin.store.exportTagMoc(this.tagFilter, this.exportFormat, this.plugin.settings.obTagBridge);
+        if (result.status === "written") {
+          new import_obsidian10.Notice(`\u5DF2\u5BFC\u51FA\u6807\u7B7E MOC \u81F3 ${result.file.path}`);
+        } else if (result.status === "skipped-foreign") {
+          new import_obsidian10.Notice(`\u5DF2\u8DF3\u8FC7\uFF1A${result.path} \u5DF2\u5B58\u5728\u4E14\u4E0D\u662F\u58A8\u5149\u751F\u6210\u7684\u9875\u9762\uFF0C\u8BF7\u624B\u52A8\u5904\u7406`);
+        } else {
+          new import_obsidian10.Notice("\u8BE5\u6807\u7B7E\u4E0B\u6CA1\u6709\u6279\u6CE8\uFF0C\u65E0\u53EF\u5BFC\u51FA");
+        }
+        return;
+      }
       if (this.annotationScope === "current" && !file) {
         return;
       }

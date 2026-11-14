@@ -11,7 +11,7 @@ editor/selectionToolbar.ts: 选中文本后的浮动工具栏，提供颜色、�
 pdf/pdfAnnotationLayer.ts: PDF 注释控制器，使用页码与矩形百分比坐标绘制非侵入式高亮和右侧便签栏。
 pdf/pdfViewerAdapter.ts: Obsidian 原生 PDF viewer 适配层，封装当前页、跳转、pdf.js eventBus 与页面生命周期。
 storage/types.ts: sidecar JSON、设置、锚点、高亮、便签、代码选区标记、索引的类型真相源。
-storage/annotationStore.ts: .obsidian-annotations 持久化后端，读写文件 JSON 与全局 index，维护标签索引与标签字典。
+storage/annotationStore.ts: .obsidian-annotations 持久化后端，读写文件 JSON 与全局 index，维护标签索引与标签字典；导出含单文件/全库/按标签 MOC 页（exportTagMoc，落 vault 根 MOC/）。
 storage/tags.ts: 标签归一化纯函数（去 #、折叠空白、剥离非法字符、大小写无关去重、并集）与 OB 标签语法转换 toObsidianTag/toObsidianTags，无 IO。
 views/annotationCard.ts: 标注详情浮层，md/pdf/epub 三端共用；点击高亮弹出类型徽章 + 颜色 + 原文 + 笔记 + 标签（内联编辑）+ 元信息 + 编辑/添加笔记/添加标签/删除，移动端底部卡片跟随键盘；样式类名沿用 .yh-epub-*。
 views/popoverPlacement.ts: 浮层定位纯函数，避开选区且不越界，四侧都放不下时压缩高度由卡片内部滚动。

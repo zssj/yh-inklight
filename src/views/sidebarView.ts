@@ -3,7 +3,8 @@
  * [OUTPUT]: 对外提供 AnnotationSidebarView，将当前文件或全库 annotation 合并为可筛选、可跳转、可导出的总览卡片，卡片可挂标签；
  *           标签编辑按内容推荐历史标签，卡片底部折叠展示字面相关的其他批注（受 contentRelations 设置控制）；
  *           相关行可「确认关联」：把一个共享标签写入两侧批注（行内选择条挑标签，可见可改可取消），
- *           已确认的关联显示为「已关联 xx」chip，点 chip 从两侧断开——确认结果落在 tags 字段上，是 MOC 的共享标签
+ *           已确认的关联显示为「已关联 xx」chip，点 chip 从两侧断开——确认结果落在 tags 字段上，是 MOC 的共享标签；
+ *           标签筛选激活时导出按钮转为导出该标签的 MOC 页（vault 根 MOC/ 文件夹，无则新建，非墨光生成的同名页拒绝覆盖）
  * [POS]: views 模块的右侧 Leaf 总览面板，承载搜索、颜色/类型/标签筛选、排序、行内编辑、标签编辑、跳转、删除、导出模板、字面关联与确认关联；
  *        顶部搜索/范围/筛选/排序/导出统一收进单一折叠菜单（默认收起，展开态记在视图字段上），列表区域常驻不被菜单挤压；
  *        移动端标签编辑态额外处理软键盘遮挡（列表补底部留白 + 输入框滚入可视区），不触碰阅读区；
@@ -418,11 +419,31 @@ export class AnnotationSidebarView extends ItemView {
     });
 
     // 导出：按钮 + 格式，语义与原先底部导出栏一致，只是收进菜单
+    // 标签筛选激活时按钮转为「导出该标签的 MOC 页」（vault 根 MOC/ 文件夹），未筛选时行为与原先一致
     panel.createDiv({ cls: "yh-ov-menu-sep" });
     const exportRow = panel.createDiv({ cls: "yh-ov-menu-row yh-ov-menu-export" });
-    const exportButton = exportRow.createEl("button", { cls: "yh-export-btn", text: "↑ 导出批注", attr: { type: "button" } });
-    exportButton.disabled = this.annotationScope === "current" && !file;
+    const tagFilterActive = this.tagFilter !== "";
+    const tagFilterName = tagFilterActive
+      ? (this.plugin.store.getTagDictionary().find((item) => item.key === this.tagFilter)?.name ?? this.tagFilter)
+      : "";
+    const exportButton = exportRow.createEl("button", {
+      cls: "yh-export-btn",
+      text: tagFilterActive ? `↑ 导出「${tagFilterName}」` : "↑ 导出批注",
+      attr: { type: "button", title: tagFilterActive ? "导出当前筛选标签的 MOC 页（vault 根 MOC 文件夹）" : "导出批注" },
+    });
+    exportButton.disabled = tagFilterActive ? false : this.annotationScope === "current" && !file;
     exportButton.addEventListener("click", async () => {
+      if (tagFilterActive) {
+        const result = await this.plugin.store.exportTagMoc(this.tagFilter, this.exportFormat, this.plugin.settings.obTagBridge);
+        if (result.status === "written") {
+          new Notice(`已导出标签 MOC 至 ${result.file.path}`);
+        } else if (result.status === "skipped-foreign") {
+          new Notice(`已跳过：${result.path} 已存在且不是墨光生成的页面，请手动处理`);
+        } else {
+          new Notice("该标签下没有批注，无可导出");
+        }
+        return;
+      }
       if (this.annotationScope === "current" && !file) {
         return;
       }

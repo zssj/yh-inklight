@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 obsidian App/Vault/Adapter 的文件读写能力，依赖 storage/types 的 sidecar JSON 合约
- * [OUTPUT]: 对外提供 AnnotationStore，负责 Markdown/PDF/EPUB 的 .obsidian-annotations sidecar 文件、索引、标签索引与标签字典、缓存、导出、孤立批注清理与文件哈希校验迁移
+ * [OUTPUT]: 对外提供 AnnotationStore，负责 Markdown/PDF/EPUB 的 .obsidian-annotations sidecar 文件、索引、标签索引与标签字典、缓存、导出（单文件/全库/按标签 MOC 页）、孤立批注清理与文件哈希校验迁移
  * [POS]: storage 模块的唯一持久化入口，隔离原始 Markdown 与注释数据
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
@@ -25,7 +25,7 @@ import {
   EpubReadingProgress,
   ReadingBookmark,
 } from "./types";
-import { normalizeTags, sortTagKeys, tagKey, toObsidianTags } from "./tags";
+import { normalizeTags, sortTagKeys, tagKey, toObsidianTag, toObsidianTags } from "./tags";
 
 const STORE_DIR = ".obsidian-annotations";
 const INDEX_PATH = normalizePath(`${STORE_DIR}/index.json`);
@@ -35,6 +35,9 @@ const MAX_COMPACT_SIDECAR_PREFIX_LENGTH = 96;
 /** 导出笔记 frontmatter 的受控替换边界（YAML 注释形式，不破坏 frontmatter 结构） */
 const TAG_BLOCK_START = "  # inklight:tags:start";
 const TAG_BLOCK_END = "  # inklight:tags:end";
+
+/** 按标签导出 MOC 页的落点：vault 根目录的 MOC 文件夹 */
+const MOC_DIR = "MOC";
 
 interface ExportDocumentSource {
   filePath: string;
@@ -78,6 +81,12 @@ export interface TaggedFileEntry {
   /** 该文件内的批注总数，用于排序与展示 */
   totalAnnotations: number;
 }
+
+/** 按标签导出 MOC 页的结果：written=已写入，skipped-foreign=目标已存在且非墨光生成（拒绝覆盖），empty=该标签无批注 */
+export type ExportTagMocResult =
+  | { status: "written"; file: TFile }
+  | { status: "skipped-foreign"; path: string }
+  | { status: "empty" };
 
 export class AnnotationStoreReadError extends Error {
   constructor(readonly path: string, readonly originalError: unknown) {
@@ -771,6 +780,72 @@ export class AnnotationStore {
     return this.app.vault.create(targetPath, lines.join("\n"));
   }
 
+  /**
+   * 按标签导出 MOC 页：把带该标签的全部批注写成 vault 根 MOC/<标签>.md。
+   * 目标已存在且非墨光生成时拒绝覆盖（skipped-foreign）；是墨光生成页则按 exportAllNotes 同款规则刷新。
+   */
+  async exportTagMoc(tagKeyFilter: string, format: AnnotationExportFormat = "summary", obTagBridge = false): Promise<ExportTagMocResult> {
+    const documents = await this.getIndexedDocuments();
+    const sources = documents.map((document) => ({ filePath: document.filePath, document }));
+    const filterKey = tagKey(tagKeyFilter);
+    const matched = sources
+      .flatMap((source) => collectExportEntries(source))
+      .filter((entry) => entry.tags.some((item) => tagKey(item) === filterKey));
+    if (!matched.length) {
+      return { status: "empty" };
+    }
+
+    const displayName = this.getTagDictionary().find((item) => item.key === filterKey)?.name ?? filterKey;
+    const entries = obTagBridge ? matched : matched.map((entry) => ({ ...entry, tags: [] }));
+    const frontmatter = obTagBridge ? renderTagFrontmatter(entries, "marker-only", toObsidianTag(tagKeyFilter) ?? undefined) : [];
+    const rendered =
+      format === "by-color"
+        ? renderByColor(entries)
+        : format === "notes-only"
+          ? renderNotesOnly(entries)
+          : format === "reading-notes"
+            ? renderReadingNotes(entries)
+            : renderSummary(entries);
+    const lines = [
+      ...frontmatter,
+      `# ${displayName}`,
+      "",
+      `Exported: ${new Date().toISOString()} · 共 ${matched.length} 条批注`,
+      "",
+      ...rendered,
+    ];
+
+    const targetPath = normalizePath(`${MOC_DIR}/${toTagFileName(filterKey)}.md`);
+    const existing = this.app.vault.getAbstractFileByPath(targetPath);
+    if (existing instanceof TFile) {
+      if (!isGeneratedMocPage(await this.app.vault.cachedRead(existing), displayName)) {
+        return { status: "skipped-foreign", path: targetPath };
+      }
+      const generated = lines.join("\n");
+      const content = obTagBridge
+        ? mergeExportFrontmatter(await this.app.vault.cachedRead(existing), generated)
+        : generated;
+      await this.app.vault.modify(existing, content);
+      return { status: "written", file: existing };
+    }
+
+    await this.ensureMocDir();
+    const file = await this.app.vault.create(targetPath, lines.join("\n"));
+    return { status: "written", file };
+  }
+
+  private async ensureMocDir(): Promise<void> {
+    const existing = this.app.vault.getAbstractFileByPath(MOC_DIR);
+    if (existing) {
+      if (existing instanceof TFile) {
+        new Notice(`无法创建文件夹：vault 根目录已存在同名文件 ${MOC_DIR}`);
+        throw new AnnotationStoreWriteError(MOC_DIR, new Error("A file with the same name already exists"));
+      }
+      return;
+    }
+    await this.app.vault.createFolder(MOC_DIR);
+  }
+
   async testWriteAccess(): Promise<string> {
     await this.ensureStoreDir();
     const testPath = normalizePath(`${STORE_DIR}/.write-test.json`);
@@ -1212,9 +1287,10 @@ function renderReadingNotes(entries: ExportEntry[]): string[] {
  * 生成导出笔记的 frontmatter。标记用 YAML 注释行，既不破坏结构又能在覆盖时定位替换区间。
  * 全库导出只写固定 inklight 标记：把 N 篇文档的标签塞进一篇的 frontmatter 会丢粒度，
  * 逐条标签一律写在各自 callout 正文里。
+ * fixedTag：按标签导出 MOC 页时固定 tags 为 [inklight, 该标签]（覆盖 mode 的常规逻辑）。
  */
-function renderTagFrontmatter(entries: ExportEntry[], mode: "full" | "marker-only"): string[] {
-  const tags = mode === "full" ? toObsidianTags(entries.flatMap((entry) => entry.tags)) : [];
+function renderTagFrontmatter(entries: ExportEntry[], mode: "full" | "marker-only", fixedTag?: string): string[] {
+  const tags = fixedTag ? [fixedTag] : mode === "full" ? toObsidianTags(entries.flatMap((entry) => entry.tags)) : [];
   const merged = ["inklight", ...tags.filter((tag) => tag !== "inklight")];
   return [
     "---",
@@ -1225,6 +1301,26 @@ function renderTagFrontmatter(entries: ExportEntry[], mode: "full" | "marker-onl
     "---",
     "",
   ];
+}
+
+/** 标签名转安全文件名：路径分隔符与 Windows 非法字符剔除，空值回退 untagged */
+function toTagFileName(raw: string): string {
+  const sanitized = raw
+    .split(/[\\/]/)
+    .join("-")
+    .replace(/[<>:"|?*\u0000-\u001F]/g, "")
+    .replace(/[. ]+$/, "")
+    .trim();
+  return sanitized || "untagged";
+}
+
+/**
+ * 判断一份 MOC 页文本是否为墨光生成：正文存在与标题完全一致的 `# <displayName>` 行。
+ * MOC 页标题固定为标签名（不带批注数），保证跨导出签名稳定；批注数写在 Exported 行。
+ */
+function isGeneratedMocPage(text: string, displayName: string): boolean {
+  const heading = `# ${displayName}`;
+  return text.split(/\r?\n/).some((line) => line.trim() === heading);
 }
 
 /** 把 md 文本拆成 frontmatter 行数组与正文；无 frontmatter 时返回 null */

@@ -23,7 +23,7 @@ CI：`Build Check` 在 mac/win/linux 三平台跑 `npm run build`，linux 额外
 ## 目录
 
 ```
-vitest.config.ts               # alias: obsidian → tests/mocks/obsidian.ts
+vitest.config.mts              # alias: obsidian → tests/mocks/obsidian.ts（.mts 保证按 ESM 加载，CI 的 Node 18 无法 require Vite 的 ESM 入口）
 tests/
   mocks/obsidian.ts            # TFile/TFolder/Notice/normalizePath 等替身
   helpers/fakeVault.ts         # 内存 Vault + 可注入写入失败

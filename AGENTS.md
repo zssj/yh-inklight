@@ -73,7 +73,7 @@ npm run release-check              # 默认取 package.json 版本；也可 npm 
 
 **硬约定**：任何 `main.ts` / `src/**` 改动，收尾必须跑 `npm run verify`（类型检查 + 全部用例 + 生产构建）并拿到退出码 0。测试红时不得 commit、不得打 tag、不得部署到测试库；先定位失败用例是「测试预期错」还是「代码缺陷」，分别处理，禁止用 `.skip` / 放宽断言绕过去。
 
-测试分两层，全部在 Node 下跑，不需要 Obsidian（`obsidian` 由 `vitest.config.ts` 的 alias 指到 `tests/mocks/obsidian.ts`）：
+测试分两层，全部在 Node 下跑，不需要 Obsidian（`obsidian` 由 `vitest.config.mts` 的 alias 指到 `tests/mocks/obsidian.ts`）：
 
 - **L1 纯逻辑**（`tests/anchor`、`tests/storage/tags`、`tests/views`、`tests/utils`、`tests/epub`）：零 mock，直接 import 源文件。覆盖锚点三级降级、模糊匹配、标签归一与 Obsidian 语法转换、卡片配对、浮层几何、CFI 规范化。
 - **L2 存储契约**（`tests/storage/annotationStore.test.ts`）：`tests/helpers/fakeVault.ts` 提供内存 Vault + 可注入写入失败。覆盖 sidecar 读写、索引 v2/tagNames、写入失败保护、损坏 JSON 不覆盖、孤儿清理、改名迁移、导出。

@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 无外部依赖
  * [OUTPUT]: 提供 obsidian 模块的测试替身：TFile / TFolder / Notice / normalizePath 及若干空壳类
- * [POS]: tests/mocks 的模块替身，由 vitest.config.ts 的 alias 挂到 `obsidian` 上，
+ * [POS]: tests/mocks 的模块替身，由 vitest.config.mts 的 alias 挂到 `obsidian` 上，
  *        使 src/storage、src/views 等依赖 App 抽象的模块可在 Node 下直接测试
  * [PROTOCOL]: 只补齐被测代码实际用到的 API；新增被测模块若引用新符号，在此追加并保持行为与真实 Obsidian 一致
  */

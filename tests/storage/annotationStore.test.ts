@@ -502,7 +502,7 @@ describe("EPUB 回链", () => {
     expect(content).not.toContain("#page=7|Back to source");
   });
 
-  it("导出块写出 noteType:: 与 chapter:: 结构化字段", async () => {
+  it("导出块只写 noteType::，章节已在 callout 标题里，不再重复一行 chapter::", async () => {
     const { app, vault } = createApp({ files: { [EPUB_PATH]: "" } });
     const store = new AnnotationStore(app);
     await store.initialize();
@@ -520,7 +520,9 @@ describe("EPUB 回链", () => {
 
     const content = vault.readText("books/复利 破局-notes.md");
     expect(content).toContain("noteType:: insight");
-    expect(content).toContain("chapter:: 第三章 复利");
+    expect(content).not.toContain("chapter::");
+    // 章节信息仍然可见，只是在 callout 标题里
+    expect(content).toContain("第三章 复利");
   });
 
   it("同文件的关系导出成块链接，跨文件回落成纯文本引用", async () => {

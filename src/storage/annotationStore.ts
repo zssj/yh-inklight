@@ -1925,15 +1925,13 @@ function renderAnnotationBlock(entry: ExportEntry): string[] {
 /**
  * 结构化字段：写在 callout 之外的块内区域——Dataview 能直接读成 inline field，
  * 又不影响 callout 的渲染。这些行同样在受控块内，重复导出会被刷新，块外手写内容不受影响。
+ * 只写「机器要用、人看着不碍事」的字段：chapter 已经在 callout 标题里出现过，不要再抄一行。
  * relations 在同文件时写成块链接（真边）；跨文件先写纯文本，导出笔记路径要等反查指针落库后才能确定。
  */
 function renderMetadataLines(entry: ExportEntry): string[] {
   const lines: string[] = [];
   if (entry.noteType) {
     lines.push(`noteType:: ${entry.noteType}`);
-  }
-  if (entry.chapter?.trim()) {
-    lines.push(`chapter:: ${entry.chapter.trim()}`);
   }
   for (const relation of entry.relations ?? []) {
     lines.push(`${relation.type}:: ${renderRelationTarget(relation, entry.sourcePath)}`);

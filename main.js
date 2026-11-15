@@ -12604,9 +12604,6 @@ function renderMetadataLines(entry) {
   if (entry.noteType) {
     lines.push(`noteType:: ${entry.noteType}`);
   }
-  if (entry.chapter?.trim()) {
-    lines.push(`chapter:: ${entry.chapter.trim()}`);
-  }
   for (const relation of entry.relations ?? []) {
     lines.push(`${relation.type}:: ${renderRelationTarget(relation, entry.sourcePath)}`);
   }
@@ -13691,6 +13688,7 @@ function pushHit(related, owner, target, score, reasons) {
 // src/views/navigation.ts
 var import_obsidian9 = require("obsidian");
 var EPUB_READER_VIEW_TYPE = "inklight-epub-reader";
+var MARKDOWN_VIEW_TYPE = "markdown";
 async function openAnnotationTarget(app, target, navigateEpub, options) {
   if (target.mode === "epub") {
     const existing = findOpenEpubLeaf(app, target.file);
@@ -13714,15 +13712,47 @@ async function openAnnotationTarget(app, target, navigateEpub, options) {
     }, 120);
     return;
   }
-  const view = leaf.view instanceof import_obsidian9.MarkdownView ? leaf.view : app.workspace.getActiveViewOfType(import_obsidian9.MarkdownView);
+  const view = await resolveMarkdownView(app, leaf, target.file);
   if (!view) {
     return;
   }
-  const pos = view.editor.offsetToPos(target.offset);
-  view.editor.setCursor(pos);
-  view.editor.scrollIntoView({ from: pos, to: pos }, true);
+  applyMarkdownTarget(view, target.offset);
+  for (const delay of [160, 520]) {
+    window.setTimeout(() => {
+      if (view.editor) {
+        applyMarkdownTarget(view, target.offset);
+      }
+    }, delay);
+  }
+}
+async function resolveMarkdownView(app, leaf, file, timeoutMs = 2e3) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (leaf.view instanceof import_obsidian9.MarkdownView && leaf.view.file?.path === file.path) {
+      return leaf.view;
+    }
+    const opened = app.workspace.getLeavesOfType(MARKDOWN_VIEW_TYPE).find((item) => item.view instanceof import_obsidian9.MarkdownView && item.view.file?.path === file.path);
+    if (opened?.view instanceof import_obsidian9.MarkdownView) {
+      return opened.view;
+    }
+    await sleep(40);
+  }
+  const active = app.workspace.getActiveViewOfType(import_obsidian9.MarkdownView);
+  return active && active.file?.path === file.path ? active : null;
+}
+function applyMarkdownTarget(view, offset) {
+  const editor = view.editor;
+  const length = editor.getValue().length;
+  const pos = editor.offsetToPos(Math.max(0, Math.min(offset, length)));
+  editor.setCursor(pos);
+  editor.scrollIntoView({ from: pos, to: pos }, true);
+  const preview = view.previewMode;
+  preview?.applyScroll?.(pos.line);
   view.containerEl.addClass("yh-flash-target");
   window.setTimeout(() => view.containerEl.removeClass("yh-flash-target"), 850);
+}
+function sleep(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 function findOpenEpubLeaf(app, file) {
   const matches = app.workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE).filter((leaf) => {
@@ -21977,7 +22007,7 @@ ${lines.slice(0, 8).join("\n")}`);
     if (!context.sourcePath) {
       return;
     }
-    await sleep(100);
+    await sleep2(100);
     const file = this.app.vault.getAbstractFileByPath(context.sourcePath);
     if (!(file instanceof import_obsidian21.TFile)) {
       return;
@@ -22149,7 +22179,7 @@ function createAnchorForSnapshot(source, snapshot) {
     selectedText
   };
 }
-function sleep(ms) {
+function sleep2(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 function findPreviewRoot(view) {

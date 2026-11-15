@@ -19936,6 +19936,48 @@ function lastYearSameDay(now) {
 function isSameYmd(date, target) {
   return date.getFullYear() === target.y && date.getMonth() === target.m && date.getDate() === target.d;
 }
+var ANNOTATION_REVIEW_RULES = {
+  day1: { title: "\u6628\u65E5\u6240\u5199", hint: "1 \u5929\u524D\u5199\u4E0B\u7684\u60F3\u6CD5" },
+  day7: { title: "\u4E03\u65E5\u56DE\u770B", hint: "7 \u5929\u524D\u5199\u4E0B\u7684\u60F3\u6CD5" },
+  lastMonth: { title: "\u4E0A\u6708\u4ECA\u65E5\u6240\u5199", hint: "\u4E0A\u4E2A\u6708\u7684\u540C\u4E00\u5929" },
+  lastYear: { title: "\u53BB\u5E74\u4ECA\u65E5\u6240\u5199", hint: "\u53BB\u5E74\u7684\u540C\u4E00\u5929" }
+};
+function buildAnnotationBuckets(entries, now) {
+  const grouped = /* @__PURE__ */ new Map();
+  const lastMonth = lastMonthSameDay(now);
+  const lastYear = lastYearSameDay(now);
+  for (const entry of entries) {
+    const past = new Date(entry.createdAt);
+    if (Number.isNaN(past.getTime())) {
+      continue;
+    }
+    const daysAgo = diffCalendarDays(now.getTime(), entry.createdAt);
+    if (!Number.isFinite(daysAgo) || daysAgo < 0) {
+      continue;
+    }
+    let kind = null;
+    if (daysAgo === 1) {
+      kind = "day1";
+    } else if (daysAgo === 7) {
+      kind = "day7";
+    } else if (lastMonth && isSameYmd(past, lastMonth)) {
+      kind = "lastMonth";
+    } else if (lastYear && isSameYmd(past, lastYear)) {
+      kind = "lastYear";
+    }
+    if (!kind) {
+      continue;
+    }
+    const list = grouped.get(kind) ?? [];
+    list.push(entry);
+    grouped.set(kind, list);
+  }
+  return Object.keys(ANNOTATION_REVIEW_RULES).filter((kind) => (grouped.get(kind)?.length ?? 0) > 0).map((kind) => ({
+    kind,
+    ...ANNOTATION_REVIEW_RULES[kind],
+    entries: [...grouped.get(kind) ?? []].sort((left, right) => left.linkCount - right.linkCount || right.createdAt - left.createdAt).slice(0, REVIEW_LIMIT)
+  }));
+}
 function classifyReview(entry, now) {
   if (entry.openCount <= 0 || !(entry.lastOpenedAt > 0)) {
     return null;
@@ -20025,6 +20067,8 @@ var MarkdownStatsView = class extends import_obsidian19.ItemView {
     this.getStats = options.getStats;
     this.isTrackingEnabled = options.isTrackingEnabled;
     this.openCallback = options.onOpen ?? null;
+    this.getAnnotationEntries = options.getAnnotationEntries ?? null;
+    this.openAnnotation = options.onOpenAnnotation ?? null;
   }
   getViewType() {
     return MARKDOWN_STATS_VIEW_TYPE;
@@ -20068,12 +20112,67 @@ var MarkdownStatsView = class extends import_obsidian19.ItemView {
     const total = this.entries.length;
     const opened = this.entries.filter((e3) => e3.openCount > 0).length;
     heading.setText(`\u{1F4CA} \u7B14\u8BB0\u4F7F\u7528\u7EDF\u8BA1 \xB7 \u5171 ${total} \u6761 \xB7 \u5DF2\u6253\u5F00 ${opened}`);
+    await this.buildAnnotationReviewSection(container);
     this.buildControls(container);
     this.buildReviewSection(container);
     this.buildAllListHeader(container, total);
     this.listEl = container.createDiv({ cls: "md-stats-list" });
     this.applySort();
     container.scrollTop = scrollTop;
+  }
+  /**
+   * 「重读自己的想法」：与下面四张笔记卡同一套日历窗口，数据源换成批注。
+   * 空数据或读取失败时整块不出现，不占位置也不报错。
+   */
+  async buildAnnotationReviewSection(container) {
+    if (!this.getAnnotationEntries) {
+      return;
+    }
+    let entries;
+    try {
+      entries = await this.getAnnotationEntries();
+    } catch (error) {
+      console.warn("yh-inklight: \u8BFB\u53D6\u6279\u6CE8\u56DE\u987E\u6570\u636E\u5931\u8D25", error);
+      return;
+    }
+    const buckets = buildAnnotationBuckets(entries, /* @__PURE__ */ new Date());
+    if (buckets.length === 0) {
+      return;
+    }
+    const title = container.createDiv({ cls: "md-stats-section-head md-stats-section-head-all" });
+    title.createEl("div", { cls: "md-stats-section-title", text: "\u91CD\u8BFB\u81EA\u5DF1\u7684\u60F3\u6CD5" });
+    for (const bucket of buckets) {
+      const section = container.createDiv({ cls: "md-stats-section md-stats-review" });
+      const head = section.createDiv({ cls: "md-stats-section-head" });
+      head.createEl("div", { cls: "md-stats-section-title", text: bucket.title });
+      head.createEl("div", { cls: "md-stats-section-hint", text: bucket.hint });
+      const list = section.createDiv({ cls: "md-stats-list md-stats-review-list" });
+      for (const entry of bucket.entries) {
+        const row = list.createDiv({ cls: "md-stats-item" });
+        row.setAttribute("role", "button");
+        row.setAttribute("tabindex", "0");
+        row.addClass("is-clickable");
+        const info = row.createDiv({ cls: "md-stats-info" });
+        const text = (entry.content || entry.quote).replace(/\s+/g, " ").trim();
+        info.createEl("div", {
+          cls: "md-stats-title",
+          text: text.length > 60 ? `${text.slice(0, 60)}\u2026` : text
+        });
+        const fileName = entry.filePath.split("/").pop() ?? entry.filePath;
+        info.createEl("div", {
+          cls: "md-stats-meta",
+          text: `${fileName} \xB7 ${entry.linkCount === 0 ? "\u6CA1\u6709\u5173\u8054" : `${entry.linkCount} \u6761\u5173\u8054`}`
+        });
+        const open = () => this.openAnnotation?.(entry);
+        row.addEventListener("click", open);
+        row.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            open();
+          }
+        });
+      }
+    }
   }
   buildControls(container) {
     const controls = container.createDiv({ cls: "md-stats-controls" });
@@ -20563,7 +20662,9 @@ var OverlayAnnotationsPlugin = class extends import_obsidian21.Plugin {
       (leaf) => new MarkdownStatsView(leaf, {
         getStats: () => this.mdOpenStats,
         isTrackingEnabled: () => this.settings.mdOpenTracking,
-        onOpen: (file, options) => this.openMarkdownNote(file, options)
+        onOpen: (file, options) => this.openMarkdownNote(file, options),
+        getAnnotationEntries: () => this.collectAnnotationReviewEntries(),
+        onOpenAnnotation: (entry) => void this.openAnnotationReviewEntry(entry)
       })
     );
     this.registerView(EPUB_TOC_VIEW_TYPE, (leaf) => new EpubTocView(leaf));
@@ -21560,6 +21661,82 @@ ${lines.slice(0, 8).join("\n")}`);
    * 打开 EPUB 文件并导航到指定 CFI 位置。
    * 供 EpubGotoHandler（摘录回跳）和 Obsidian 协议处理器调用。
    */
+  /**
+   * 批注回顾数据源：只取「有自己写的内容」的批注，纯划线不进回顾。
+   * 关联数 = 出度（自己指向别人）+ 入度（别人指向自己）；0 就是孤岛，回顾时排最前。
+   */
+  async collectAnnotationReviewEntries() {
+    const documents = await this.store.getIndexedDocuments();
+    const entries = [];
+    const inbound = /* @__PURE__ */ new Map();
+    for (const document2 of documents) {
+      for (const comment of document2.comments) {
+        entries.push({
+          id: comment.id,
+          filePath: document2.filePath,
+          mode: "md",
+          quote: comment.anchor.selectedText,
+          content: comment.content,
+          createdAt: Date.parse(comment.updatedAt || comment.createdAt) || 0,
+          linkCount: comment.relations?.length ?? 0,
+          offset: comment.anchor.startOffset
+        });
+      }
+      for (const comment of document2.pdfComments) {
+        entries.push({
+          id: comment.id,
+          filePath: document2.filePath,
+          mode: "pdf",
+          quote: comment.anchor.selectedText,
+          content: comment.content,
+          createdAt: Date.parse(comment.updatedAt || comment.createdAt) || 0,
+          linkCount: comment.relations?.length ?? 0,
+          pageNumber: comment.anchor.pageNumber
+        });
+      }
+      for (const comment of document2.epubComments) {
+        entries.push({
+          id: comment.id,
+          filePath: document2.filePath,
+          mode: "epub",
+          quote: comment.anchor.selectedText,
+          content: comment.note,
+          createdAt: Date.parse(comment.createdAt) || 0,
+          linkCount: comment.relations?.length ?? 0,
+          cfiRange: comment.anchor.cfiRange
+        });
+      }
+      for (const item of [...document2.comments, ...document2.pdfComments, ...document2.epubComments]) {
+        for (const relation of item.relations ?? []) {
+          const key = `${relation.targetPath}#${relation.targetId}`;
+          inbound.set(key, (inbound.get(key) ?? 0) + 1);
+        }
+      }
+    }
+    return entries.filter((entry) => entry.content.trim().length > 0).map((entry) => ({
+      ...entry,
+      linkCount: entry.linkCount + (inbound.get(`${entry.filePath}#${entry.id}`) ?? 0)
+    }));
+  }
+  async openAnnotationReviewEntry(entry) {
+    const file = this.app.vault.getAbstractFileByPath(entry.filePath);
+    if (!(file instanceof import_obsidian21.TFile)) {
+      new import_obsidian21.Notice(`\u627E\u4E0D\u5230\u6E90\u6587\u4EF6\uFF1A${entry.filePath}`);
+      return;
+    }
+    await openAnnotationTarget(
+      this.app,
+      {
+        file,
+        offset: entry.offset ?? 0,
+        pageNumber: entry.pageNumber ?? null,
+        mode: entry.mode,
+        cfiRange: entry.cfiRange
+      },
+      (targetFile, cfi) => this.openEpubAtCfi(targetFile.path, cfi),
+      { newTab: true }
+    );
+  }
   /** 孤儿块检查：删批注后导出块会留下，这里只报告不删除，避免误删用户写在块内的内容 */
   async checkOrphanBlocks() {
     const report = await this.store.findOrphanBlocks();

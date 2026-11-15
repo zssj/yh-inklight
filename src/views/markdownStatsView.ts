@@ -94,6 +94,88 @@ function isSameYmd(date: Date, target: Ymd): boolean {
   return date.getFullYear() === target.y && date.getMonth() === target.m && date.getDate() === target.d;
 }
 
+/** 批注回顾条目：只收「有自己想法的」批注，纯划线不进回顾 */
+export interface AnnotationReviewEntry {
+  id: string;
+  filePath: string;
+  mode: "md" | "pdf" | "epub";
+  quote: string;
+  content: string;
+  createdAt: number;
+  /** 关系入度 + 出度；0 表示孤岛，优先推到用户面前 */
+  linkCount: number;
+  offset?: number;
+  pageNumber?: number | null;
+  cfiRange?: string;
+}
+
+export interface AnnotationReviewBucket {
+  kind: ReviewKind;
+  title: string;
+  hint: string;
+  entries: AnnotationReviewEntry[];
+}
+
+const ANNOTATION_REVIEW_RULES: Record<ReviewKind, { title: string; hint: string }> = {
+  day1: { title: "昨日所写", hint: "1 天前写下的想法" },
+  day7: { title: "七日回看", hint: "7 天前写下的想法" },
+  lastMonth: { title: "上月今日所写", hint: "上个月的同一天" },
+  lastYear: { title: "去年今日所写", hint: "去年的同一天" },
+};
+
+/**
+ * 同一套日历窗口，换成「你自己的话」当数据源。
+ * 与笔记四卡的关键差异：批注没有 openCount，所以只按创建时间判窗口，不套次数条件；
+ * 排序把关联最少的排在最前——孤岛才是最容易永久沉底的东西。
+ */
+export function buildAnnotationBuckets(
+  entries: readonly AnnotationReviewEntry[],
+  now: Date,
+): AnnotationReviewBucket[] {
+  const grouped = new Map<ReviewKind, AnnotationReviewEntry[]>();
+  const lastMonth = lastMonthSameDay(now);
+  const lastYear = lastYearSameDay(now);
+
+  for (const entry of entries) {
+    const past = new Date(entry.createdAt);
+    if (Number.isNaN(past.getTime())) {
+      continue;
+    }
+    const daysAgo = diffCalendarDays(now.getTime(), entry.createdAt);
+    if (!Number.isFinite(daysAgo) || daysAgo < 0) {
+      continue;
+    }
+
+    let kind: ReviewKind | null = null;
+    if (daysAgo === 1) {
+      kind = "day1";
+    } else if (daysAgo === 7) {
+      kind = "day7";
+    } else if (lastMonth && isSameYmd(past, lastMonth)) {
+      kind = "lastMonth";
+    } else if (lastYear && isSameYmd(past, lastYear)) {
+      kind = "lastYear";
+    }
+    if (!kind) {
+      continue;
+    }
+
+    const list = grouped.get(kind) ?? [];
+    list.push(entry);
+    grouped.set(kind, list);
+  }
+
+  return (Object.keys(ANNOTATION_REVIEW_RULES) as ReviewKind[])
+    .filter((kind) => (grouped.get(kind)?.length ?? 0) > 0)
+    .map((kind) => ({
+      kind,
+      ...ANNOTATION_REVIEW_RULES[kind],
+      entries: [...(grouped.get(kind) ?? [])]
+        .sort((left, right) => left.linkCount - right.linkCount || right.createdAt - left.createdAt)
+        .slice(0, REVIEW_LIMIT),
+    }));
+}
+
 /**
  * 判定一条笔记归属哪张复习卡，互斥（最多命中一张）。
  * - 1 天卡：只读过 1 次，且自然日差恰好 1
@@ -213,12 +295,17 @@ export interface MarkdownStatsViewOptions {
   getStats: () => Record<string, MdOpenStat>;
   isTrackingEnabled: () => boolean;
   onOpen?: (file: TFile, options?: { forceCount?: boolean }) => void;
+  /** 批注回顾数据源；不传则不显示「重读自己的想法」区块 */
+  getAnnotationEntries?: () => Promise<AnnotationReviewEntry[]>;
+  onOpenAnnotation?: (entry: AnnotationReviewEntry) => void;
 }
 
 export class MarkdownStatsView extends ItemView {
   private readonly getStats: () => Record<string, MdOpenStat>;
   private readonly isTrackingEnabled: () => boolean;
   private readonly openCallback: ((file: TFile, options?: { forceCount?: boolean }) => void) | null;
+  private readonly getAnnotationEntries: (() => Promise<AnnotationReviewEntry[]>) | null;
+  private readonly openAnnotation: ((entry: AnnotationReviewEntry) => void) | null;
   private entries: StatsEntry[] = [];
   private ascending = true;
   private listEl!: HTMLElement;
@@ -228,6 +315,8 @@ export class MarkdownStatsView extends ItemView {
     this.getStats = options.getStats;
     this.isTrackingEnabled = options.isTrackingEnabled;
     this.openCallback = options.onOpen ?? null;
+    this.getAnnotationEntries = options.getAnnotationEntries ?? null;
+    this.openAnnotation = options.onOpenAnnotation ?? null;
   }
 
   getViewType(): string {
@@ -283,6 +372,7 @@ export class MarkdownStatsView extends ItemView {
     const opened = this.entries.filter((e) => e.openCount > 0).length;
     heading.setText(`📊 笔记使用统计 · 共 ${total} 条 · 已打开 ${opened}`);
 
+    await this.buildAnnotationReviewSection(container);
     this.buildControls(container);
     this.buildReviewSection(container);
     this.buildAllListHeader(container, total);
@@ -290,6 +380,67 @@ export class MarkdownStatsView extends ItemView {
     this.applySort();
 
     container.scrollTop = scrollTop;
+  }
+
+  /**
+   * 「重读自己的想法」：与下面四张笔记卡同一套日历窗口，数据源换成批注。
+   * 空数据或读取失败时整块不出现，不占位置也不报错。
+   */
+  private async buildAnnotationReviewSection(container: HTMLElement): Promise<void> {
+    if (!this.getAnnotationEntries) {
+      return;
+    }
+    let entries: AnnotationReviewEntry[];
+    try {
+      entries = await this.getAnnotationEntries();
+    } catch (error) {
+      console.warn("yh-inklight: 读取批注回顾数据失败", error);
+      return;
+    }
+
+    const buckets = buildAnnotationBuckets(entries, new Date());
+    if (buckets.length === 0) {
+      return;
+    }
+
+    const title = container.createDiv({ cls: "md-stats-section-head md-stats-section-head-all" });
+    title.createEl("div", { cls: "md-stats-section-title", text: "重读自己的想法" });
+
+    for (const bucket of buckets) {
+      const section = container.createDiv({ cls: "md-stats-section md-stats-review" });
+      const head = section.createDiv({ cls: "md-stats-section-head" });
+      head.createEl("div", { cls: "md-stats-section-title", text: bucket.title });
+      head.createEl("div", { cls: "md-stats-section-hint", text: bucket.hint });
+
+      const list = section.createDiv({ cls: "md-stats-list md-stats-review-list" });
+      for (const entry of bucket.entries) {
+        const row = list.createDiv({ cls: "md-stats-item" });
+        row.setAttribute("role", "button");
+        row.setAttribute("tabindex", "0");
+        row.addClass("is-clickable");
+
+        const info = row.createDiv({ cls: "md-stats-info" });
+        const text = (entry.content || entry.quote).replace(/\s+/g, " ").trim();
+        info.createEl("div", {
+          cls: "md-stats-title",
+          text: text.length > 60 ? `${text.slice(0, 60)}…` : text,
+        });
+        const fileName = entry.filePath.split("/").pop() ?? entry.filePath;
+        info.createEl("div", {
+          cls: "md-stats-meta",
+          text: `${fileName} · ${entry.linkCount === 0 ? "没有关联" : `${entry.linkCount} 条关联`}`,
+        });
+
+        const open = (): void => this.openAnnotation?.(entry);
+        row.addEventListener("click", open);
+        row.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            open();
+          }
+        });
+      }
+    }
   }
 
   private buildControls(container: HTMLElement): void {

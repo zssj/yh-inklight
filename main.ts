@@ -38,7 +38,7 @@ import { EpubBookshelfView, EPUB_BOOKSHELF_VIEW_TYPE } from "./src/epub/EpubBook
 import { EpubAiModal } from "./src/epub/EpubAiModal";
 import { EpubTocView, EPUB_TOC_VIEW_TYPE } from "./src/epub/EpubTocView";
 import { registerEpubGotoHandler } from "./src/epub/EpubGotoHandler";
-import { MarkdownStatsView, MARKDOWN_STATS_VIEW_TYPE } from "./src/views/markdownStatsView";
+import { AnnotationReviewEntry, MarkdownStatsView, MARKDOWN_STATS_VIEW_TYPE } from "./src/views/markdownStatsView";
 import { buildTagSuggestions, renderTagInput, TagSuggestion } from "./src/views/tagInput";
 import { normalizeTags } from "./src/storage/tags";
 import { TagBoardView, TAG_BOARD_VIEW_TYPE } from "./src/views/tagBoardView";
@@ -154,6 +154,8 @@ export default class OverlayAnnotationsPlugin extends Plugin {
           getStats: () => this.mdOpenStats,
           isTrackingEnabled: () => this.settings.mdOpenTracking,
           onOpen: (file, options) => this.openMarkdownNote(file, options),
+          getAnnotationEntries: () => this.collectAnnotationReviewEntries(),
+          onOpenAnnotation: (entry) => void this.openAnnotationReviewEntry(entry),
         }),
     );
     // EPUB 目录左侧栏视图：仅手机端由 syncEpubTocLeaf 挂载/摘除
@@ -1281,6 +1283,89 @@ export default class OverlayAnnotationsPlugin extends Plugin {
    * 打开 EPUB 文件并导航到指定 CFI 位置。
    * 供 EpubGotoHandler（摘录回跳）和 Obsidian 协议处理器调用。
    */
+  /**
+   * 批注回顾数据源：只取「有自己写的内容」的批注，纯划线不进回顾。
+   * 关联数 = 出度（自己指向别人）+ 入度（别人指向自己）；0 就是孤岛，回顾时排最前。
+   */
+  private async collectAnnotationReviewEntries(): Promise<AnnotationReviewEntry[]> {
+    const documents = await this.store.getIndexedDocuments();
+    const entries: AnnotationReviewEntry[] = [];
+    const inbound = new Map<string, number>();
+
+    for (const document of documents) {
+      for (const comment of document.comments) {
+        entries.push({
+          id: comment.id,
+          filePath: document.filePath,
+          mode: "md",
+          quote: comment.anchor.selectedText,
+          content: comment.content,
+          createdAt: Date.parse(comment.updatedAt || comment.createdAt) || 0,
+          linkCount: comment.relations?.length ?? 0,
+          offset: comment.anchor.startOffset,
+        });
+      }
+      for (const comment of document.pdfComments) {
+        entries.push({
+          id: comment.id,
+          filePath: document.filePath,
+          mode: "pdf",
+          quote: comment.anchor.selectedText,
+          content: comment.content,
+          createdAt: Date.parse(comment.updatedAt || comment.createdAt) || 0,
+          linkCount: comment.relations?.length ?? 0,
+          pageNumber: comment.anchor.pageNumber,
+        });
+      }
+      for (const comment of document.epubComments) {
+        entries.push({
+          id: comment.id,
+          filePath: document.filePath,
+          mode: "epub",
+          quote: comment.anchor.selectedText,
+          content: comment.note,
+          createdAt: Date.parse(comment.createdAt) || 0,
+          linkCount: comment.relations?.length ?? 0,
+          cfiRange: comment.anchor.cfiRange,
+        });
+      }
+
+      for (const item of [...document.comments, ...document.pdfComments, ...document.epubComments]) {
+        for (const relation of item.relations ?? []) {
+          const key = `${relation.targetPath}#${relation.targetId}`;
+          inbound.set(key, (inbound.get(key) ?? 0) + 1);
+        }
+      }
+    }
+
+    return entries
+      .filter((entry) => entry.content.trim().length > 0)
+      .map((entry) => ({
+        ...entry,
+        linkCount: entry.linkCount + (inbound.get(`${entry.filePath}#${entry.id}`) ?? 0),
+      }));
+  }
+
+  private async openAnnotationReviewEntry(entry: AnnotationReviewEntry): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(entry.filePath);
+    if (!(file instanceof TFile)) {
+      new Notice(`找不到源文件：${entry.filePath}`);
+      return;
+    }
+    await openAnnotationTarget(
+      this.app,
+      {
+        file,
+        offset: entry.offset ?? 0,
+        pageNumber: entry.pageNumber ?? null,
+        mode: entry.mode,
+        cfiRange: entry.cfiRange,
+      },
+      (targetFile, cfi) => this.openEpubAtCfi(targetFile.path, cfi),
+      { newTab: true },
+    );
+  }
+
   /** 孤儿块检查：删批注后导出块会留下，这里只报告不删除，避免误删用户写在块内的内容 */
   async checkOrphanBlocks(): Promise<void> {
     const report = await this.store.findOrphanBlocks();

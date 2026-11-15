@@ -13,6 +13,7 @@ import { App, Component, MarkdownRenderer, setIcon } from "obsidian";
 import { AnnotationRelation, COLOR_LABELS } from "../storage/types";
 import { SidebarCard } from "./cardModel";
 import { renderTagChips, renderTagInput, TagSuggestion } from "./tagInput";
+import { RelatedBlockHost, renderRelatedBlock } from "./relatedBlock";
 
 export type CardHostKind = "list" | "popover";
 
@@ -81,6 +82,8 @@ export interface CardExternalActions {
   openDerivedNote?: (sourcePath: string) => Promise<void> | void;
   createAtomCard?: (card: SidebarCard) => Promise<void> | void;
   jumpToRelation?: (relation: AnnotationRelation) => void;
+  /** 相关区宿主工厂：由 main.ts 提供，命中来自插件级关系模型 */
+  relatedHost?: (card: SidebarCard) => RelatedBlockHost | undefined;
   removeRelation?: (
     sourcePath: string,
     annotationId: string,
@@ -103,6 +106,8 @@ export interface CardBodyHost {
   onRemoveRelation?: (relation: AnnotationRelation) => void;
   /** 浮层右上角关闭按钮 */
   onClose?: () => void;
+  /** 字面相关区：宿主没给就整块不出现（PDF 之类拿不到全库快照的场景） */
+  related?: RelatedBlockHost;
   app?: App;
   component?: Component;
 }
@@ -124,6 +129,9 @@ export function renderCardBody(root: HTMLElement, card: SidebarCard, host: CardB
   renderRelations(root, card, host);
   renderSource(root, card, host);
   renderActions(root, card, host);
+  if (host.related) {
+    renderRelatedBlock(root, card, host.related);
+  }
 }
 
 /** 头行：颜色 / 载体 / 类型 / 想法类型 / 时间（浮层再加关闭） */

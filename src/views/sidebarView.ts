@@ -30,39 +30,16 @@ import {
   HighlightAnnotation,
   PdfCommentAnnotation,
   PdfHighlightAnnotation,
-  RelationType,
 } from "../storage/types";
 import { AnnotationKind, AnnotationMode, buildCards, SidebarCard } from "./cardModel";
 import { CardBodyHost, renderCardBody } from "./cardBody";
-import { RelationModel } from "./relationModel";
+import { renderRelatedBlock } from "./relatedBlock";
 import { openAnnotationTarget } from "./navigation";
-import { hasTag, normalizeTag, tagKey, unionTags } from "../storage/tags";
+import { hasTag, tagKey } from "../storage/tags";
 import type { TagRef } from "../storage/annotationStore";
 
 export const ANNOTATION_SIDEBAR_VIEW = "yh-inklight-sidebar";
 
-/** 关系类型只留四种：再多用户每次连边都要先做一道选择题，很快就懒得连了 */
-const RELATION_TYPE_LABELS: ReadonlyArray<readonly [RelationType, string]> = [
-  ["supports", "支持"],
-  ["refutes", "反驳"],
-  ["example", "举例"],
-  ["extends", "延伸"],
-];
-
-/**
- * 目标锚点快照：md 存字符偏移、pdf 存页码、epub 存 CFI，另存原文摘要。
- * 存下来之后关系是自包含的，导出与侧栏跳转都不必回查目标文档。
- */
-function relationAnchorOf(
-  card: SidebarCard,
-): Pick<AnnotationRelation, "targetOffset" | "targetPage" | "targetCfi" | "targetQuote"> {
-  return {
-    ...(card.mode === "md" ? { targetOffset: card.startOffset } : {}),
-    ...(card.mode === "pdf" ? { targetPage: card.pageNumber } : {}),
-    ...(card.mode === "epub" && card.cfiRange ? { targetCfi: card.cfiRange } : {}),
-    targetQuote: card.text.replace(/\s+/g, " ").trim().slice(0, 80),
-  };
-}
 
 type AnnotationScope = "current" | "all";
 type TypeFilter = "all" | AnnotationKind;
@@ -92,7 +69,6 @@ export class AnnotationSidebarView extends ItemView {
    */
   private editingTagCardId: string | null = null;
   /** 字面关联的按需内存快照：随 store.version 自动失效，不落盘 */
-  private readonly relations: RelationModel;
   /** 移动端标签编辑态的键盘监听清理：同一时刻只允许一个编辑态持有 */
   private keyboardCleanup: (() => void) | null = null;
   /** 标签编辑期间被挡下的重绘请求，编辑结束后补一次 */
@@ -106,7 +82,6 @@ export class AnnotationSidebarView extends ItemView {
 
   constructor(leaf: WorkspaceLeaf, private readonly plugin: OverlayAnnotationsPlugin) {
     super(leaf);
-    this.relations = new RelationModel(plugin.store);
   }
 
   getViewType(): string {
@@ -181,7 +156,7 @@ export class AnnotationSidebarView extends ItemView {
       return;
     }
     if (this.plugin.settings.contentRelations) {
-      await this.relations.prepare(documents);
+      await this.plugin.prepareRelations(documents);
       if (token !== this.renderToken) {
         return;
       }
@@ -228,7 +203,7 @@ export class AnnotationSidebarView extends ItemView {
         ? await this.plugin.store.getIndexedDocuments()
         : [await this.plugin.store.getDocument(file!)];
     if (this.plugin.settings.contentRelations) {
-      await this.relations.prepare(documents);
+      await this.plugin.prepareRelations(documents);
     }
     const rawCards = documents.flatMap((document) => buildCards(document));
     const cards = this.filterCards(rawCards);
@@ -495,7 +470,21 @@ export class AnnotationSidebarView extends ItemView {
     renderCardBody(card, cardData, this.buildCardHost(cardData, file, card));
 
     if (this.plugin.settings.contentRelations) {
-      this.renderRelated(card, cardData);
+      // 与浮层同一份 DOM：命中/写入走插件单点，这里只给展开态
+      renderRelatedBlock(
+        card,
+        cardData,
+        this.plugin.createRelatedHost(cardData, {
+          isOpen: (cardId) => this.openRelated.has(cardId),
+          setOpen: (cardId, open) => {
+            if (open) {
+              this.openRelated.add(cardId);
+            } else {
+              this.openRelated.delete(cardId);
+            }
+          },
+        }),
+      );
     }
 
     const edit = card.createDiv({ cls: "yh-ov-edit hidden" });
@@ -528,7 +517,10 @@ export class AnnotationSidebarView extends ItemView {
           this.tagEditorAutoFocus = true;
           this.editingTagCardId = cardData.id;
         },
-        suggestions: () => this.plugin.getTagSuggestions(),
+        suggestions: () => [
+          ...this.plugin.getRecommendedTags(cardData),
+          ...this.plugin.getTagSuggestions(),
+        ],
         onChange: (tags) => {
           if (!file) {
             return;
@@ -583,250 +575,6 @@ export class AnnotationSidebarView extends ItemView {
     await this.plugin.refreshAnnotations();
   }
 
-  /**
-   * 字面相关的其他批注：默认折叠，每条标出命中的短语（说明为什么相关），
-   * 点击跳转到原文。行尾「关联」把确认动作物化为两侧共享标签（MOC 雏形），
-   * 已确认的关联显示为「已关联 xx」chip，点 chip 从两侧断开。无命中时整个区块不渲染。
-   */
-  private renderRelated(card: HTMLElement, cardData: SidebarCard): void {
-    const hits = this.relations.getRelated(cardData);
-    if (hits.length === 0) {
-      return;
-    }
-
-    const box = card.createEl("details", { cls: "yh-ov-related" });
-    // 展开态记在视图字段：确认关联后的 refreshAnnotations 会整表重绘，
-    // 不希望用户刚展开的相关区被折回去
-    box.open = this.openRelated.has(cardData.id);
-    box.addEventListener("toggle", () => {
-      if (box.open) {
-        this.openRelated.add(cardData.id);
-      } else {
-        this.openRelated.delete(cardData.id);
-      }
-    });
-    box.createEl("summary", { text: `相关的 ${hits.length} 条` });
-    const list = box.createDiv({ cls: "yh-ov-related-list" });
-
-    const selfFile = this.fileForCard(cardData);
-
-    for (const hit of hits) {
-      const row = list.createDiv({ cls: "yh-ov-related-row" });
-      const excerpt = hit.card.text.length > 60 ? `${hit.card.text.slice(0, 60)}…` : hit.card.text;
-      row.createDiv({ cls: "yh-ov-related-text", text: excerpt });
-
-      const meta = row.createDiv({ cls: "yh-ov-related-meta" });
-      meta.createSpan({ cls: "yh-ov-related-reason", text: `都提到「${hit.reasons.join("」「")}」` });
-      const source = this.fileForCard(hit.card);
-      meta.createSpan({ cls: "yh-ov-related-file", text: source?.basename ?? hit.card.sourcePath });
-
-      // 已确认的关联 = 两侧共享的标签（确认动作的持久结果）；点 chip 从两侧移除该标签
-      for (const tag of this.sharedTags(cardData, hit.card)) {
-        const chip = meta.createSpan({
-          cls: "yh-ov-related-chip",
-          text: `已关联 ${tag}`,
-          attr: { title: "点击断开该关联标签（两侧同时移除）" },
-        });
-        chip.addEventListener("click", (event) => {
-          event.stopPropagation();
-          void this.removeRelationTag(cardData, hit.card, tag);
-        });
-      }
-
-      // 确认关联：两侧源文件都在才可用；打开行内选择条挑标签，绝不静默写入
-      const linkDisabled = !selfFile || !source;
-      const link = meta.createSpan({
-        cls: "yh-ov-related-link",
-        text: "关联",
-        attr: linkDisabled
-          ? { "aria-disabled": "true", title: "源文件缺失，无法建立关联" }
-          : { role: "button", tabindex: "0", "aria-label": "确认关联", title: "确认关联：把一个共享标签写入两侧批注" },
-      });
-      if (linkDisabled) {
-        link.addClass("is-disabled");
-      }
-      link.addEventListener("click", (event) => {
-        event.stopPropagation();
-        if (!linkDisabled) {
-          this.mountRelationPicker(row, cardData, hit.card, hit.reasons);
-        }
-      });
-      link.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") {
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        if (!linkDisabled) {
-          this.mountRelationPicker(row, cardData, hit.card, hit.reasons);
-        }
-      });
-
-      if (source) {
-        row.addClass("is-clickable");
-        row.setAttribute("role", "button");
-        row.addEventListener("click", () => {
-          void this.jumpTo(source, hit.card.startOffset, hit.card.pageNumber, hit.card.mode, hit.card.cfiRange);
-        });
-      }
-    }
-  }
-
-  /** 两侧已共享的标签（按比较键判同、去重展示写法）：这就是「确认关联」落在数据上的样子 */
-  private sharedTags(a: SidebarCard, b: SidebarCard): string[] {
-    const keys = new Set(b.tags.map(tagKey));
-    const seen = new Set<string>();
-    const shared: string[] = [];
-    for (const tag of a.tags) {
-      const key = tagKey(tag);
-      if (!key || !keys.has(key) || seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      shared.push(tag);
-    }
-    return shared;
-  }
-
-  /**
-   * 相关行的确认关联选择条：候选第一位是命中最长的公共短语（算法已保证术语性），
-   * 其后是历史标签，最后一个输入框接受自定义。点候选或回车才写入，Esc / 点外收起。
-   */
-  private mountRelationPicker(row: HTMLElement, self: SidebarCard, other: SidebarCard, reasons: readonly string[]): void {
-    const picker = row.createDiv({ cls: "yh-ov-related-picker" });
-    // 不让行级点击跳转吃掉选择条上的点击
-    picker.addEventListener("click", (event) => event.stopPropagation());
-
-    const listeners = new AbortController();
-    const close = (): void => {
-      listeners.abort();
-      picker.remove();
-    };
-
-    const chips = picker.createDiv({ cls: "yh-ov-related-picker-chips" });
-    // 关系类型行：先选「这是什么关系」，再选标签。不选类型时只写共享标签（与旧行为一致），
-    // 选了类型才会在批注上落一条有向关系，导出时写成 supports:: / refutes:: 等 inline field。
-    const typeRow = picker.createDiv({ cls: "yh-ov-related-types" });
-    let chosenType: RelationType | null = null;
-    for (const [type, label] of RELATION_TYPE_LABELS) {
-      const button = typeRow.createSpan({
-        cls: "yh-ov-related-type",
-        text: label,
-        attr: { role: "button", tabindex: "0", "aria-pressed": "false", title: `标记为「${label}」：再选一个标签建立有向关联` },
-      });
-      const toggle = (): void => {
-        chosenType = chosenType === type ? null : type;
-        typeRow.querySelectorAll(".yh-ov-related-type").forEach((node) => node.removeClass("is-active"));
-        button.setAttribute("aria-pressed", chosenType ? "true" : "false");
-        if (chosenType) {
-          button.addClass("is-active");
-        }
-      };
-      button.addEventListener("click", (event) => {
-        event.stopPropagation();
-        toggle();
-      });
-      button.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") {
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        toggle();
-      });
-    }
-
-    const candidates: string[] = [];
-    const phrase = reasons[0]; // selectDistinctPhrases 按长度降序，第一条即最长短语
-    if (phrase) {
-      candidates.push(phrase);
-    }
-    for (const suggestion of this.plugin.getTagSuggestions()) {
-      if (candidates.length >= 6) {
-        break;
-      }
-      if (suggestion.kind !== "used") {
-        continue;
-      }
-      const key = tagKey(suggestion.name);
-      if (!key) {
-        continue;
-      }
-      // 已经共享的标签再点一次是空操作，不作为候选
-      if (hasTag(self.tags, key) && hasTag(other.tags, key)) {
-        continue;
-      }
-      if (!candidates.some((item) => tagKey(item) === key)) {
-        candidates.push(suggestion.name);
-      }
-    }
-    for (const name of candidates) {
-      const chip = chips.createSpan({
-        cls: "yh-ov-related-picker-chip",
-        text: name,
-        attr: { title: name === phrase ? "用这个共同短语作为关联标签" : "用这个历史标签建立关联" },
-      });
-      chip.addEventListener("click", () => {
-        close();
-        void this.applyRelationTag(self, other, name, chosenType);
-      });
-    }
-
-    const input = chips.createEl("input", {
-      cls: "yh-ov-related-picker-input",
-      attr: { type: "text", placeholder: "自定义标签", "aria-label": "自定义关联标签" },
-    });
-    let composing = false;
-    input.addEventListener("compositionstart", () => {
-      composing = true;
-    });
-    input.addEventListener("compositionend", () => {
-      composing = false;
-    });
-    input.addEventListener("click", (event) => event.stopPropagation());
-    input.addEventListener("keydown", (event) => {
-      // IME 选词阶段的 Enter 必须还给输入法；keyCode 229 是安卓 WebView 的兜底
-      if (composing || event.isComposing || event.keyCode === 229) {
-        return;
-      }
-      if (event.key === "Enter") {
-        event.preventDefault();
-        const value = input.value.trim();
-        if (!value) {
-          return;
-        }
-        close();
-        void this.applyRelationTag(self, other, value, chosenType);
-      }
-    });
-
-    // 点选择条外收起（capture 先于行跳转）；行被重绘销毁时顺手清监听
-    document.addEventListener(
-      "pointerdown",
-      (event) => {
-        if (!row.isConnected) {
-          listeners.abort();
-          return;
-        }
-        if (event.target instanceof Node && picker.contains(event.target)) {
-          return;
-        }
-        close();
-      },
-      { capture: true, signal: listeners.signal },
-    );
-    picker.addEventListener(
-      "keydown",
-      (event) => {
-        if (event.key === "Escape" && !event.defaultPrevented) {
-          event.preventDefault();
-          close();
-        }
-      },
-      { signal: listeners.signal },
-    );
-  }
-
   private async jumpToRelation(relation: AnnotationRelation): Promise<void> {
     const target = this.app.vault.getAbstractFileByPath(relation.targetPath);
     if (!(target instanceof TFile)) {
@@ -857,7 +605,7 @@ export class AnnotationSidebarView extends ItemView {
       if (target instanceof TFile) {
         await this.plugin.store.removeRelation(target, relation.targetId, cardData.sourcePath, cardData.id);
       }
-      this.relations.invalidate();
+      this.plugin.invalidateRelations();
       new Notice("已解除关系");
       await this.plugin.refreshAnnotations();
     } catch (error) {
@@ -967,6 +715,18 @@ export class AnnotationSidebarView extends ItemView {
   }
 
 
+  /** 卡片的标签 refs：高亮与其笔记共享同一份标签数组，写入时两者都要覆盖 */
+  private tagRefs(card: SidebarCard): TagRef[] {
+    const refs: TagRef[] = [];
+    if (card.highlight) {
+      refs.push({ filePath: card.sourcePath, annotationId: card.highlight.id });
+    }
+    if (card.note) {
+      refs.push({ filePath: card.sourcePath, annotationId: card.note.id });
+    }
+    return refs;
+  }
+
   /** 写入标签：一张卡片可能是高亮 + 笔记，两者写同一份数组 */
   private async persistCardTags(file: TFile | null, cardData: SidebarCard, tags: string[]): Promise<void> {
     if (!file) {
@@ -981,141 +741,10 @@ export class AnnotationSidebarView extends ItemView {
     try {
       await this.plugin.store.setTags(refs, tags);
       // 标签变了，「标签 → 词频」字典要跟着重建，不等 3 秒缓存 TTL
-      this.relations.invalidate();
+      this.plugin.invalidateRelations();
     } catch (error) {
       console.warn("yh-inklight: 保存标签失败", error);
       new Notice("标签保存失败，请检查写入权限或同步状态");
-    }
-  }
-
-  /** 卡片的标签 refs：高亮与其笔记共享同一份标签数组，写入时两者都要覆盖 */
-  private tagRefs(card: SidebarCard): TagRef[] {
-    const refs: TagRef[] = [];
-    if (card.highlight) {
-      refs.push({ filePath: card.sourcePath, annotationId: card.highlight.id });
-    }
-    if (card.note) {
-      refs.push({ filePath: card.sourcePath, annotationId: card.note.id });
-    }
-    return refs;
-  }
-
-  /**
-   * 活读一张卡的最新标签（高亮与其笔记的并集）。
-   * 渲染快照可能滞后于其他入口的写入，确认关联必须以落盘数据为准取并集，否则会覆盖掉新标签。
-   * 返回 null 表示该侧不可用（源文件或批注缺失，已给 Notice）。
-   */
-  private async readLiveCardTags(card: SidebarCard, action: string): Promise<{ refs: TagRef[]; live: string[] } | null> {
-    const file = this.fileForCard(card);
-    if (!file) {
-      new Notice(`源文件缺失，无法${action}`);
-      return null;
-    }
-    const refs = this.tagRefs(card);
-    const document = await this.plugin.store.getDocument(file);
-    const live: string[] = [];
-    let found = false;
-    for (const ref of refs) {
-      const annotation = findAnnotationById(document, ref.annotationId);
-      if (annotation) {
-        found = true;
-        live.push(...(annotation.tags ?? []));
-      }
-    }
-    if (!found) {
-      new Notice(`该批注已不存在，无法${action}`);
-      return null;
-    }
-    return { refs, live };
-  }
-
-  /**
-   * 确认关联：把同一个标签写入两侧（旧行为不变）；选了关系类型时再落一条有向关系
-   * （self → other），导出时写成 `supports:: [[#^块id]]`。先两侧都活读成功再写，
-   * 避免一侧成功一侧失败的不对称。
-   */
-  private async applyRelationTag(
-    self: SidebarCard,
-    other: SidebarCard,
-    rawTag: string,
-    relationType: RelationType | null = null,
-  ): Promise<void> {
-    const tag = normalizeTag(rawTag);
-    if (!tag) {
-      return;
-    }
-    const preparedSelf = await this.readLiveCardTags(self, "建立关联");
-    if (!preparedSelf) {
-      return;
-    }
-    const preparedOther = await this.readLiveCardTags(other, "建立关联");
-    if (!preparedOther) {
-      return;
-    }
-    try {
-      // setTags 是覆盖式：每侧单独一次调用，写入「该侧最新 tags ∪ 确认标签」
-      await this.plugin.store.setTags(preparedSelf.refs, unionTags(preparedSelf.live, [tag]));
-      await this.plugin.store.setTags(preparedOther.refs, unionTags(preparedOther.live, [tag]));
-      const selfFile = this.app.vault.getAbstractFileByPath(self.sourcePath);
-      if (relationType && selfFile instanceof TFile) {
-        await this.plugin.store.addRelation(selfFile, self.id, {
-          targetPath: other.sourcePath,
-          targetId: other.id,
-          targetMode: other.mode,
-          type: relationType,
-          createdAt: new Date().toISOString(),
-          ...relationAnchorOf(other),
-        });
-      }
-      // 标签字典变了，「标签 → 词频」索引不等 3 秒 TTL
-      this.relations.invalidate();
-      const label = RELATION_TYPE_LABELS.find(([type]) => type === relationType)?.[1];
-      new Notice(label ? `已建立「${label}」关系，并共享标签「${tag}」` : `已用「${tag}」关联两侧批注`);
-      await this.plugin.refreshAnnotations();
-    } catch (error) {
-      console.warn("yh-inklight: 写入关联标签失败", error);
-      new Notice("关联标签写入失败，请检查写入权限或同步状态");
-    }
-  }
-
-  /** 断开关联：把该标签从两侧移除；其他批注上的同名标签不受影响（setTags 只动指定 refs） */
-  private async removeRelationTag(self: SidebarCard, other: SidebarCard, rawTag: string): Promise<void> {
-    const key = tagKey(rawTag);
-    if (!key) {
-      return;
-    }
-    const preparedSelf = await this.readLiveCardTags(self, "断开关联");
-    if (!preparedSelf) {
-      return;
-    }
-    const preparedOther = await this.readLiveCardTags(other, "断开关联");
-    if (!preparedOther) {
-      return;
-    }
-    try {
-      await this.plugin.store.setTags(
-        preparedSelf.refs,
-        unionTags(preparedSelf.live).filter((item) => tagKey(item) !== key),
-      );
-      await this.plugin.store.setTags(
-        preparedOther.refs,
-        unionTags(preparedOther.live).filter((item) => tagKey(item) !== key),
-      );
-      // 关系与标签一起断开：只删标签会在导出笔记里留下指向已断开关联的 supports:: 行
-      const selfFile = this.app.vault.getAbstractFileByPath(self.sourcePath);
-      if (selfFile instanceof TFile) {
-        await this.plugin.store.removeRelation(selfFile, self.id, other.sourcePath, other.id);
-      }
-      const otherFile = this.app.vault.getAbstractFileByPath(other.sourcePath);
-      if (otherFile instanceof TFile) {
-        await this.plugin.store.removeRelation(otherFile, other.id, self.sourcePath, self.id);
-      }
-      this.relations.invalidate();
-      new Notice(`已断开关联标签「${rawTag}」`);
-      await this.plugin.refreshAnnotations();
-    } catch (error) {
-      console.warn("yh-inklight: 断开关联标签失败", error);
-      new Notice("断开关联失败，请检查写入权限或同步状态");
     }
   }
 
@@ -1329,21 +958,4 @@ export class AnnotationSidebarView extends ItemView {
 }
 
 /** 在 sidecar 文档的 6 个批注数组里按 id 找标签载体；找不到说明该批注已被删除 */
-function findAnnotationById(document: FileAnnotationDocument, annotationId: string): { tags?: string[] } | null {
-  const pools = [
-    document.highlights,
-    document.comments,
-    document.pdfHighlights,
-    document.pdfComments,
-    document.epubHighlights,
-    document.epubComments,
-  ];
-  for (const pool of pools) {
-    const found = pool.find((item) => item.id === annotationId);
-    if (found) {
-      return found;
-    }
-  }
-  return null;
-}
 

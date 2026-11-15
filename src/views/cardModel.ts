@@ -289,6 +289,34 @@ function findAttachedEpubNote(
   return comments.find((note) => !usedNotes.has(note.id) && note.anchor.cfiRange === highlight.anchor.cfiRange) ?? null;
 }
 
+/** 目标锚点快照：md 存字符偏移、pdf 存页码、epub 存 CFI，另存原文摘要 */
+export function relationAnchorOf(
+  card: SidebarCard,
+): Pick<AnnotationRelation, "targetOffset" | "targetPage" | "targetCfi" | "targetQuote"> {
+  return {
+    ...(card.mode === "md" ? { targetOffset: card.startOffset } : {}),
+    ...(card.mode === "pdf" ? { targetPage: card.pageNumber } : {}),
+    ...(card.mode === "epub" && card.cfiRange ? { targetCfi: card.cfiRange } : {}),
+    targetQuote: card.text.replace(/\s+/g, " ").trim().slice(0, 80),
+  };
+}
+
+/** 按 id 在文档的全部批注数组里找一条（只要 tags 字段，用于活读最新标签） */
+export function findAnnotationById(
+  document: FileAnnotationDocument,
+  annotationId: string,
+): { tags?: string[] } | null {
+  const all = [
+    ...document.highlights,
+    ...document.comments,
+    ...document.pdfHighlights,
+    ...document.pdfComments,
+    ...document.epubHighlights,
+    ...document.epubComments,
+  ];
+  return all.find((item) => item.id === annotationId) ?? null;
+}
+
 export function isCodeAnchor(anchor: HighlightAnnotation["anchor"] | PdfHighlightAnnotation["anchor"]): boolean {
   return "isCode" in anchor && Boolean(anchor.isCode);
 }

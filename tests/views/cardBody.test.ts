@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import { CARD_ACTIONS } from "../../src/views/cardBody";
+import { filterSharedCandidates } from "../../src/views/relatedBlock";
 
 const ids = (inList: boolean) =>
   CARD_ACTIONS.filter((spec) => (inList ? spec.inList : spec.inPopover)).map((spec) => spec.id);
@@ -31,5 +32,27 @@ describe("CARD_ACTIONS", () => {
   it("浮层没有列表专有之外的动作，两侧差异只有一处", () => {
     const popoverOnly = ids(false).filter((id) => !ids(true).includes(id));
     expect(popoverOnly).toEqual([]);
+  });
+});
+
+describe("filterSharedCandidates", () => {
+  const card = (id: string, tags: string[]) => ({ id, tags, text: "", mode: "md" as const });
+
+  it("去掉两侧已共享的标签：再点一次是空操作", () => {
+    const self = card("a", ["复利"]);
+    const other = card("b", ["复利"]);
+    expect(filterSharedCandidates(["复利", "长期主义"], self, other)).toEqual(["长期主义"]);
+  });
+
+  it("按标签比较键去重，大小写/写法不同只留一条", () => {
+    const self = card("a", []);
+    const other = card("b", []);
+    expect(filterSharedCandidates(["复利", "复利", "复利效应"], self, other)).toEqual(["复利", "复利效应"]);
+  });
+
+  it("候选数量受上限约束", () => {
+    const self = card("a", []);
+    const other = card("b", []);
+    expect(filterSharedCandidates(["a", "b", "c", "d"], self, other, 2)).toHaveLength(2);
   });
 });

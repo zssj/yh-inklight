@@ -513,6 +513,7 @@ export class PdfAnnotationLayer {
         : {}),
       ...(actions.createAtomCard ? { onAtomCard: () => void actions.createAtomCard?.(cardData) } : {}),
       ...(actions.jumpToRelation ? { onJumpRelation: actions.jumpToRelation } : {}),
+      ...(actions.relatedHost ? { related: actions.relatedHost(cardData) } : {}),
       ...(actions.removeRelation
         ? {
             onRemoveRelation: (relation) =>

@@ -21,6 +21,7 @@ import {
   AnnotationPluginSettings,
   AnnotationRelation,
   CommentAnnotation,
+  RelationType,
   DEFAULT_SETTINGS,
   FileAnnotationDocument,
   HighlightAnnotation,
@@ -29,10 +30,13 @@ import {
   SUPPORTED_BOOK_EXTENSIONS,
 } from "./src/storage/types";
 import { AnnotationCard } from "./src/views/annotationCard";
-import { buildCards, SidebarCard } from "./src/views/cardModel";
+import { buildCards, findAnnotationById, relationAnchorOf, SidebarCard } from "./src/views/cardModel";
 import { toPopoverRect } from "./src/views/popoverPlacement";
 import { ANNOTATION_SIDEBAR_VIEW, AnnotationSidebarView } from "./src/views/sidebarView";
 import { openAnnotationTarget } from "./src/views/navigation";
+import { RelationModel } from "./src/views/relationModel";
+import { filterSharedCandidates, RelatedBlockHost, RelatedHitView } from "./src/views/relatedBlock";
+import type { TagRef } from "./src/storage/annotationStore";
 import { parseSourceLinkParams, refineOffset, SourceLinkTarget } from "./src/storage/sourceLink";
 import { StickyNoteLane } from "./src/views/stickyNoteLane";
 import { EpubReaderView, EPUB_READER_VIEW_TYPE } from "./src/epub/EpubReaderView";
@@ -42,7 +46,7 @@ import { EpubTocView, EPUB_TOC_VIEW_TYPE } from "./src/epub/EpubTocView";
 import { registerEpubGotoHandler } from "./src/epub/EpubGotoHandler";
 import { AnnotationReviewEntry, MarkdownStatsView, MARKDOWN_STATS_VIEW_TYPE } from "./src/views/markdownStatsView";
 import { buildTagSuggestions, renderTagInput, TagSuggestion } from "./src/views/tagInput";
-import { normalizeTags } from "./src/storage/tags";
+import { normalizeTag, normalizeTags, tagKey, unionTags } from "./src/storage/tags";
 import { TagBoardView, TAG_BOARD_VIEW_TYPE } from "./src/views/tagBoardView";
 
 interface CommentModalValue {
@@ -96,12 +100,22 @@ const YH_INKLIGHT_ICON = `
   </svg>
 `;
 
+/** 关系类型只留四种：再多用户每次连边都要先做一道选择题，很快就懒得连了 */
+const RELATION_TYPES: ReadonlyArray<readonly [RelationType, string]> = [
+  ["supports", "支持"],
+  ["refutes", "反驳"],
+  ["example", "举例"],
+  ["extends", "延伸"],
+];
+
 export default class OverlayAnnotationsPlugin extends Plugin {
   settings: AnnotationPluginSettings = DEFAULT_SETTINGS;
   store!: AnnotationStore;
 
   private toolbar!: SelectionToolbar;
   private popoverCard: AnnotationCard | null = null;
+  /** 浮层「相关」区的展开态：存在插件上，关掉卡片再打开仍保持 */
+  private readonly popoverRelatedOpen = new Set<string>();
   private pdfLayer!: PdfAnnotationLayer;
   private pdfViewerAdapter!: PdfViewerAdapter;
   private stickyLane!: StickyNoteLane;
@@ -141,6 +155,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
         jumpToRelation: (relation) => void this.jumpToRelationTarget(relation),
         removeRelation: (sourcePath, annotationId, relation) =>
           this.removeRelationFor(sourcePath, annotationId, relation),
+        relatedHost: (card) => this.createRelatedHost(card, this.popoverRelatedState()),
       },
     }));
     // 把 foliate 支持的所有电子书格式绑定到阅读器视图：registerView 只注册视图工厂，
@@ -220,6 +235,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
         jumpToRelation: (relation) => void this.jumpToRelationTarget(relation),
         removeRelation: (sourcePath, annotationId, relation) =>
           this.removeRelationFor(sourcePath, annotationId, relation),
+        relatedHost: (card) => this.createRelatedHost(card, this.popoverRelatedState()),
       },
       editPdfComment: async (file, comment) => {
         try {
@@ -1382,6 +1398,270 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     );
   }
 
+  // ------------------------------------------------------------------ 卡片「相关」区
+
+  private relationModelInstance: RelationModel | null = null;
+
+  /**
+   * 关系模型单点：侧栏与三端浮层共用同一个快照。
+   * 以前只在侧栏里 new 一个，浮层想显示「相关」就得再建一份，两份快照各自失效必然不一致。
+   */
+  private relationModel(): RelationModel {
+    if (!this.relationModelInstance) {
+      this.relationModelInstance = new RelationModel(this.store);
+    }
+    return this.relationModelInstance;
+  }
+
+  /** 侧栏渲染前预热（documents 为当前范围；只传一个时模型会自动补拉全库） */
+  async prepareRelations(documents: readonly FileAnnotationDocument[]): Promise<void> {
+    if (!this.settings.contentRelations) {
+      return;
+    }
+    await this.relationModel().prepare(documents);
+  }
+
+  invalidateRelations(): void {
+    this.relationModel().invalidate();
+  }
+
+  /** 同步取命中：快照未就绪时返回空数组，不阻塞渲染 */
+  getRelatedCards(card: SidebarCard): RelatedHitView[] {
+    return this.settings.contentRelations ? this.relationModel().getRelated(card) : [];
+  }
+
+  /** 标签编辑器的「按内容推荐」候选（只从历史里挑，不发明新词） */
+  getRecommendedTags(card: SidebarCard): TagSuggestion[] {
+    if (!this.settings.contentRelations) {
+      return [];
+    }
+    return this.relationModel().getRecommendedTags(card).map((name) => ({ name, kind: "recommended" as const }));
+  }
+
+  /** 浮层用：命中可能还没算过，先确保全库快照就绪 */
+  private async relatedHitsFor(card: SidebarCard): Promise<RelatedHitView[]> {
+    if (!this.settings.contentRelations) {
+      return [];
+    }
+    await this.relationModel().prepare([]);
+    return this.relationModel().getRelated(card);
+  }
+
+  /** 关联候选：命中最长短语优先，其后是历史用过的标签；已共享的不再作为候选 */
+  relatedCandidates(self: SidebarCard, other: SidebarCard, reasons: readonly string[]): string[] {
+    const names: string[] = [];
+    if (reasons[0]) {
+      names.push(reasons[0]);
+    }
+    for (const suggestion of this.getTagSuggestions()) {
+      if (names.length >= 6) {
+        break;
+      }
+      if (suggestion.kind === "used") {
+        names.push(suggestion.name);
+      }
+    }
+    return filterSharedCandidates(names, self, other);
+  }
+
+  private fileOf(path: string): TFile | null {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    return file instanceof TFile ? file : null;
+  }
+
+  /** 跳到任意卡片那句：md 带 offset、pdf 带页码、epub 走 CFI */
+  async jumpToCard(card: SidebarCard): Promise<void> {
+    const file = this.fileOf(card.sourcePath);
+    if (!file) {
+      new Notice("源文件已不存在，无法跳转");
+      return;
+    }
+    if (card.mode === "epub" && card.cfiRange) {
+      await this.openEpubAtCfi(file.path, card.cfiRange);
+      return;
+    }
+    await openAnnotationTarget(
+      this.app,
+      {
+        file,
+        offset: card.startOffset,
+        pageNumber: card.pageNumber,
+        mode: card.mode,
+        cfiRange: card.cfiRange,
+      },
+      (targetFile, cfi) => this.openEpubAtCfi(targetFile.path, cfi),
+    );
+  }
+
+  private popoverRelatedState(): {
+    isOpen: (cardId: string) => boolean;
+    setOpen: (cardId: string, open: boolean) => void;
+  } {
+    return {
+      isOpen: (cardId) => this.popoverRelatedOpen.has(cardId),
+      setOpen: (cardId, open) => {
+        if (open) {
+          this.popoverRelatedOpen.add(cardId);
+        } else {
+          this.popoverRelatedOpen.delete(cardId);
+        }
+      },
+    };
+  }
+
+  /**
+   * 相关区的宿主：命中、跳转、确认关联、断开全部走插件单点。
+   * 侧栏与浮层只提供展开态，DOM 在 views/relatedBlock。
+   */
+  createRelatedHost(
+    self: SidebarCard,
+    openState?: { isOpen: (cardId: string) => boolean; setOpen: (cardId: string, open: boolean) => void },
+  ): RelatedBlockHost {
+    return {
+      load: () => this.relatedHitsFor(self),
+      isOpen: (cardId) => openState?.isOpen(cardId) ?? false,
+      setOpen: (cardId, open) => openState?.setOpen(cardId, open),
+      fileName: (card) => this.fileOf(card.sourcePath)?.name ?? card.sourcePath,
+      canLink: (other) => Boolean(this.fileOf(self.sourcePath) && this.fileOf(other.sourcePath)),
+      candidates: (other, reasons) => this.relatedCandidates(self, other, reasons),
+      onJump: (target) => void this.jumpToCard(target),
+      onConfirm: (other, tag, type) => this.confirmRelationTag(self, other, tag, type),
+      onRemoveSharedTag: (other, tag) => this.removeSharedRelationTag(self, other, tag),
+      relationTypes: RELATION_TYPES,
+    };
+  }
+
+  /** 卡片的标签 refs：高亮与其笔记共享同一份标签数组，写入时两者都要覆盖 */
+  private tagRefsOf(card: SidebarCard): TagRef[] {
+    const refs: TagRef[] = [];
+    if (card.highlight) {
+      refs.push({ filePath: card.sourcePath, annotationId: card.highlight.id });
+    }
+    if (card.note) {
+      refs.push({ filePath: card.sourcePath, annotationId: card.note.id });
+    }
+    return refs;
+  }
+
+  /**
+   * 活读一张卡的最新标签（高亮与其笔记的并集）。
+   * 渲染快照可能滞后于其他入口的写入，确认关联必须以落盘数据为准取并集，否则会覆盖掉新标签。
+   * 返回 null 表示该侧不可用（源文件或批注缺失，已给 Notice）。
+   */
+  private async readLiveTags(
+    card: SidebarCard,
+    action: string,
+  ): Promise<{ refs: TagRef[]; live: string[] } | null> {
+    const file = this.fileOf(card.sourcePath);
+    if (!file) {
+      new Notice(`源文件缺失，无法${action}`);
+      return null;
+    }
+    const refs = this.tagRefsOf(card);
+    const document = await this.store.getDocument(file);
+    const live: string[] = [];
+    let found = false;
+    for (const ref of refs) {
+      const annotation = findAnnotationById(document, ref.annotationId);
+      if (annotation) {
+        found = true;
+        live.push(...(annotation.tags ?? []));
+      }
+    }
+    if (!found) {
+      new Notice(`该批注已不存在，无法${action}`);
+      return null;
+    }
+    return { refs, live };
+  }
+
+  /**
+   * 确认关联：把一个共享标签写入两侧；选了关系类型再落一条有向关系。
+   * 先活读两侧最新标签取并集再覆盖，绝不拿渲染快照覆盖。
+   */
+  async confirmRelationTag(
+    self: SidebarCard,
+    other: SidebarCard,
+    rawTag: string,
+    relationType: RelationType | null = null,
+  ): Promise<void> {
+    const tag = normalizeTag(rawTag);
+    if (!tag) {
+      return;
+    }
+    const preparedSelf = await this.readLiveTags(self, "建立关联");
+    if (!preparedSelf) {
+      return;
+    }
+    const preparedOther = await this.readLiveTags(other, "建立关联");
+    if (!preparedOther) {
+      return;
+    }
+    try {
+      await this.store.setTags(preparedSelf.refs, unionTags(preparedSelf.live, [tag]));
+      await this.store.setTags(preparedOther.refs, unionTags(preparedOther.live, [tag]));
+      const selfFile = this.fileOf(self.sourcePath);
+      if (relationType && selfFile) {
+        await this.store.addRelation(selfFile, self.id, {
+          targetPath: other.sourcePath,
+          targetId: other.id,
+          targetMode: other.mode,
+          type: relationType,
+          createdAt: new Date().toISOString(),
+          ...relationAnchorOf(other),
+        });
+      }
+      this.invalidateRelations();
+      const label = RELATION_TYPES.find(([type]) => type === relationType)?.[1];
+      new Notice(label ? `已建立「${label}」关系，并共享标签「${tag}」` : `已用「${tag}」关联两侧批注`);
+      await this.refreshAnnotations();
+    } catch (error) {
+      console.warn("yh-inklight: 写入关联标签失败", error);
+      new Notice("关联标签写入失败，请检查写入权限或同步状态");
+    }
+  }
+
+  /** 断开关联：把该标签从两侧移除；其他批注上的同名标签不受影响（setTags 只动指定 refs） */
+  async removeSharedRelationTag(self: SidebarCard, other: SidebarCard, rawTag: string): Promise<void> {
+    const key = tagKey(rawTag);
+    if (!key) {
+      return;
+    }
+    const preparedSelf = await this.readLiveTags(self, "断开关联");
+    if (!preparedSelf) {
+      return;
+    }
+    const preparedOther = await this.readLiveTags(other, "断开关联");
+    if (!preparedOther) {
+      return;
+    }
+    try {
+      await this.store.setTags(
+        preparedSelf.refs,
+        unionTags(preparedSelf.live).filter((item) => tagKey(item) !== key),
+      );
+      await this.store.setTags(
+        preparedOther.refs,
+        unionTags(preparedOther.live).filter((item) => tagKey(item) !== key),
+      );
+      // 关系与标签一起断开：只删标签会在导出笔记里留下指向已断开关联的 supports:: 行
+      const selfFile = this.fileOf(self.sourcePath);
+      if (selfFile) {
+        await this.store.removeRelation(selfFile, self.id, other.sourcePath, other.id);
+      }
+      const otherFile = this.fileOf(other.sourcePath);
+      if (otherFile) {
+        await this.store.removeRelation(otherFile, other.id, self.sourcePath, self.id);
+      }
+      this.invalidateRelations();
+      new Notice(`已断开关联标签「${rawTag}」`);
+      await this.refreshAnnotations();
+    } catch (error) {
+      console.warn("yh-inklight: 断开关联标签失败", error);
+      new Notice("断开关联失败，请检查写入权限或同步状态");
+    }
+  }
+
   /**
    * 卡片动作「打开导出笔记」：索引里的 derivedNotePath 是唯一真相。
    * 侧栏与三端浮层共用这一条，避免各写一份之后有的入口失效。
@@ -1666,6 +1946,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       onAtomCard: () => void this.createAtomCardFor(cardData),
       onJumpRelation: (relation) => void this.jumpToRelationTarget(relation),
       onRemoveRelation: (relation) => void this.removeRelationFor(cardData.sourcePath, cardData.id, relation),
+      related: this.createRelatedHost(cardData, this.popoverRelatedState()),
       extraActions:
         extras.length > 0
           ? [{ label: `同段另有 ${extras.length} 条批注`, onClick: () => void this.activateSidebar() }]

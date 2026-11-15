@@ -13,6 +13,7 @@ import { App, Component } from "obsidian";
 import { AnnotationRelation } from "../storage/types";
 import { SidebarCard } from "./cardModel";
 import { CardExtraAction, renderCardBody } from "./cardBody";
+import { RelatedBlockHost } from "./relatedBlock";
 import { TagSuggestion } from "./tagInput";
 import { computePopoverPlacement, PopoverRect, viewportRect } from "./popoverPlacement";
 
@@ -31,10 +32,15 @@ export interface AnnotationCardOptions {
   tagSuggestions?: () => readonly TagSuggestion[];
   onJumpRelation?: (relation: AnnotationRelation) => void;
   onRemoveRelation?: (relation: AnnotationRelation) => void;
+  /** 字面相关区宿主：与侧栏同一份 DOM，命中/写入走插件单点 */
+  related?: RelatedBlockHost;
   /** 容器专有按钮（Markdown 的「同段另有 N 条批注」） */
   extraActions?: readonly CardExtraAction[];
   onDismiss?: () => void;
 }
+
+/** 移动端浮层与屏幕边缘的间距：左右由 CSS 的同名变量控制，底部在这里加 */
+const SHEET_GUTTER = 10;
 
 export interface AnnotationCardAnchor {
   /** 划线/选区在视口坐标下的外接矩形（多行取并集），定位时整块避开 */
@@ -105,10 +111,23 @@ export class AnnotationCard {
         delete: this.wrap(this.options.onDelete),
       },
       ...(this.options.extraActions ? { extraActions: this.options.extraActions } : {}),
+      // 浮层是游离节点，不会跟着侧栏整表重绘，写入后自己重画一次
+      ...(this.options.related
+        ? { related: { ...this.options.related, afterMutate: () => this.refreshBody() } }
+        : {}),
       ...(this.options.onJumpRelation ? { onJumpRelation: this.options.onJumpRelation } : {}),
       ...(this.options.onRemoveRelation ? { onRemoveRelation: this.options.onRemoveRelation } : {}),
       onClose: () => this.dismiss(),
     });
+  }
+
+  /** 标签/关联写入落地后重画卡片：不改动定位，只重排内容 */
+  private refreshBody(): void {
+    if (this.dismissed) {
+      return;
+    }
+    this.renderBody();
+    this.schedulePlace();
   }
 
   /**
@@ -148,8 +167,9 @@ export class AnnotationCard {
         window.innerHeight,
         keyboardInset + this.measureMobileBarInset(visualBottom),
       );
-      this.el.style.bottom = `${bottomInset}px`;
-      const available = Math.max(160, window.innerHeight - bottomInset - 12);
+      // 不贴屏幕底边：键盘/导航栏之外再让出一个间距，四边都不挨边
+      this.el.style.bottom = `${bottomInset + SHEET_GUTTER}px`;
+      const available = Math.max(160, window.innerHeight - bottomInset - SHEET_GUTTER * 2);
       this.el.style.maxHeight = `min(70vh, ${available}px)`;
       return;
     }

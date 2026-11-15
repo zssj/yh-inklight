@@ -1644,18 +1644,18 @@ body.yh-epub-nav-hidden .mobile-navbar {
   background: rgba(255, 255, 255, 0.12);
 }
 
-/* 底部卡片不设 max-width 断点：平板/大屏手机 Platform.isMobile 为真时同样有定位。
-   bottom / max-height 由卡片按 visualViewport 计算后写成行内样式，跟随软键盘上移。 */
+/* 移动端浮层：四周留出间距、四角统一圆角，不再贴死屏幕边缘。
+   bottom 由卡片按 visualViewport 计算（键盘 + 底部安全区 + 间距），这里只管左右与圆角；
+   margin-bottom 吃掉 iOS 底部安全区，避免圆角被 home indicator 压住。 */
 .yh-epub-annotation-popover.is-mobile {
-  left: 0 !important;
-  right: 0;
+  left: var(--yh-sheet-gutter, 10px);
+  right: var(--yh-sheet-gutter, 10px);
   top: auto !important;
   bottom: 0;
-  width: 100%;
+  width: auto;
   max-width: none;
-  border-radius: var(--yh-radius) var(--yh-radius) 0 0;
-  border-bottom: none;
-  padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
+  border-radius: var(--yh-radius);
+  margin-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 /* ============================================================

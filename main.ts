@@ -517,6 +517,12 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "check-orphan-export-blocks",
+      name: "检查导出笔记里的孤儿块",
+      callback: () => void this.checkOrphanBlocks(),
+    });
+
+    this.addCommand({
       id: "toggle-sticky-notes",
       name: "切换批注弹层显示",
       hotkeys: [{ modifiers: ["Mod", "Shift"], key: "n" }],
@@ -1275,6 +1281,18 @@ export default class OverlayAnnotationsPlugin extends Plugin {
    * 打开 EPUB 文件并导航到指定 CFI 位置。
    * 供 EpubGotoHandler（摘录回跳）和 Obsidian 协议处理器调用。
    */
+  /** 孤儿块检查：删批注后导出块会留下，这里只报告不删除，避免误删用户写在块内的内容 */
+  async checkOrphanBlocks(): Promise<void> {
+    const report = await this.store.findOrphanBlocks();
+    if (report.length === 0) {
+      new Notice("导出笔记里没有孤儿块");
+      return;
+    }
+    const total = report.reduce((sum, item) => sum + item.blockIds.length, 0);
+    console.log("yh-inklight: 孤儿块报告", report);
+    new Notice(`发现 ${total} 个孤儿块（批注已删除，导出块仍在），明细见开发者控制台`);
+  }
+
   /**
    * 统一回链跳转：解析 `obsidian://inklight` 参数后复用 openAnnotationTarget，
    * 保证「导出笔记里点回链」与「侧栏点卡片」走同一条定位逻辑，不会两套行为漂移。

@@ -113,7 +113,7 @@ describe("saveDocument / addHighlight", () => {
     expect(sidecar.highlights[0].anchor.selectedText).toBe("复利效应");
 
     const index = vault.readJson<any>(`${SIDECAR_DIR}/index.json`);
-    expect(index.version).toBe(2);
+    expect(index.version).toBe(3);
     expect(index.files[MD_PATH].highlightCount).toBe(1);
     expect(index.files[MD_PATH].sidecarPath).toBe(store.toSidecarPath(MD_PATH));
   });
@@ -564,6 +564,78 @@ describe("EPUB 回链", () => {
 
     await store.removeRelation(file, "h1", file.path, "h2");
     expect((await store.getDocument(file)).highlights[0].relations).toBeUndefined();
+  });
+
+  it("导出后索引记下反查指针：落在哪篇笔记、哪些块", async () => {
+    const { store, file } = await setup();
+    await store.addHighlight(file, highlightOf("h1", "复利效应", 2));
+    await store.exportNotes(file);
+
+    const record = store.getExportRecord(file.path);
+    expect(record.notePath).toBe("读书笔记/复利-notes.md");
+    expect(record.blockIds).toEqual({ h1: "md-h1" });
+    expect(record.exportedAt).toBeTruthy();
+  });
+
+  it("改批注不会冲掉反查指针，重新导出后块清单才更新", async () => {
+    const { store, file } = await setup();
+    await store.addHighlight(file, highlightOf("h1", "复利效应", 2));
+    await store.exportNotes(file);
+    await store.addHighlight(file, highlightOf("h2", "长期投资", 13));
+
+    // 只加批注还没重导：指针保持上一次导出的状态，不能被保存动作清空
+    expect(store.getExportRecord(file.path).blockIds).toEqual({ h1: "md-h1" });
+
+    await store.exportNotes(file);
+    expect(store.getExportRecord(file.path).blockIds).toEqual({ h1: "md-h1", h2: "md-h2" });
+  });
+
+  it("标签 MOC 导出累计记到 mocPaths，不覆盖单文件导出记录", async () => {
+    const { store, file } = await setup();
+    await store.addHighlight(file, highlightOf("h1", "复利效应", 2, ["复利"]));
+    await store.exportNotes(file);
+    await store.exportTagMoc("复利");
+
+    const record = store.getExportRecord(file.path);
+    expect(record.notePath).toBe("读书笔记/复利-notes.md");
+    expect(record.mocPaths).toEqual(["MOC/复利.md"]);
+  });
+
+  it("删掉批注后，孤儿块检查能报出导出笔记里残留的那一块", async () => {
+    const { store, file } = await setup();
+    await store.addHighlight(file, highlightOf("h1", "复利效应", 2));
+    await store.addHighlight(file, highlightOf("h2", "长期投资", 13));
+    await store.exportNotes(file);
+    await store.removeAnnotation(file, "h2");
+
+    const report = await store.findOrphanBlocks();
+    expect(report).toEqual([{ notePath: "读书笔记/复利-notes.md", blockIds: ["md-h2"] }]);
+  });
+
+  it("提炼原子卡：写到指定目录、带出处块链接，重复点不重复生成", async () => {
+    const { store, vault, file } = await setup();
+    await store.addHighlight(file, { ...highlightOf("h1", "复利效应", 2), noteType: "insight" });
+    await store.exportNotes(file);
+
+    const input = {
+      annotationId: "h1",
+      mode: "md" as const,
+      quote: "复利效应",
+      content: "重读的成本，是复利公式里的分母。",
+      noteType: "insight" as const,
+      tags: ["复利"],
+    };
+
+    const first = await store.createAtomCard(file, input, "卡片");
+    expect(first.created).toBe(true);
+
+    const text = vault.readText(first.path);
+    expect(text).toContain("[[读书笔记/复利-notes#^md-h1]]");
+    expect(text).toContain("重读的成本，是复利公式里的分母。");
+    expect(text).toContain("noteType: insight");
+
+    const again = await store.createAtomCard(file, input, "卡片");
+    expect(again).toEqual({ path: first.path, created: false });
   });
 });
 

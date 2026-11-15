@@ -214,10 +214,23 @@ export interface AnnotationIndexEntry {
   updatedAt: string;
   /** 该文件内出现过的标签比较键（小写、去重、已排序）；无标签时省略该字段 */
   tags?: string[];
+  /**
+   * 反查指针：这批批注最后被写进了哪篇导出笔记。
+   * 没有它，用户只能从插件找到原文，无法从导出笔记回到对应批注。
+   */
+  derivedNotePath?: string;
+  /** 批注 id → 导出笔记里的块 id（`${mode}-${id}`），用于精确定位与孤儿检测 */
+  blockIds?: Record<string, string>;
+  /** 该文件的批注还出现在哪些标签 MOC 页（累计，不覆盖单文件导出记录） */
+  mocPaths?: string[];
+  /** 最近一次导出的时间 */
+  exportedAt?: string;
+  /** 批注 id → 从它提炼出的原子卡路径；用于去重（同一批注不重复生成卡片） */
+  atomCards?: Record<string, string>;
 }
 
 export interface AnnotationIndex {
-  /** 1 = 无标签索引；2 = 含 files[].tags 与 tagNames */
+  /** 1 = 无标签索引；2 = 含 files[].tags 与 tagNames；3 = 含 files[].derivedNotePath/blockIds/mocPaths 反查指针（1/2 只在下次保存时升级为 3，不强制重建） */
   version: number;
   files: Record<string, AnnotationIndexEntry>;
   /** 标签比较键 → 展示名（保留用户最初写法的那个） */
@@ -256,6 +269,8 @@ export interface AnnotationPluginSettings {
   // --- 与 Obsidian 标签互通 ---
   /** 开启后：标签补全候选并入 OB 标签；导出的笔记写入 OB 可索引的 frontmatter / 正文标签 */
   obTagBridge: boolean;
+  /** 原子卡存放目录（相对 vault 根）；卡片是派生文件，可随时删除重建 */
+  atomCardFolder: string;
   // --- 字面内容关联（不上 AI、不联网、纯内存） ---
   /** 开启后：打标签时按划线内容推荐用过的标签；卡片底部列出字面相关的其他批注 */
   contentRelations: boolean;
@@ -319,6 +334,7 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   mdOpenTracking: true,
   // 与 Obsidian 标签互通（默认关，保持既有导出内容不变）
   obTagBridge: false,
+  atomCardFolder: "卡片",
   // 字面内容关联默认开：纯本地计算、零隐私成本，设置页可关
   contentRelations: true,
   // EPUB 手机端沉浸式导航栏
@@ -337,7 +353,7 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
 };
 
 export const EMPTY_INDEX: AnnotationIndex = {
-  version: 2,
+  version: 3,
   files: {},
   tagNames: {},
 };

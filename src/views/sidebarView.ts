@@ -473,6 +473,38 @@ export class AnnotationSidebarView extends ItemView {
     });
   }
 
+  /**
+   * 提炼成原子卡：正文只放用户自己写的那句，出处与标签进 frontmatter。
+   * 不做 AI 代写、不批量生成——「用自己的话重写」正是知识内化发生的那一步。
+   */
+  private async createAtomCard(file: TFile | null, cardData: SidebarCard): Promise<void> {
+    if (!file) {
+      return;
+    }
+    try {
+      const result = await this.plugin.store.createAtomCard(
+        file,
+        {
+          annotationId: cardData.id,
+          mode: cardData.mode,
+          quote: cardData.text,
+          content: cardData.content,
+          noteType: cardData.noteType,
+          tags: cardData.tags,
+        },
+        this.plugin.settings.atomCardFolder,
+      );
+      const target = this.app.vault.getAbstractFileByPath(result.path);
+      if (target instanceof TFile) {
+        await this.app.workspace.getLeaf("tab").openFile(target);
+      }
+      new Notice(result.created ? `已提炼成卡片：${result.path}` : `这张卡片已存在：${result.path}`);
+    } catch (error) {
+      console.warn("yh-inklight: 生成原子卡失败", error);
+      new Notice("生成卡片失败，请检查写入权限或同步状态");
+    }
+  }
+
   private renderCard(list: Element, cardData: SidebarCard): void {
     const file = this.fileForCard(cardData);
     const card = list.createDiv({
@@ -494,12 +526,10 @@ export class AnnotationSidebarView extends ItemView {
     if (title) {
       type.dataset.title = title;
     }
-    // EPUB 想法分类标签（insight/question/reminder），仅 EpubCommentAnnotation 有 noteType
-    const note = cardData.note;
-    const epubNoteType = note && "noteType" in note ? note.noteType : undefined;
-    if (epubNoteType) {
+    // 想法分类标签（insight/question/reminder）：noteType 现已提升到卡片层，三端都能显示
+    if (cardData.noteType) {
       const labelMap: Record<string, string> = { insight: "💡洞见", question: "❓疑问", reminder: "🔔提醒" };
-      head.createSpan({ cls: "yh-ov-note-type", text: labelMap[epubNoteType] ?? epubNoteType });
+      head.createSpan({ cls: "yh-ov-note-type", text: labelMap[cardData.noteType] ?? cardData.noteType });
     }
     head.createSpan({ cls: "yh-ov-time", text: formatTime(cardData.createdAt) });
 
@@ -533,6 +563,34 @@ export class AnnotationSidebarView extends ItemView {
     });
 
     const actions = card.createDiv({ cls: "yh-ov-actions" });
+    // 反查指针：只在这批批注确实导出过时才出现，点了在新标签页打开那篇导出笔记
+    const exportRecord = this.plugin.store.getExportRecord(cardData.sourcePath);
+    const exportedFile = exportRecord.notePath ? this.app.vault.getAbstractFileByPath(exportRecord.notePath) : null;
+    if (exportedFile instanceof TFile) {
+      const openExport = actions.createEl("button", {
+        cls: "yh-ov-btn yh-ov-btn--icon",
+        attr: { type: "button", title: `打开导出笔记：${exportedFile.path}`, "data-action": "open-export" },
+      });
+      setIcon(openExport, "file-text");
+      openExport.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void this.app.workspace.getLeaf("tab").openFile(exportedFile);
+      });
+    }
+
+    // 提炼成卡片：只在「洞见 + 有自己写的内容」时出现，避免给纯划线也长出空卡片
+    if (cardData.noteType === "insight" && cardData.content.trim()) {
+      const atom = actions.createEl("button", {
+        cls: "yh-ov-btn",
+        text: "提炼成卡片",
+        attr: { type: "button", title: "把这条洞见提炼成一张独立的原子卡", "data-action": "atom-card" },
+      });
+      atom.disabled = !file;
+      atom.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void this.createAtomCard(file, cardData);
+      });
+    }
     if (cardData.note) {
       const edit = actions.createEl("button", {
         cls: "yh-ov-btn yh-ov-btn--icon",

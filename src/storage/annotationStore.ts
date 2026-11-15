@@ -91,6 +91,16 @@ export interface TagRef {
   annotationId: string;
 }
 
+/** 提炼原子卡的输入：全部来自侧栏卡片，store 不需要再回查 sidecar */
+export interface AtomCardInput {
+  annotationId: string;
+  mode: "md" | "pdf" | "epub";
+  quote: string;
+  content: string;
+  noteType?: AnnotationNoteType;
+  tags: string[];
+}
+
 /** 标签字典项：key 用于比较，name 用于展示 */
 export interface TagDictionaryEntry {
   key: string;
@@ -293,9 +303,13 @@ export class AnnotationStore {
     const filePath = this.normalizeVaultPath(document.filePath);
     const sidecarPath = this.toSidecarPath(filePath);
     const normalized = this.normalizeDocument(document, filePath);
-    const entry = this.toIndexEntry(normalized, sidecarPath);
+    const entry: AnnotationIndexEntry = {
+      ...this.toIndexEntry(normalized, sidecarPath),
+      // 反查指针不在 sidecar 里，只活在索引：保存批注时必须原样带过去，否则每改一次就丢一次
+      ...pickExportFields(this.index.files[normalized.filePath]),
+    };
     const nextIndex: AnnotationIndex = {
-      version: 2,
+      version: 3,
       files: {
         ...this.index.files,
         [normalized.filePath]: entry,
@@ -845,6 +859,170 @@ export class AnnotationStore {
     return nextDocument;
   }
 
+  /**
+   * 找出导出笔记里已无对应批注的块：删批注后导出块不会自动消失（故意的，防止误删手写内容），
+   * 这里只报告、不删除，交给用户决定。同一篇导出笔记可能聚合多个源文件，按 notePath 归并统计。
+   */
+  async findOrphanBlocks(): Promise<Array<{ notePath: string; blockIds: string[] }>> {
+    const report: Array<{ notePath: string; blockIds: string[] }> = [];
+    const handled = new Set<string>();
+
+    for (const entry of Object.values(this.index.files)) {
+      const notePath = entry.derivedNotePath;
+      if (!notePath || handled.has(notePath)) {
+        continue;
+      }
+      handled.add(notePath);
+      const note = this.app.vault.getAbstractFileByPath(notePath);
+      if (!(note instanceof TFile)) {
+        continue;
+      }
+
+      const content = await this.app.vault.cachedRead(note);
+      const present = new Set(
+        [...content.matchAll(/<!--\s*inklight:block:([^:\s]+):start\s*-->/g)].map((match) => match[1]),
+      );
+      const expected = new Set<string>();
+      for (const [otherPath, other] of Object.entries(this.index.files)) {
+        if (other.derivedNotePath !== notePath) {
+          continue;
+        }
+        // 必须以「当前批注」为准，不能读索引里的 blockIds：删批注时索引指针会保留旧值，
+        // 拿它比对等于永远看不到孤儿块。
+        const otherFile = this.app.vault.getAbstractFileByPath(otherPath);
+        if (!(otherFile instanceof TFile)) {
+          continue;
+        }
+        for (const blockId of Object.values(blockIdMap(await this.getDocument(otherFile)))) {
+          expected.add(blockId);
+        }
+      }
+
+      const blockIds = [...present].filter((blockId) => !expected.has(blockId));
+      if (blockIds.length > 0) {
+        report.push({ notePath, blockIds });
+      }
+    }
+
+    return report;
+  }
+
+  /** 已生成的原子卡路径（null 表示还没提炼过） */
+  getAtomCard(filePath: string, annotationId: string): string | null {
+    return this.index.files[this.normalizeVaultPath(filePath)]?.atomCards?.[annotationId] ?? null;
+  }
+
+  /**
+   * 把一条批注提炼成原子卡：一个想法一个文件，正文是用户自己写的那句。
+   * 只生成派生文件、不碰 sidecar；靠索引里的 atomCards 去重，重复点只会打开已有卡片。
+   * 卡片删掉后索引指针仍在，下次点会重新生成——派生文件本来就该可丢弃。
+   */
+  async createAtomCard(
+    file: TFile,
+    input: AtomCardInput,
+    folder: string,
+  ): Promise<{ path: string; created: boolean }> {
+    const normalizedPath = this.normalizeVaultPath(file.path);
+    const existing = this.getAtomCard(normalizedPath, input.annotationId);
+    if (existing && this.app.vault.getAbstractFileByPath(existing) instanceof TFile) {
+      return { path: existing, created: false };
+    }
+
+    const dir = normalizePath(folder.trim() || DEFAULT_ATOM_CARD_FOLDER);
+    if (!(await this.app.vault.adapter.exists(dir))) {
+      await this.app.vault.createFolder(dir);
+    }
+
+    const path = await this.uniqueAtomCardPath(dir, atomCardBaseName(input));
+    await this.app.vault.create(path, renderAtomCard(this.index.files[normalizedPath], input, normalizedPath));
+
+    const entry = this.index.files[normalizedPath];
+    if (entry) {
+      this.index = {
+        ...this.index,
+        version: 3,
+        files: {
+          ...this.index.files,
+          [normalizedPath]: {
+            ...entry,
+            atomCards: { ...(entry.atomCards ?? {}), [input.annotationId]: path },
+          },
+        },
+      };
+      await this.writeIndex();
+    }
+
+    return { path, created: true };
+  }
+
+  private async uniqueAtomCardPath(dir: string, baseName: string): Promise<string> {
+    for (let index = 1; index <= 50; index += 1) {
+      const path = normalizePath(`${dir}/${index === 1 ? baseName : `${baseName} ${index}`}.md`);
+      if (!(await this.app.vault.adapter.exists(path))) {
+        return path;
+      }
+    }
+    throw new AnnotationStoreWriteError(
+      normalizePath(`${dir}/${baseName}.md`),
+      new Error("同一标题的卡片过多，请换一个想法内容后重试"),
+    );
+  }
+
+  /** 反查指针：这批批注落在哪篇导出笔记（notePath 为 null 表示还没导出过） */
+  getExportRecord(filePath: string): {
+    notePath: string | null;
+    blockIds: Record<string, string>;
+    mocPaths: string[];
+    exportedAt: string | null;
+  } {
+    const entry = this.index.files[this.normalizeVaultPath(filePath)];
+    return {
+      notePath: entry?.derivedNotePath ?? null,
+      blockIds: entry?.blockIds ?? {},
+      mocPaths: entry?.mocPaths ?? [],
+      exportedAt: entry?.exportedAt ?? null,
+    };
+  }
+
+  /**
+   * 导出完成后回写反查指针。只写索引、不碰 sidecar：
+   * sidecar 是批注真相源，导出落点是派生信息，索引丢了重新导一次就能恢复。
+   */
+  private async recordExportTargets(
+    targets: Map<string, { notePath: string; blockIds: Record<string, string> }>,
+    options?: { moc?: boolean },
+  ): Promise<void> {
+    if (targets.size === 0) {
+      return;
+    }
+    const files = { ...this.index.files };
+    const exportedAt = new Date().toISOString();
+    let changed = false;
+
+    for (const [filePath, target] of targets) {
+      const entry = files[filePath];
+      if (!entry) {
+        continue;
+      }
+      if (options?.moc) {
+        const previous = entry.mocPaths ?? [];
+        if (previous.includes(target.notePath)) {
+          continue;
+        }
+        files[filePath] = { ...entry, mocPaths: [...previous, target.notePath], exportedAt };
+      } else {
+        files[filePath] = { ...entry, derivedNotePath: target.notePath, blockIds: target.blockIds, exportedAt };
+      }
+      changed = true;
+    }
+
+    if (!changed) {
+      return;
+    }
+    this.index = { ...this.index, version: 3, files };
+    await this.writeIndex();
+  }
+
   async exportNotes(file: TFile, format: AnnotationExportFormat = "summary", obTagBridge = false): Promise<TFile> {
     const document = await this.getDocument(file);
     const baseName = file.basename || file.name.replace(/\.md$/i, "");
@@ -853,14 +1031,14 @@ export class AnnotationStore {
     const lines = buildExportLines(`Notes for ${file.path}`, [{ filePath: file.path, document }], format, obTagBridge, "full");
 
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
-    if (existing instanceof TFile) {
-      const generated = lines.join("\n");
-      const content = mergeExportDocument(await this.app.vault.cachedRead(existing), generated, obTagBridge);
-      await this.app.vault.modify(existing, content);
-      return existing;
-    }
+    const target = existing instanceof TFile
+      ? (await this.app.vault.modify(existing, mergeExportDocument(await this.app.vault.cachedRead(existing), lines.join("\n"), obTagBridge)), existing)
+      : await this.app.vault.create(targetPath, lines.join("\n"));
 
-    return this.app.vault.create(targetPath, lines.join("\n"));
+    await this.recordExportTargets(
+      new Map([[document.filePath, { notePath: target.path, blockIds: blockIdMap(document) }]]),
+    );
+    return target;
   }
 
   async exportAllNotes(format: AnnotationExportFormat = "summary", obTagBridge = false): Promise<TFile> {
@@ -871,14 +1049,19 @@ export class AnnotationStore {
     const lines = buildExportLines("墨光批注全库汇总", sources, format, obTagBridge, "marker-only");
 
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
-    if (existing instanceof TFile) {
-      const generated = lines.join("\n");
-      const content = mergeExportDocument(await this.app.vault.cachedRead(existing), generated, obTagBridge);
-      await this.app.vault.modify(existing, content);
-      return existing;
-    }
+    const target = existing instanceof TFile
+      ? (await this.app.vault.modify(existing, mergeExportDocument(await this.app.vault.cachedRead(existing), lines.join("\n"), obTagBridge)), existing)
+      : await this.app.vault.create(targetPath, lines.join("\n"));
 
-    return this.app.vault.create(targetPath, lines.join("\n"));
+    const targets = new Map<string, { notePath: string; blockIds: Record<string, string> }>();
+    for (const document of documents) {
+      const blockIds = blockIdMap(document);
+      if (Object.keys(blockIds).length > 0) {
+        targets.set(document.filePath, { notePath: target.path, blockIds });
+      }
+    }
+    await this.recordExportTargets(targets);
+    return target;
   }
 
   /**
@@ -925,12 +1108,22 @@ export class AnnotationStore {
       const generated = lines.join("\n");
       const content = mergeExportDocument(await this.app.vault.cachedRead(existing), generated, obTagBridge);
       await this.app.vault.modify(existing, content);
+      await this.recordMocTargets(matched.map((entry) => entry.sourcePath), existing.path);
       return { status: "written", file: existing };
     }
 
     await this.ensureMocDir();
     const file = await this.app.vault.create(targetPath, lines.join("\n"));
+    await this.recordMocTargets(matched.map((entry) => entry.sourcePath), file.path);
     return { status: "written", file };
+  }
+
+  private async recordMocTargets(sources: string[], notePath: string): Promise<void> {
+    const targets = new Map<string, { notePath: string; blockIds: Record<string, string> }>();
+    for (const sourcePath of sources) {
+      targets.set(sourcePath, { notePath, blockIds: {} });
+    }
+    await this.recordExportTargets(targets, { moc: true });
   }
 
   private async ensureMocDir(): Promise<void> {
@@ -1242,6 +1435,79 @@ function buildExportLines(
   }
 
   return [...lines, ...renderSummary(entries)];
+}
+
+/** 原子卡默认落点；settings.atomCardFolder 留空时用它 */
+const DEFAULT_ATOM_CARD_FOLDER = "卡片";
+
+/** 卡片文件名：取想法第一句，去掉文件名非法字符；正文为空时退回被划原文 */
+function atomCardBaseName(input: AtomCardInput): string {
+  const firstLine = input.content.split(/\r?\n/).find((line) => line.trim()) ?? "";
+  const raw = (firstLine || input.quote).trim();
+  const cleaned = raw.replace(/[\\/:*?"<>|#^[\]]/g, "").replace(/\s+/g, " ").trim();
+  return cleaned.slice(0, 24).trim() || "想法";
+}
+
+/**
+ * 卡片正文只有用户自己的话；原文与出处放 frontmatter。
+ * source 优先指向「导出笔记里这一块」（反查指针已知时），否则退回源文件。
+ */
+function renderAtomCard(
+  entry: AnnotationIndexEntry | undefined,
+  input: AtomCardInput,
+  sourcePath: string,
+): string {
+  const blockId = entry?.blockIds?.[input.annotationId];
+  const notePath = entry?.derivedNotePath?.replace(/\.md$/i, "");
+  const source = notePath && blockId
+    ? `"[[${notePath}#^${blockId}]]"`
+    : `"[[${sourcePath}]]"`;
+  const tags = input.tags.map((tag) => toObsidianTag(tag) ?? tag).filter(Boolean);
+
+  return [
+    "---",
+    ...(input.noteType ? [`noteType: ${input.noteType}`] : []),
+    `source: ${source}`,
+    `tags: [${tags.join(", ")}]`,
+    `created: ${new Date().toISOString()}`,
+    "---",
+    "",
+    input.content.trim(),
+    "",
+  ].join("\n");
+}
+
+/** 保留索引条目上的反查指针（保存批注时不能被 toIndexEntry 冲掉） */
+function pickExportFields(
+  entry: AnnotationIndexEntry | undefined,
+): Pick<AnnotationIndexEntry, "derivedNotePath" | "blockIds" | "mocPaths" | "exportedAt" | "atomCards"> {
+  if (!entry) {
+    return {};
+  }
+  return {
+    ...(entry.derivedNotePath ? { derivedNotePath: entry.derivedNotePath } : {}),
+    ...(entry.blockIds ? { blockIds: entry.blockIds } : {}),
+    ...(entry.mocPaths?.length ? { mocPaths: entry.mocPaths } : {}),
+    ...(entry.exportedAt ? { exportedAt: entry.exportedAt } : {}),
+    ...(entry.atomCards ? { atomCards: entry.atomCards } : {}),
+  };
+}
+
+/** 批注 id → 导出笔记里的块 id；块 id 是 `${mode}-${id}`，反查与孤儿检测都靠它 */
+function blockIdMap(document: FileAnnotationDocument): Record<string, string> {
+  const map: Record<string, string> = {};
+  const collect = (mode: "md" | "pdf" | "epub", items: Array<{ id: string }>): void => {
+    for (const item of items) {
+      map[item.id] = `${mode}-${item.id}`;
+    }
+  };
+  collect("md", document.highlights);
+  collect("md", document.comments);
+  collect("pdf", document.pdfHighlights);
+  collect("pdf", document.pdfComments);
+  collect("epub", document.epubHighlights);
+  collect("epub", document.epubComments);
+  return map;
 }
 
 /** 把 noteType / relations 补到对应条目上；没有就原样返回，老数据导出结果保持不变 */

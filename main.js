@@ -8521,6 +8521,7 @@ var DEFAULT_SETTINGS = {
   mdOpenTracking: true,
   // 与 Obsidian 标签互通（默认关，保持既有导出内容不变）
   obTagBridge: false,
+  atomCardFolder: "\u5361\u7247",
   // 字面内容关联默认开：纯本地计算、零隐私成本，设置页可关
   contentRelations: true,
   // EPUB 手机端沉浸式导航栏
@@ -8538,7 +8539,7 @@ var DEFAULT_SETTINGS = {
   aiSystemPrompt: ""
 };
 var EMPTY_INDEX = {
-  version: 2,
+  version: 3,
   files: {},
   tagNames: {}
 };
@@ -10737,6 +10738,12 @@ var AnnotationSettingsTab = class extends import_obsidian7.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
+    new import_obsidian7.Setting(containerEl).setName("\u539F\u5B50\u5361\u5B58\u653E\u76EE\u5F55").setDesc("\u628A\u300C\u6D1E\u89C1\u300D\u63D0\u70BC\u6210\u72EC\u7ACB\u5361\u7247\u65F6\u5199\u5230\u8FD9\u4E2A\u76EE\u5F55\uFF08\u76F8\u5BF9 vault \u6839\uFF0C\u7559\u7A7A\u7528\u300C\u5361\u7247\u300D\uFF09\u3002\u5361\u7247\u662F\u6D3E\u751F\u6587\u4EF6\uFF0C\u53EF\u968F\u65F6\u5220\u9664\u91CD\u5EFA\uFF0C\u6279\u6CE8\u6570\u636E\u4ECD\u5728 sidecar\u3002").addText((text) => {
+      text.setPlaceholder("\u5361\u7247").setValue(this.plugin.settings.atomCardFolder).onChange(async (value) => {
+        this.plugin.settings.atomCardFolder = value.trim();
+        await this.plugin.saveSettings();
+      });
+    });
   }
   /** 字面内容关联：按内容推荐标签 + 相关批注，纯本地计算，不联网不调用 AI */
   renderContentRelationSettings() {
@@ -11278,9 +11285,13 @@ var AnnotationStore = class {
     const filePath = this.normalizeVaultPath(document2.filePath);
     const sidecarPath = this.toSidecarPath(filePath);
     const normalized = this.normalizeDocument(document2, filePath);
-    const entry = this.toIndexEntry(normalized, sidecarPath);
+    const entry = {
+      ...this.toIndexEntry(normalized, sidecarPath),
+      // 反查指针不在 sidecar 里，只活在索引：保存批注时必须原样带过去，否则每改一次就丢一次
+      ...pickExportFields(this.index.files[normalized.filePath])
+    };
     const nextIndex = {
-      version: 2,
+      version: 3,
       files: {
         ...this.index.files,
         [normalized.filePath]: entry
@@ -11747,6 +11758,140 @@ var AnnotationStore = class {
     await this.saveDocument(nextDocument);
     return nextDocument;
   }
+  /**
+   * 找出导出笔记里已无对应批注的块：删批注后导出块不会自动消失（故意的，防止误删手写内容），
+   * 这里只报告、不删除，交给用户决定。同一篇导出笔记可能聚合多个源文件，按 notePath 归并统计。
+   */
+  async findOrphanBlocks() {
+    const report = [];
+    const handled = /* @__PURE__ */ new Set();
+    for (const entry of Object.values(this.index.files)) {
+      const notePath = entry.derivedNotePath;
+      if (!notePath || handled.has(notePath)) {
+        continue;
+      }
+      handled.add(notePath);
+      const note = this.app.vault.getAbstractFileByPath(notePath);
+      if (!(note instanceof import_obsidian8.TFile)) {
+        continue;
+      }
+      const content = await this.app.vault.cachedRead(note);
+      const present = new Set(
+        [...content.matchAll(/<!--\s*inklight:block:([^:\s]+):start\s*-->/g)].map((match) => match[1])
+      );
+      const expected = /* @__PURE__ */ new Set();
+      for (const [otherPath, other] of Object.entries(this.index.files)) {
+        if (other.derivedNotePath !== notePath) {
+          continue;
+        }
+        const otherFile = this.app.vault.getAbstractFileByPath(otherPath);
+        if (!(otherFile instanceof import_obsidian8.TFile)) {
+          continue;
+        }
+        for (const blockId of Object.values(blockIdMap(await this.getDocument(otherFile)))) {
+          expected.add(blockId);
+        }
+      }
+      const blockIds = [...present].filter((blockId) => !expected.has(blockId));
+      if (blockIds.length > 0) {
+        report.push({ notePath, blockIds });
+      }
+    }
+    return report;
+  }
+  /** 已生成的原子卡路径（null 表示还没提炼过） */
+  getAtomCard(filePath, annotationId) {
+    return this.index.files[this.normalizeVaultPath(filePath)]?.atomCards?.[annotationId] ?? null;
+  }
+  /**
+   * 把一条批注提炼成原子卡：一个想法一个文件，正文是用户自己写的那句。
+   * 只生成派生文件、不碰 sidecar；靠索引里的 atomCards 去重，重复点只会打开已有卡片。
+   * 卡片删掉后索引指针仍在，下次点会重新生成——派生文件本来就该可丢弃。
+   */
+  async createAtomCard(file, input, folder) {
+    const normalizedPath = this.normalizeVaultPath(file.path);
+    const existing = this.getAtomCard(normalizedPath, input.annotationId);
+    if (existing && this.app.vault.getAbstractFileByPath(existing) instanceof import_obsidian8.TFile) {
+      return { path: existing, created: false };
+    }
+    const dir = (0, import_obsidian8.normalizePath)(folder.trim() || DEFAULT_ATOM_CARD_FOLDER);
+    if (!await this.app.vault.adapter.exists(dir)) {
+      await this.app.vault.createFolder(dir);
+    }
+    const path = await this.uniqueAtomCardPath(dir, atomCardBaseName(input));
+    await this.app.vault.create(path, renderAtomCard(this.index.files[normalizedPath], input, normalizedPath));
+    const entry = this.index.files[normalizedPath];
+    if (entry) {
+      this.index = {
+        ...this.index,
+        version: 3,
+        files: {
+          ...this.index.files,
+          [normalizedPath]: {
+            ...entry,
+            atomCards: { ...entry.atomCards ?? {}, [input.annotationId]: path }
+          }
+        }
+      };
+      await this.writeIndex();
+    }
+    return { path, created: true };
+  }
+  async uniqueAtomCardPath(dir, baseName) {
+    for (let index = 1; index <= 50; index += 1) {
+      const path = (0, import_obsidian8.normalizePath)(`${dir}/${index === 1 ? baseName : `${baseName} ${index}`}.md`);
+      if (!await this.app.vault.adapter.exists(path)) {
+        return path;
+      }
+    }
+    throw new AnnotationStoreWriteError(
+      (0, import_obsidian8.normalizePath)(`${dir}/${baseName}.md`),
+      new Error("\u540C\u4E00\u6807\u9898\u7684\u5361\u7247\u8FC7\u591A\uFF0C\u8BF7\u6362\u4E00\u4E2A\u60F3\u6CD5\u5185\u5BB9\u540E\u91CD\u8BD5")
+    );
+  }
+  /** 反查指针：这批批注落在哪篇导出笔记（notePath 为 null 表示还没导出过） */
+  getExportRecord(filePath) {
+    const entry = this.index.files[this.normalizeVaultPath(filePath)];
+    return {
+      notePath: entry?.derivedNotePath ?? null,
+      blockIds: entry?.blockIds ?? {},
+      mocPaths: entry?.mocPaths ?? [],
+      exportedAt: entry?.exportedAt ?? null
+    };
+  }
+  /**
+   * 导出完成后回写反查指针。只写索引、不碰 sidecar：
+   * sidecar 是批注真相源，导出落点是派生信息，索引丢了重新导一次就能恢复。
+   */
+  async recordExportTargets(targets, options) {
+    if (targets.size === 0) {
+      return;
+    }
+    const files = { ...this.index.files };
+    const exportedAt = (/* @__PURE__ */ new Date()).toISOString();
+    let changed = false;
+    for (const [filePath, target] of targets) {
+      const entry = files[filePath];
+      if (!entry) {
+        continue;
+      }
+      if (options?.moc) {
+        const previous = entry.mocPaths ?? [];
+        if (previous.includes(target.notePath)) {
+          continue;
+        }
+        files[filePath] = { ...entry, mocPaths: [...previous, target.notePath], exportedAt };
+      } else {
+        files[filePath] = { ...entry, derivedNotePath: target.notePath, blockIds: target.blockIds, exportedAt };
+      }
+      changed = true;
+    }
+    if (!changed) {
+      return;
+    }
+    this.index = { ...this.index, version: 3, files };
+    await this.writeIndex();
+  }
   async exportNotes(file, format = "summary", obTagBridge = false) {
     const document2 = await this.getDocument(file);
     const baseName = file.basename || file.name.replace(/\.md$/i, "");
@@ -11754,13 +11899,11 @@ var AnnotationStore = class {
     const targetPath = (0, import_obsidian8.normalizePath)(`${file.parent?.path ?? ""}/${baseName}-notes${suffix}.md`);
     const lines = buildExportLines(`Notes for ${file.path}`, [{ filePath: file.path, document: document2 }], format, obTagBridge, "full");
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
-    if (existing instanceof import_obsidian8.TFile) {
-      const generated = lines.join("\n");
-      const content = mergeExportDocument(await this.app.vault.cachedRead(existing), generated, obTagBridge);
-      await this.app.vault.modify(existing, content);
-      return existing;
-    }
-    return this.app.vault.create(targetPath, lines.join("\n"));
+    const target = existing instanceof import_obsidian8.TFile ? (await this.app.vault.modify(existing, mergeExportDocument(await this.app.vault.cachedRead(existing), lines.join("\n"), obTagBridge)), existing) : await this.app.vault.create(targetPath, lines.join("\n"));
+    await this.recordExportTargets(
+      /* @__PURE__ */ new Map([[document2.filePath, { notePath: target.path, blockIds: blockIdMap(document2) }]])
+    );
+    return target;
   }
   async exportAllNotes(format = "summary", obTagBridge = false) {
     const documents = await this.getIndexedDocuments();
@@ -11769,13 +11912,16 @@ var AnnotationStore = class {
     const sources = documents.map((document2) => ({ filePath: document2.filePath, document: document2 }));
     const lines = buildExportLines("\u58A8\u5149\u6279\u6CE8\u5168\u5E93\u6C47\u603B", sources, format, obTagBridge, "marker-only");
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
-    if (existing instanceof import_obsidian8.TFile) {
-      const generated = lines.join("\n");
-      const content = mergeExportDocument(await this.app.vault.cachedRead(existing), generated, obTagBridge);
-      await this.app.vault.modify(existing, content);
-      return existing;
+    const target = existing instanceof import_obsidian8.TFile ? (await this.app.vault.modify(existing, mergeExportDocument(await this.app.vault.cachedRead(existing), lines.join("\n"), obTagBridge)), existing) : await this.app.vault.create(targetPath, lines.join("\n"));
+    const targets = /* @__PURE__ */ new Map();
+    for (const document2 of documents) {
+      const blockIds = blockIdMap(document2);
+      if (Object.keys(blockIds).length > 0) {
+        targets.set(document2.filePath, { notePath: target.path, blockIds });
+      }
     }
-    return this.app.vault.create(targetPath, lines.join("\n"));
+    await this.recordExportTargets(targets);
+    return target;
   }
   /**
    * 按标签导出 MOC 页：把带该标签的全部批注写成 vault 根 MOC/<标签>.md。
@@ -11810,11 +11956,20 @@ var AnnotationStore = class {
       const generated = lines.join("\n");
       const content = mergeExportDocument(await this.app.vault.cachedRead(existing), generated, obTagBridge);
       await this.app.vault.modify(existing, content);
+      await this.recordMocTargets(matched.map((entry) => entry.sourcePath), existing.path);
       return { status: "written", file: existing };
     }
     await this.ensureMocDir();
     const file = await this.app.vault.create(targetPath, lines.join("\n"));
+    await this.recordMocTargets(matched.map((entry) => entry.sourcePath), file.path);
     return { status: "written", file };
+  }
+  async recordMocTargets(sources, notePath) {
+    const targets = /* @__PURE__ */ new Map();
+    for (const sourcePath of sources) {
+      targets.set(sourcePath, { notePath, blockIds: {} });
+    }
+    await this.recordExportTargets(targets, { moc: true });
   }
   async ensureMocDir() {
     const existing = this.app.vault.getAbstractFileByPath(MOC_DIR);
@@ -12056,6 +12211,57 @@ function buildExportLines(title, sources, format, obTagBridge, frontmatterMode) 
     return [...lines, ...renderReadingNotes(entries)];
   }
   return [...lines, ...renderSummary(entries)];
+}
+var DEFAULT_ATOM_CARD_FOLDER = "\u5361\u7247";
+function atomCardBaseName(input) {
+  const firstLine = input.content.split(/\r?\n/).find((line) => line.trim()) ?? "";
+  const raw = (firstLine || input.quote).trim();
+  const cleaned = raw.replace(/[\\/:*?"<>|#^[\]]/g, "").replace(/\s+/g, " ").trim();
+  return cleaned.slice(0, 24).trim() || "\u60F3\u6CD5";
+}
+function renderAtomCard(entry, input, sourcePath) {
+  const blockId = entry?.blockIds?.[input.annotationId];
+  const notePath = entry?.derivedNotePath?.replace(/\.md$/i, "");
+  const source = notePath && blockId ? `"[[${notePath}#^${blockId}]]"` : `"[[${sourcePath}]]"`;
+  const tags = input.tags.map((tag) => toObsidianTag(tag) ?? tag).filter(Boolean);
+  return [
+    "---",
+    ...input.noteType ? [`noteType: ${input.noteType}`] : [],
+    `source: ${source}`,
+    `tags: [${tags.join(", ")}]`,
+    `created: ${(/* @__PURE__ */ new Date()).toISOString()}`,
+    "---",
+    "",
+    input.content.trim(),
+    ""
+  ].join("\n");
+}
+function pickExportFields(entry) {
+  if (!entry) {
+    return {};
+  }
+  return {
+    ...entry.derivedNotePath ? { derivedNotePath: entry.derivedNotePath } : {},
+    ...entry.blockIds ? { blockIds: entry.blockIds } : {},
+    ...entry.mocPaths?.length ? { mocPaths: entry.mocPaths } : {},
+    ...entry.exportedAt ? { exportedAt: entry.exportedAt } : {},
+    ...entry.atomCards ? { atomCards: entry.atomCards } : {}
+  };
+}
+function blockIdMap(document2) {
+  const map = {};
+  const collect = (mode, items) => {
+    for (const item of items) {
+      map[item.id] = `${mode}-${item.id}`;
+    }
+  };
+  collect("md", document2.highlights);
+  collect("md", document2.comments);
+  collect("pdf", document2.pdfHighlights);
+  collect("pdf", document2.pdfComments);
+  collect("epub", document2.epubHighlights);
+  collect("epub", document2.epubComments);
+  return map;
 }
 function attachExportMetadata(entry, metadata) {
   const extra = metadata.get(entry.id);
@@ -13896,6 +14102,37 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
       this.exportFormat = exportFormat.value;
     });
   }
+  /**
+   * 提炼成原子卡：正文只放用户自己写的那句，出处与标签进 frontmatter。
+   * 不做 AI 代写、不批量生成——「用自己的话重写」正是知识内化发生的那一步。
+   */
+  async createAtomCard(file, cardData) {
+    if (!file) {
+      return;
+    }
+    try {
+      const result = await this.plugin.store.createAtomCard(
+        file,
+        {
+          annotationId: cardData.id,
+          mode: cardData.mode,
+          quote: cardData.text,
+          content: cardData.content,
+          noteType: cardData.noteType,
+          tags: cardData.tags
+        },
+        this.plugin.settings.atomCardFolder
+      );
+      const target = this.app.vault.getAbstractFileByPath(result.path);
+      if (target instanceof import_obsidian10.TFile) {
+        await this.app.workspace.getLeaf("tab").openFile(target);
+      }
+      new import_obsidian10.Notice(result.created ? `\u5DF2\u63D0\u70BC\u6210\u5361\u7247\uFF1A${result.path}` : `\u8FD9\u5F20\u5361\u7247\u5DF2\u5B58\u5728\uFF1A${result.path}`);
+    } catch (error) {
+      console.warn("yh-inklight: \u751F\u6210\u539F\u5B50\u5361\u5931\u8D25", error);
+      new import_obsidian10.Notice("\u751F\u6210\u5361\u7247\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u5199\u5165\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001");
+    }
+  }
   renderCard(list, cardData) {
     const file = this.fileForCard(cardData);
     const card = list.createDiv({
@@ -13916,11 +14153,9 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
     if (title) {
       type.dataset.title = title;
     }
-    const note = cardData.note;
-    const epubNoteType = note && "noteType" in note ? note.noteType : void 0;
-    if (epubNoteType) {
+    if (cardData.noteType) {
       const labelMap = { insight: "\u{1F4A1}\u6D1E\u89C1", question: "\u2753\u7591\u95EE", reminder: "\u{1F514}\u63D0\u9192" };
-      head.createSpan({ cls: "yh-ov-note-type", text: labelMap[epubNoteType] ?? epubNoteType });
+      head.createSpan({ cls: "yh-ov-note-type", text: labelMap[cardData.noteType] ?? cardData.noteType });
     }
     head.createSpan({ cls: "yh-ov-time", text: formatTime(cardData.createdAt) });
     const quote = card.createDiv({ cls: "yh-ov-quote" });
@@ -13946,6 +14181,31 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
       text: cardData.mode === "epub" ? cardData.chapter ?? "EPUB" : cardData.pageNumber ? `p.${cardData.pageNumber}` : "Markdown"
     });
     const actions = card.createDiv({ cls: "yh-ov-actions" });
+    const exportRecord = this.plugin.store.getExportRecord(cardData.sourcePath);
+    const exportedFile = exportRecord.notePath ? this.app.vault.getAbstractFileByPath(exportRecord.notePath) : null;
+    if (exportedFile instanceof import_obsidian10.TFile) {
+      const openExport = actions.createEl("button", {
+        cls: "yh-ov-btn yh-ov-btn--icon",
+        attr: { type: "button", title: `\u6253\u5F00\u5BFC\u51FA\u7B14\u8BB0\uFF1A${exportedFile.path}`, "data-action": "open-export" }
+      });
+      (0, import_obsidian10.setIcon)(openExport, "file-text");
+      openExport.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void this.app.workspace.getLeaf("tab").openFile(exportedFile);
+      });
+    }
+    if (cardData.noteType === "insight" && cardData.content.trim()) {
+      const atom = actions.createEl("button", {
+        cls: "yh-ov-btn",
+        text: "\u63D0\u70BC\u6210\u5361\u7247",
+        attr: { type: "button", title: "\u628A\u8FD9\u6761\u6D1E\u89C1\u63D0\u70BC\u6210\u4E00\u5F20\u72EC\u7ACB\u7684\u539F\u5B50\u5361", "data-action": "atom-card" }
+      });
+      atom.disabled = !file;
+      atom.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void this.createAtomCard(file, cardData);
+      });
+    }
     if (cardData.note) {
       const edit2 = actions.createEl("button", {
         cls: "yh-ov-btn yh-ov-btn--icon",
@@ -20636,6 +20896,11 @@ var OverlayAnnotationsPlugin = class extends import_obsidian21.Plugin {
       callback: () => this.createComment()
     });
     this.addCommand({
+      id: "check-orphan-export-blocks",
+      name: "\u68C0\u67E5\u5BFC\u51FA\u7B14\u8BB0\u91CC\u7684\u5B64\u513F\u5757",
+      callback: () => void this.checkOrphanBlocks()
+    });
+    this.addCommand({
       id: "toggle-sticky-notes",
       name: "\u5207\u6362\u6279\u6CE8\u5F39\u5C42\u663E\u793A",
       hotkeys: [{ modifiers: ["Mod", "Shift"], key: "n" }],
@@ -21295,6 +21560,17 @@ ${lines.slice(0, 8).join("\n")}`);
    * 打开 EPUB 文件并导航到指定 CFI 位置。
    * 供 EpubGotoHandler（摘录回跳）和 Obsidian 协议处理器调用。
    */
+  /** 孤儿块检查：删批注后导出块会留下，这里只报告不删除，避免误删用户写在块内的内容 */
+  async checkOrphanBlocks() {
+    const report = await this.store.findOrphanBlocks();
+    if (report.length === 0) {
+      new import_obsidian21.Notice("\u5BFC\u51FA\u7B14\u8BB0\u91CC\u6CA1\u6709\u5B64\u513F\u5757");
+      return;
+    }
+    const total = report.reduce((sum, item) => sum + item.blockIds.length, 0);
+    console.log("yh-inklight: \u5B64\u513F\u5757\u62A5\u544A", report);
+    new import_obsidian21.Notice(`\u53D1\u73B0 ${total} \u4E2A\u5B64\u513F\u5757\uFF08\u6279\u6CE8\u5DF2\u5220\u9664\uFF0C\u5BFC\u51FA\u5757\u4ECD\u5728\uFF09\uFF0C\u660E\u7EC6\u89C1\u5F00\u53D1\u8005\u63A7\u5236\u53F0`);
+  }
   /**
    * 统一回链跳转：解析 `obsidian://inklight` 参数后复用 openAnnotationTarget，
    * 保证「导出笔记里点回链」与「侧栏点卡片」走同一条定位逻辑，不会两套行为漂移。

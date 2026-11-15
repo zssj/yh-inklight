@@ -142,6 +142,19 @@ export class AnnotationSettingsTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         });
       });
+
+    new Setting(containerEl)
+      .setName("原子卡存放目录")
+      .setDesc("把「洞见」提炼成独立卡片时写到这个目录（相对 vault 根，留空用「卡片」）。卡片是派生文件，可随时删除重建，批注数据仍在 sidecar。")
+      .addText((text) => {
+        text
+          .setPlaceholder("卡片")
+          .setValue(this.plugin.settings.atomCardFolder)
+          .onChange(async (value) => {
+            this.plugin.settings.atomCardFolder = value.trim();
+            await this.plugin.saveSettings();
+          });
+      });
   }
 
   /** 字面内容关联：按内容推荐标签 + 相关批注，纯本地计算，不联网不调用 AI */

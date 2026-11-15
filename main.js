@@ -9694,15 +9694,9 @@ var GAP = 10;
 var EDGE = 8;
 var MIN_WIDTH = 200;
 var MIN_HEIGHT = 120;
-var MIN_TIGHT_HEIGHT = 56;
 function clamp(value, min, max) {
   const hi = Math.max(min, max);
   return Math.max(min, Math.min(value, hi));
-}
-function intersectionArea(a3, b3) {
-  const w2 = Math.min(a3.right, b3.right) - Math.max(a3.left, b3.left);
-  const h3 = Math.min(a3.bottom, b3.bottom) - Math.max(a3.top, b3.top);
-  return w2 > 0 && h3 > 0 ? w2 * h3 : 0;
 }
 function viewportRect() {
   return { left: 8, top: 8, right: window.innerWidth - 8, bottom: window.innerHeight - 8 };
@@ -9713,11 +9707,12 @@ function toPopoverRect(rect) {
 function computePopoverPlacement(avoid, size, bounds) {
   const boundsWidth = Math.max(MIN_WIDTH + 2 * EDGE, bounds.right - bounds.left);
   const width = clamp(size.width, MIN_WIDTH, boundsWidth - 2 * EDGE);
-  const height = Math.max(MIN_HEIGHT, size.height);
-  const boundsHeight = Math.max(MIN_HEIGHT, bounds.bottom - bounds.top - 2 * EDGE);
+  const availableHeight = Math.max(MIN_HEIGHT, bounds.bottom - bounds.top - 2 * EDGE);
+  const height = Math.min(Math.max(MIN_HEIGHT, size.height), availableHeight);
   const minLeft = bounds.left + EDGE;
   const maxLeft = Math.max(minLeft, bounds.right - EDGE - width);
   const minTop = bounds.top + EDGE;
+  const maxTop = Math.max(minTop, bounds.bottom - EDGE - height);
   const a3 = {
     left: clamp(avoid.left, bounds.left, bounds.right),
     top: clamp(avoid.top, bounds.top, bounds.bottom),
@@ -9727,83 +9722,47 @@ function computePopoverPlacement(avoid, size, bounds) {
   if (a3.right <= a3.left) a3.right = a3.left + 1;
   if (a3.bottom <= a3.top) a3.bottom = a3.top + 1;
   const centerLeft = clamp((a3.left + a3.right) / 2 - width / 2, minLeft, maxLeft);
-  const candidates = [];
-  const push = (side, left, top, h3) => {
-    candidates.push({
-      side,
-      left,
-      top,
-      height: h3,
-      overlap: intersectionArea({ left, top, right: left + width, bottom: top + h3 }, a3)
-    });
-  };
-  const belowTop = a3.bottom + GAP;
-  const belowSpace = bounds.bottom - EDGE - belowTop;
-  if (belowSpace >= MIN_HEIGHT) {
-    push("below", centerLeft, belowTop, Math.min(height, belowSpace));
+  const belowIdeal = a3.bottom + GAP;
+  const aboveIdeal = a3.top - GAP - height;
+  const clean = [];
+  if (belowIdeal >= minTop && belowIdeal + height <= bounds.bottom - EDGE) {
+    clean.push({ side: "below", left: centerLeft, top: belowIdeal });
   }
-  const aboveBottom = a3.top - GAP;
-  const aboveSpace = aboveBottom - minTop;
-  if (aboveSpace >= MIN_HEIGHT) {
-    const h3 = Math.min(height, aboveSpace);
-    push("above", centerLeft, aboveBottom - h3, h3);
+  if (aboveIdeal >= minTop && aboveIdeal + height <= bounds.bottom - EDGE) {
+    clean.push({ side: "above", left: centerLeft, top: aboveIdeal });
   }
-  const sideHeight = Math.min(height, boundsHeight);
-  const sideTop = clamp(a3.top, minTop, Math.max(minTop, bounds.bottom - EDGE - sideHeight));
-  const endLeft = a3.right + GAP;
-  if (endLeft + width <= bounds.right - EDGE) {
-    push("end", endLeft, sideTop, sideHeight);
+  const sideTop = clamp(a3.top, minTop, maxTop);
+  if (a3.right + GAP + width <= bounds.right - EDGE) {
+    clean.push({ side: "end", left: a3.right + GAP, top: sideTop });
   }
-  const startLeft = a3.left - GAP - width;
-  if (startLeft >= minLeft) {
-    push("start", startLeft, sideTop, sideHeight);
+  if (a3.left - GAP - width >= minLeft) {
+    clean.push({ side: "start", left: a3.left - GAP - width, top: sideTop });
   }
-  if (candidates.length === 0) {
-    const belowAny = Math.max(0, bounds.bottom - EDGE - belowTop);
-    const aboveAny = Math.max(0, aboveBottom - minTop);
-    const tight = Math.max(belowAny, aboveAny);
-    if (tight >= MIN_TIGHT_HEIGHT) {
-      const useBelow = belowAny >= aboveAny;
-      const h3 = useBelow ? belowAny : aboveAny;
-      return {
-        left: centerLeft,
-        top: useBelow ? belowTop : aboveBottom - h3,
-        width,
-        maxHeight: Math.min(boundsHeight, h3),
-        side: useBelow ? "below" : "above"
-      };
-    }
+  const chosen = clean[0];
+  if (chosen) {
+    return { left: chosen.left, top: chosen.top, width, maxHeight: height, side: chosen.side };
   }
-  const free = candidates.filter((c2) => c2.overlap === 0);
-  const full = free.find((c2) => c2.height >= height - 1);
-  if (full) {
-    return { left: full.left, top: full.top, width, maxHeight: Math.min(boundsHeight, full.height), side: full.side };
+  const belowTop = clamp(belowIdeal, minTop, maxTop);
+  const aboveTop = clamp(aboveIdeal, minTop, maxTop);
+  const belowShift = Math.abs(belowTop - belowIdeal);
+  const aboveShift = Math.abs(aboveTop - aboveIdeal);
+  const useBelow = belowShift <= aboveShift;
+  const top = useBelow ? belowTop : aboveTop;
+  if (minTop === maxTop) {
+    return { left: centerLeft, top: minTop, width, maxHeight: availableHeight, side: "overlay" };
   }
-  const shrunk = free.slice().sort((x3, y3) => y3.height - x3.height)[0];
-  if (shrunk) {
-    return {
-      left: shrunk.left,
-      top: shrunk.top,
-      width,
-      maxHeight: Math.max(MIN_HEIGHT, Math.min(boundsHeight, shrunk.height)),
-      side: shrunk.side
-    };
-  }
-  const overlayTop = clamp(belowTop, minTop, Math.max(minTop, bounds.bottom - EDGE - MIN_HEIGHT));
   return {
     left: centerLeft,
-    top: overlayTop,
+    top,
     width,
-    maxHeight: clamp(bounds.bottom - EDGE - overlayTop, MIN_HEIGHT, boundsHeight),
-    side: "overlay"
+    maxHeight: height,
+    side: useBelow ? "below" : "above"
   };
 }
 
 // src/views/annotationCard.ts
 var SHEET_BOTTOM_GUTTER = 40;
 var SHEET_TOP_GUTTER = 12;
-var SHEET_ANCHOR_GAP = 10;
-var SHEET_MIN_USEFUL = 220;
 var AnnotationCard = class {
   constructor(card, options) {
     // 视图状态一律存类字段，任何重绘都不丢编辑态
@@ -9908,12 +9867,17 @@ var AnnotationCard = class {
     this.el.style.visibility = "";
   }
   /**
-   * 移动端定位：优先贴着高亮的上下方就近放置，并且**任何时候都不贴屏幕底边**。
+   * 移动端定位：**不再避开高亮**，改为「从高亮所在的一侧展开，用满可用高度」。
    *
-   * 之前一律 bottom:0 + 10px，最后一行动作正好压在手机底部手势区/导航栏上，
-   * 看着在、点不动。现在底部固定留 SHEET_BOTTOM_GUTTER，再把浮层往高亮那边靠：
-   * 高亮下方放不下就翻到上方，两侧都放不下才撑满可用区（内容在卡片内滚动）。
-   * 键盘弹起时不做就近判断——跟随键盘贴住可视区底最稳，否则会被键盘压住。
+   * 演进：v0.19.8 之前一律贴屏幕底（只留 10px），最后一行落在手势区点不中；
+   * v0.19.8 改成贴着高亮上/下方且坚持不遮挡，结果单侧空间很小，卡片被压成一条缝，
+   * 内容全塞进内部滚动，等于看不到。v0.19.9 起允许压住高亮，换取完整高度：
+   *
+   * - 高亮在屏幕上半部 → 浮层**顶对齐**（top=12），从高亮处向下展开，头部紧挨高亮；
+   * - 高亮在下半部 → 浮层**底对齐**（底距 40px + 安全区），从下方升起，拇指够得到动作行；
+   * - 两种都只受「顶 12 / 底 40」限制，高度 = min(自然高度, 可用高度)，
+   *   放得下就完整展示，放不下才在卡片内部滚动——不会被压扁、不会出界、不会截断内容。
+   * - 键盘弹起时一律贴键盘上方：编辑输入框必须可见，此时不做就近判断。
    */
   placeMobile() {
     const el = this.el;
@@ -9933,40 +9897,18 @@ var AnnotationCard = class {
     el.style.maxHeight = "none";
     el.style.visibility = "hidden";
     const natural = el.getBoundingClientRect().height;
+    const maxHeight = Math.min(fullHeight, Math.max(160, natural));
     const avoid = this.anchor?.avoid;
-    if (keyboardInset > 0 || !avoid || avoid.bottom <= avoid.top) {
+    const hasAnchor = !!avoid && avoid.bottom > avoid.top;
+    const alignTop = hasAnchor && keyboardInset === 0 && (avoid.top + avoid.bottom) / 2 < viewportH / 2;
+    if (alignTop) {
+      el.style.top = `${limitTop}px`;
+      el.style.bottom = "auto";
+    } else {
       el.style.top = "";
       el.style.bottom = `${bottomInset + SHEET_BOTTOM_GUTTER}px`;
-      el.style.maxHeight = `${fullHeight}px`;
-      el.style.visibility = "";
-      return;
     }
-    const spaceBelow = bottomEdge - (avoid.bottom + SHEET_ANCHOR_GAP);
-    const spaceAbove = avoid.top - SHEET_ANCHOR_GAP - limitTop;
-    let top = null;
-    let bottom = null;
-    let maxHeight = fullHeight;
-    if (spaceBelow >= natural && spaceBelow >= SHEET_MIN_USEFUL) {
-      top = avoid.bottom + SHEET_ANCHOR_GAP;
-      maxHeight = spaceBelow;
-    } else if (spaceAbove >= natural && spaceAbove >= SHEET_MIN_USEFUL) {
-      bottom = viewportH - (avoid.top - SHEET_ANCHOR_GAP);
-      maxHeight = spaceAbove;
-    } else if (Math.max(spaceBelow, spaceAbove) >= SHEET_MIN_USEFUL) {
-      if (spaceBelow >= spaceAbove) {
-        top = avoid.bottom + SHEET_ANCHOR_GAP;
-        maxHeight = spaceBelow;
-      } else {
-        bottom = viewportH - (avoid.top - SHEET_ANCHOR_GAP);
-        maxHeight = spaceAbove;
-      }
-    } else {
-      top = limitTop;
-      maxHeight = fullHeight;
-    }
-    el.style.top = top == null ? "" : `${top}px`;
-    el.style.bottom = bottom == null ? "auto" : `${bottom}px`;
-    el.style.maxHeight = `${Math.max(160, Math.min(maxHeight, fullHeight))}px`;
+    el.style.maxHeight = `${maxHeight}px`;
     el.style.visibility = "";
   }
   /**

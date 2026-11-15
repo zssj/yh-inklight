@@ -1,6 +1,7 @@
 /**
  * [INPUT]: 视口坐标下的选区矩形（划线并集）、浮层实测尺寸、可用区域（视口 ∩ 阅读区 − 安全区）
- * [OUTPUT]: computePopoverPlacement 返回 left/top/width/maxHeight/side，保证浮层避开选区、不越界
+ * [OUTPUT]: computePopoverPlacement 返回 left/top/width/maxHeight/side，保证浮层完整可见且不越界；
+ *           空间不足时允许压住选区（不再把「不遮挡」当硬约束）
  * [POS]: views 模块浮层定位单点，被 AnnotationCard（md/pdf/epub 三端共用）使用；纯函数，不碰 DOM
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
@@ -34,26 +35,10 @@ const GAP = 10;
 const EDGE = 8;
 const MIN_WIDTH = 200;
 const MIN_HEIGHT = 120;
-/** 极端兜底：宁可把卡片压到很矮、内容内部滚动，也不压住划线 */
-const MIN_TIGHT_HEIGHT = 56;
 
 function clamp(value: number, min: number, max: number): number {
   const hi = Math.max(min, max);
   return Math.max(min, Math.min(value, hi));
-}
-
-function intersectionArea(a: PopoverRect, b: PopoverRect): number {
-  const w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
-  const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
-  return w > 0 && h > 0 ? w * h : 0;
-}
-
-interface Candidate {
-  side: PopoverSide;
-  left: number;
-  top: number;
-  height: number;
-  overlap: number;
 }
 
 /** 视口安全区（8px 留白），没有更精确的区域时用它 */
@@ -67,13 +52,16 @@ export function toPopoverRect(rect: { left: number; top: number; right: number; 
 }
 
 /**
- * 计算浮层位置，优先级：划线下方 → 上方 → 右侧 → 左侧。
+ * 计算浮层位置：**完整可见优先，「不遮挡选区」降级为偏好而非硬约束。**
  *
- * - 上下两侧以「不遮挡选区」为硬约束：top 从 avoid.bottom/top 之外起算，天然零重叠。
- * - 左右两侧靠水平分离保证零重叠，top 只做边界钳制。
- * - 四侧都放不下完整高度时，选剩余空间最大的一侧并压缩 maxHeight（卡片内部滚动），
- *   而不是把浮层压到选区上。
- * - 选区几乎占满阅读区（极端情况）才退化为贴边 overlay，此时允许重叠但保证不全屏外溢。
+ * 为什么改（v0.19.9）：原先上下两侧以「零重叠」为硬约束，单侧空间不足时只能压缩 maxHeight，
+ * 卡片被压成一条缝、内容全塞进内部滚动，手机上根本点不到。现在改为：
+ *
+ * 1. 目标高度取「自然高度」，只在超过可用区时才降为可用区高度（此时才内部滚动）。
+ * 2. 先找完整可见且完全不遮挡的位置：下方 → 上方 → 右侧 → 左侧（顺序即优先级）。
+ * 3. 四侧都不行时，在「贴选区下方」与「贴选区上方」两个方向里选**偏移最小**的一个，
+ *    允许浮层压住选区——换取完整高度，不再为了躲原文把卡片压扁。
+ * 4. 可用区本身比最小高度还矮（极端）时才退为 overlay：贴顶、内部滚动，仍不出界。
  */
 export function computePopoverPlacement(
   avoid: PopoverRect,
@@ -82,12 +70,14 @@ export function computePopoverPlacement(
 ): PopoverPlacement {
   const boundsWidth = Math.max(MIN_WIDTH + 2 * EDGE, bounds.right - bounds.left);
   const width = clamp(size.width, MIN_WIDTH, boundsWidth - 2 * EDGE);
-  const height = Math.max(MIN_HEIGHT, size.height);
-  const boundsHeight = Math.max(MIN_HEIGHT, bounds.bottom - bounds.top - 2 * EDGE);
+  const availableHeight = Math.max(MIN_HEIGHT, bounds.bottom - bounds.top - 2 * EDGE);
+  // 完整可见优先：目标高度只受可用区限制，不再被单侧剩余空间压缩
+  const height = Math.min(Math.max(MIN_HEIGHT, size.height), availableHeight);
 
   const minLeft = bounds.left + EDGE;
   const maxLeft = Math.max(minLeft, bounds.right - EDGE - width);
   const minTop = bounds.top + EDGE;
+  const maxTop = Math.max(minTop, bounds.bottom - EDGE - height);
 
   // 选区可能部分在阅读区外（跨页/滚动），先裁到可用区域再算空间
   const a: PopoverRect = {
@@ -100,87 +90,50 @@ export function computePopoverPlacement(
   if (a.bottom <= a.top) a.bottom = a.top + 1;
 
   const centerLeft = clamp((a.left + a.right) / 2 - width / 2, minLeft, maxLeft);
-  const candidates: Candidate[] = [];
-  const push = (side: PopoverSide, left: number, top: number, h: number): void => {
-    candidates.push({
-      side,
-      left,
-      top,
-      height: h,
-      overlap: intersectionArea({ left, top, right: left + width, bottom: top + h }, a),
-    });
-  };
 
-  // 下方
-  const belowTop = a.bottom + GAP;
-  const belowSpace = bounds.bottom - EDGE - belowTop;
-  if (belowSpace >= MIN_HEIGHT) {
-    push("below", centerLeft, belowTop, Math.min(height, belowSpace));
+  const belowIdeal = a.bottom + GAP;
+  const aboveIdeal = a.top - GAP - height;
+
+  /** 完整可见 + 与选区零重叠，按偏好顺序取第一个 */
+  const clean: Array<{ side: PopoverSide; left: number; top: number }> = [];
+  if (belowIdeal >= minTop && belowIdeal + height <= bounds.bottom - EDGE) {
+    clean.push({ side: "below", left: centerLeft, top: belowIdeal });
   }
-
-  // 上方
-  const aboveBottom = a.top - GAP;
-  const aboveSpace = aboveBottom - minTop;
-  if (aboveSpace >= MIN_HEIGHT) {
-    const h = Math.min(height, aboveSpace);
-    push("above", centerLeft, aboveBottom - h, h);
+  if (aboveIdeal >= minTop && aboveIdeal + height <= bounds.bottom - EDGE) {
+    clean.push({ side: "above", left: centerLeft, top: aboveIdeal });
+  }
+  // 左右只有在整块浮层能水平避开选区时才考虑：同样是「不遮挡 + 完整可见」
+  const sideTop = clamp(a.top, minTop, maxTop);
+  if (a.right + GAP + width <= bounds.right - EDGE) {
+    clean.push({ side: "end", left: a.right + GAP, top: sideTop });
+  }
+  if (a.left - GAP - width >= minLeft) {
+    clean.push({ side: "start", left: a.left - GAP - width, top: sideTop });
   }
 
-  // 左右：仅在整块浮层能水平避开选区时才采纳
-  const sideHeight = Math.min(height, boundsHeight);
-  const sideTop = clamp(a.top, minTop, Math.max(minTop, bounds.bottom - EDGE - sideHeight));
-  const endLeft = a.right + GAP;
-  if (endLeft + width <= bounds.right - EDGE) {
-    push("end", endLeft, sideTop, sideHeight);
-  }
-  const startLeft = a.left - GAP - width;
-  if (startLeft >= minLeft) {
-    push("start", startLeft, sideTop, sideHeight);
+  const chosen = clean[0];
+  if (chosen) {
+    return { left: chosen.left, top: chosen.top, width, maxHeight: height, side: chosen.side };
   }
 
-  // 四侧都低于常规阈值时（整页划线），降低阈值再占一条窄带：
-  // 卡片变矮并内部滚动，仍然零重叠，比覆盖原文好
-  if (candidates.length === 0) {
-    const belowAny = Math.max(0, bounds.bottom - EDGE - belowTop);
-    const aboveAny = Math.max(0, aboveBottom - minTop);
-    const tight = Math.max(belowAny, aboveAny);
-    if (tight >= MIN_TIGHT_HEIGHT) {
-      const useBelow = belowAny >= aboveAny;
-      const h = useBelow ? belowAny : aboveAny;
-      return {
-        left: centerLeft,
-        top: useBelow ? belowTop : aboveBottom - h,
-        width,
-        maxHeight: Math.min(boundsHeight, h),
-        side: useBelow ? "below" : "above",
-      };
-    }
+  // 无零重叠位置：贴选区上/下，取偏移更小的一侧，允许覆盖选区
+  const belowTop = clamp(belowIdeal, minTop, maxTop);
+  const aboveTop = clamp(aboveIdeal, minTop, maxTop);
+  const belowShift = Math.abs(belowTop - belowIdeal);
+  const aboveShift = Math.abs(aboveTop - aboveIdeal);
+  const useBelow = belowShift <= aboveShift;
+  const top = useBelow ? belowTop : aboveTop;
+
+  // 上下都没有腾挪空间：可用区本身就比一张卡矮，只能贴顶并内部滚动
+  if (minTop === maxTop) {
+    return { left: centerLeft, top: minTop, width, maxHeight: availableHeight, side: "overlay" };
   }
 
-  const free = candidates.filter((c) => c.overlap === 0);
-  // 完整高度优先；按 push 顺序（下/上/右/左）取第一个不压缩的
-  const full = free.find((c) => c.height >= height - 1);
-  if (full) {
-    // maxHeight 必须落在该侧剩余空间内：返回 boundsHeight 会让长内容撑到视口外压住划线
-    return { left: full.left, top: full.top, width, maxHeight: Math.min(boundsHeight, full.height), side: full.side };
-  }
-  const shrunk = free.slice().sort((x, y) => y.height - x.height)[0];
-  if (shrunk) {
-    return {
-      left: shrunk.left,
-      top: shrunk.top,
-      width,
-      maxHeight: Math.max(MIN_HEIGHT, Math.min(boundsHeight, shrunk.height)),
-      side: shrunk.side,
-    };
-  }
-
-  const overlayTop = clamp(belowTop, minTop, Math.max(minTop, bounds.bottom - EDGE - MIN_HEIGHT));
   return {
     left: centerLeft,
-    top: overlayTop,
+    top,
     width,
-    maxHeight: clamp(bounds.bottom - EDGE - overlayTop, MIN_HEIGHT, boundsHeight),
-    side: "overlay",
+    maxHeight: height,
+    side: useBelow ? "below" : "above",
   };
 }

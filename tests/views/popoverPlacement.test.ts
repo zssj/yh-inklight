@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 被测 src/views/popoverPlacement.ts
- * [OUTPUT]: 覆盖浮层四侧优先级、空间不足时的收缩与极端 overlay 兜底
+ * [OUTPUT]: 覆盖四侧优先级、「完整可见优先于不遮挡」的覆盖策略、以及极端情况下的贴顶滚动
  * [POS]: L1 纯逻辑测试——浮层压住划线/溢出屏幕在真机上只能靠肉眼发现，这里用几何断言锁死
  */
 
@@ -46,16 +46,31 @@ describe("computePopoverPlacement", () => {
     expect(overlap(placement, avoid)).toBe(0);
   });
 
-  it("四侧空间都不足时选空间最大的一侧并压缩高度，仍然不遮挡", () => {
+  it("单侧空间不足时优先保完整高度，允许压住划线", () => {
     const bounds: PopoverRect = { left: 0, top: 0, right: 1000, bottom: 400 };
     const avoid: PopoverRect = { left: 0, top: 100, right: 1000, bottom: 300 };
     const placement = computePopoverPlacement(avoid, { width: 320, height: 240 }, bounds);
 
+    // 高度不再被单侧剩余空间（82px）压缩，而是取满 240
     expect(placement.side).toBe("below");
-    expect(placement.top).toBe(avoid.bottom + 10);
-    expect(placement.maxHeight).toBe(82);
-    expect(placement.maxHeight).toBeLessThan(240);
-    expect(overlap(placement, avoid)).toBe(0);
+    expect(placement.maxHeight).toBe(240);
+    // 下方放不下完整高度 → 上移到贴住可用区底边，压住划线是允许的
+    expect(placement.top).toBe(bounds.bottom - 8 - 240);
+    expect(overlap(placement, avoid)).toBeGreaterThan(0);
+    // 但绝不出界：底边与可用区底部留 8px
+    expect(placement.top + placement.maxHeight).toBeLessThanOrEqual(bounds.bottom - 8);
+    expect(placement.top).toBeGreaterThanOrEqual(bounds.top + 8);
+  });
+
+  it("上下都放不下时，选偏移更小的一侧覆盖", () => {
+    const bounds: PopoverRect = { left: 0, top: 0, right: 1000, bottom: 400 };
+    // 划线偏下：从上方贴合需要的位移更小
+    const avoid: PopoverRect = { left: 0, top: 100, right: 1000, bottom: 350 };
+    const placement = computePopoverPlacement(avoid, { width: 320, height: 240 }, bounds);
+
+    expect(placement.side).toBe("above");
+    expect(placement.top).toBe(bounds.top + 8);
+    expect(placement.maxHeight).toBe(240);
   });
 
   it("选区几乎占满可用区域时退化为 overlay，仍限制在边界内", () => {

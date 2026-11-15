@@ -5,7 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
-import { addIcon, Editor, MarkdownPostProcessorContext, MarkdownRenderer, MarkdownView, Modal, Notice, Platform, Plugin, TFile, WorkspaceLeaf } from "obsidian";
+import { addIcon, Editor, MarkdownPostProcessorContext, MarkdownView, Modal, Notice, Platform, Plugin, TFile, WorkspaceLeaf } from "obsidian";
 
 import { createTextAnchor, relocateDocumentAnchors } from "./src/anchor/textAnchor";
 import { foldWhitespaceWithMap, stripWithMap, strippedScore } from "./src/anchor/textStrip";
@@ -19,6 +19,7 @@ import { AnnotationStore } from "./src/storage/annotationStore";
 import {
   AnnotationColor,
   AnnotationPluginSettings,
+  AnnotationRelation,
   CommentAnnotation,
   DEFAULT_SETTINGS,
   FileAnnotationDocument,
@@ -27,7 +28,8 @@ import {
   SelectionSnapshot,
   SUPPORTED_BOOK_EXTENSIONS,
 } from "./src/storage/types";
-import { AnnotationCard, annotationBadge, formatAnnotationTime } from "./src/views/annotationCard";
+import { AnnotationCard } from "./src/views/annotationCard";
+import { buildCards, SidebarCard } from "./src/views/cardModel";
 import { toPopoverRect } from "./src/views/popoverPlacement";
 import { ANNOTATION_SIDEBAR_VIEW, AnnotationSidebarView } from "./src/views/sidebarView";
 import { openAnnotationTarget } from "./src/views/navigation";
@@ -133,6 +135,13 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       saveSettings: () => this.saveSettings(),
       onTocChanged: () => this.refreshEpubToc(),
       tagSuggestions: () => this.getTagSuggestions(),
+      cardActions: {
+        openDerivedNote: (sourcePath) => this.openDerivedNote(sourcePath),
+        createAtomCard: (card) => this.createAtomCardFor(card),
+        jumpToRelation: (relation) => void this.jumpToRelationTarget(relation),
+        removeRelation: (sourcePath, annotationId, relation) =>
+          this.removeRelationFor(sourcePath, annotationId, relation),
+      },
     }));
     // 把 foliate 支持的所有电子书格式绑定到阅读器视图：registerView 只注册视图工厂，
     // 还需要 registerExtensions 告诉 Obsidian「.epub/.mobi/... 用本视图打开」。
@@ -205,6 +214,13 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       },
       getProgress: (file) => this.store.getPdfProgress(file),
       viewerAdapter: this.pdfViewerAdapter,
+      cardActions: {
+        openDerivedNote: (sourcePath) => this.openDerivedNote(sourcePath),
+        createAtomCard: (card) => this.createAtomCardFor(card),
+        jumpToRelation: (relation) => void this.jumpToRelationTarget(relation),
+        removeRelation: (sourcePath, annotationId, relation) =>
+          this.removeRelationFor(sourcePath, annotationId, relation),
+      },
       editPdfComment: async (file, comment) => {
         try {
           const value = await new CommentModal(
@@ -1366,6 +1382,107 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     );
   }
 
+  /**
+   * 卡片动作「打开导出笔记」：索引里的 derivedNotePath 是唯一真相。
+   * 侧栏与三端浮层共用这一条，避免各写一份之后有的入口失效。
+   */
+  async openDerivedNote(sourcePath: string): Promise<void> {
+    const notePath = this.store.getExportRecord(sourcePath).notePath;
+    if (!notePath) {
+      new Notice("这条批注还没有导出过");
+      return;
+    }
+    const file = this.app.vault.getAbstractFileByPath(notePath);
+    if (!(file instanceof TFile)) {
+      new Notice(`找不到导出笔记：${notePath}`);
+      return;
+    }
+    await this.app.workspace.getLeaf("tab").openFile(file);
+  }
+
+  /**
+   * 卡片动作「提炼成卡片」：正文只放用户自己写的那句，出处与标签进 frontmatter。
+   * 不做 AI 代写、不批量生成——「用自己的话重写」才是内化发生的那一步。
+   */
+  async createAtomCardFor(card: SidebarCard): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(card.sourcePath);
+    if (!(file instanceof TFile)) {
+      new Notice("找不到源文件，无法提炼");
+      return;
+    }
+    try {
+      const result = await this.store.createAtomCard(
+        file,
+        {
+          annotationId: card.id,
+          mode: card.mode,
+          quote: card.text,
+          content: card.content,
+          noteType: card.noteType,
+          tags: card.tags,
+        },
+        this.settings.atomCardFolder,
+      );
+      const target = this.app.vault.getAbstractFileByPath(result.path);
+      if (target instanceof TFile) {
+        await this.app.workspace.getLeaf("tab").openFile(target);
+      }
+      new Notice(result.created ? `已提炼成卡片：${result.path}` : `这张卡片已存在：${result.path}`);
+    } catch (error) {
+      console.warn("yh-inklight: 生成原子卡失败", error);
+      new Notice("生成卡片失败，请检查写入权限或同步状态");
+    }
+  }
+
+  /** 卡片动作「关系跳转」：按关系里存的锚点快照定位，不必回查目标文档 */
+  async jumpToRelationTarget(relation: AnnotationRelation): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(relation.targetPath);
+    if (!(file instanceof TFile)) {
+      new Notice("目标文件已不存在，可点 × 解除这条关系");
+      return;
+    }
+    if (relation.targetMode === "epub" && relation.targetCfi) {
+      await this.openEpubAtCfi(file.path, relation.targetCfi);
+      return;
+    }
+    await openAnnotationTarget(
+      this.app,
+      {
+        file,
+        offset: relation.targetOffset ?? 0,
+        pageNumber: relation.targetPage ?? null,
+        mode: relation.targetMode,
+        cfiRange: relation.targetCfi,
+      },
+      (targetFile, cfi) => this.openEpubAtCfi(targetFile.path, cfi),
+      { newTab: true },
+    );
+  }
+
+  /** 卡片动作「解除关系」：两侧一起断，只删一侧会在对方卡片上留下孤儿行 */
+  async removeRelationFor(
+    sourcePath: string,
+    annotationId: string,
+    relation: AnnotationRelation,
+  ): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(sourcePath);
+    if (!(file instanceof TFile)) {
+      return;
+    }
+    try {
+      await this.store.removeRelation(file, annotationId, relation.targetPath, relation.targetId);
+      const target = this.app.vault.getAbstractFileByPath(relation.targetPath);
+      if (target instanceof TFile) {
+        await this.store.removeRelation(target, relation.targetId, sourcePath, annotationId);
+      }
+      new Notice("已解除关系");
+      await this.refreshAnnotations();
+    } catch (error) {
+      console.warn("yh-inklight: 解除关系失败", error);
+      new Notice("解除关系失败，请检查写入权限或同步状态");
+    }
+  }
+
   /** 孤儿块检查：删批注后导出块会留下，这里只报告不删除，避免误删用户写在块内的内容 */
   async checkOrphanBlocks(): Promise<void> {
     const report = await this.store.findOrphanBlocks();
@@ -1506,15 +1623,16 @@ export default class OverlayAnnotationsPlugin extends Plugin {
 
     event.preventDefault();
     event.stopPropagation();
-    this.showMarkdownAnnotationCard(file, primary, sameAnchorComments, mark.getBoundingClientRect());
+    this.showMarkdownAnnotationCard(file, doc, primary, sameAnchorComments, mark.getBoundingClientRect());
   }
 
   /**
-   * 点击 Markdown 高亮弹出的详情卡片：与 PDF / EPUB 共用 AnnotationCard，
-   * 本方法只做 md 批注字段映射，样式与交互由共用卡片统一。
+   * 点击 Markdown 高亮弹出的详情卡片：卡片数据取 buildCards（与侧栏同源），
+   * 内容与动作行由 views/cardBody 统一产出，本方法只给回调。
    */
   private showMarkdownAnnotationCard(
     file: TFile,
+    document: FileAnnotationDocument,
     annotation: HighlightAnnotation | CommentAnnotation,
     extras: readonly CommentAnnotation[],
     rect: DOMRect,
@@ -1522,43 +1640,42 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     this.popoverCard?.dismiss();
     const comment = "content" in annotation ? annotation : null;
     const highlight = comment ? null : (annotation as HighlightAnnotation);
-    const noteContent = comment?.content ?? "";
-    const metaParts = [comment?.author, formatAnnotationTime(annotation.createdAt)].filter(
-      (part): part is string => Boolean(part),
-    );
 
-    const card = new AnnotationCard(
-      {
-        quote: annotation.anchor.selectedText,
-        note: noteContent,
-        renderNote: comment
-          ? (container) => {
-              void MarkdownRenderer.render(this.app, noteContent, container, file.path, this);
-            }
+    // 笔记是挂在高亮上的：按 id 找不到时（点的是便签）用锚点配对，和侧栏同一套配对结果
+    const cards = buildCards(document);
+    const cardData =
+      cards.find((item) => item.id === annotation.id) ??
+      cards.find(
+        (item) =>
+          item.startOffset === annotation.anchor.startOffset && item.text === annotation.anchor.selectedText,
+      );
+    if (!cardData) {
+      return;
+    }
+
+    const card = new AnnotationCard(cardData, {
+      fileName: file.name,
+      app: this.app,
+      component: this,
+      onEdit: comment ? () => void this.editMarkdownComment(file, comment) : undefined,
+      onAddNote: highlight ? () => void this.addNoteToMarkdownHighlight(file, highlight) : undefined,
+      onDelete: () => void this.deleteMarkdownAnnotation(file, annotation.id),
+      onTagsChange: (next) => this.saveMarkdownAnnotationTags(file, annotation.id, next),
+      tagSuggestions: () => this.getTagSuggestions(),
+      onOpenExport: () => void this.openDerivedNote(cardData.sourcePath),
+      onAtomCard: () => void this.createAtomCardFor(cardData),
+      onJumpRelation: (relation) => void this.jumpToRelationTarget(relation),
+      onRemoveRelation: (relation) => void this.removeRelationFor(cardData.sourcePath, cardData.id, relation),
+      extraActions:
+        extras.length > 0
+          ? [{ label: `同段另有 ${extras.length} 条批注`, onClick: () => void this.activateSidebar() }]
           : undefined,
-        tags: normalizeTags(annotation.tags ?? []),
-        color: annotation.color,
-        badge: annotationBadge(comment?.title),
-        meta: metaParts.join(" · "),
-        hasNote: comment !== null,
+      onDismiss: () => {
+        if (this.popoverCard === card) {
+          this.popoverCard = null;
+        }
       },
-      {
-        onEdit: comment ? () => void this.editMarkdownComment(file, comment) : undefined,
-        onAddNote: highlight ? () => void this.addNoteToMarkdownHighlight(file, highlight) : undefined,
-        onDelete: () => void this.deleteMarkdownAnnotation(file, annotation.id),
-        onTagsChange: (next) => this.saveMarkdownAnnotationTags(file, annotation.id, next),
-        tagSuggestions: () => this.getTagSuggestions(),
-        extraActions:
-          extras.length > 0
-            ? [{ label: `同段另有 ${extras.length} 条批注`, onClick: () => void this.activateSidebar() }]
-            : undefined,
-        onDismiss: () => {
-          if (this.popoverCard === card) {
-            this.popoverCard = null;
-          }
-        },
-      },
-    );
+    });
     card.show({ avoid: toPopoverRect(rect), isMobile: Platform.isMobile });
     this.popoverCard = card;
   }

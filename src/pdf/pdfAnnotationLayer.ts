@@ -19,7 +19,9 @@ import {
   PdfReadingProgress,
 } from "../storage/types";
 import { normalizeTags } from "../storage/tags";
-import { AnnotationCard, annotationBadge, formatAnnotationTime } from "../views/annotationCard";
+import { AnnotationCard } from "../views/annotationCard";
+import { CardExternalActions } from "../views/cardBody";
+import { buildCards, SidebarCard } from "../views/cardModel";
 import { toPopoverRect } from "../views/popoverPlacement";
 import { TagSuggestion } from "../views/tagInput";
 import { PdfViewerAdapter } from "./pdfViewerAdapter";
@@ -44,6 +46,8 @@ interface PdfAnnotationLayerOptions {
   /** 详情浮层内编辑标签：按 annotationId 关联到 sidecar */
   setTags?: (file: TFile, annotationId: string, tags: readonly string[]) => Promise<void> | void;
   getTagSuggestions?: () => TagSuggestion[];
+  /** 卡片上的插件级动作（导出笔记/原子卡/关系跳转与解除）：由 main.ts 注入 */
+  cardActions?: CardExternalActions;
 }
 
 interface PdfSelectionSnapshot {
@@ -457,64 +461,70 @@ export class PdfAnnotationLayer {
 
     event.preventDefault();
     event.stopPropagation();
-    this.showCard(file, highlight.getBoundingClientRect(), annotation);
+    this.showCard(file, document, highlight.getBoundingClientRect(), annotation);
   }
 
   /**
-   * 点击划线弹出的详情卡片：与 Markdown / EPUB 共用 AnnotationCard，
-   * 样式、标签编辑、移动端底部弹出都由共用卡片保证，本方法只做 PDF 字段映射。
+   * 点击划线弹出的详情卡片：卡片数据取 buildCards（与侧栏同源），
+   * 内容与动作行由 views/cardBody 统一产出，本方法只给回调。
    */
   private showCard(
     file: TFile,
+    document: FileAnnotationDocument,
     rect: DOMRect,
     annotation: PdfHighlightAnnotation | PdfCommentAnnotation,
   ): void {
     this.card?.dismiss();
     const comment = "content" in annotation ? annotation : null;
     const highlight = comment ? null : (annotation as PdfHighlightAnnotation);
-    const noteContent = comment?.content ?? "";
-    const tags = normalizeTags(annotation.tags ?? []);
 
-    const metaParts = [comment?.author, formatAnnotationTime(annotation.createdAt)].filter(
-      (part): part is string => Boolean(part),
-    );
+    // 便签挂在高亮上：按 id 找不到时用「同页 + 同原文」配对，与侧栏同一套结果
+    const cards = buildCards(document);
+    const cardData =
+      cards.find((item) => item.id === annotation.id) ??
+      cards.find(
+        (item) =>
+          item.pageNumber === annotation.anchor.pageNumber && item.text === annotation.anchor.selectedText,
+      );
+    if (!cardData) {
+      return;
+    }
 
-    const card = new AnnotationCard(
-      {
-        quote: annotation.anchor.selectedText,
-        note: noteContent,
-        renderNote: comment
-          ? (container) => {
-              void MarkdownRenderer.render(this.options.app, noteContent, container, file.path, this.options.component);
-            }
+    const actions = this.options.cardActions ?? {};
+    const card = new AnnotationCard(cardData, {
+      fileName: file.name,
+      app: this.options.app,
+      component: this.options.component,
+      onEdit:
+        comment && this.options.editPdfComment
+          ? () => void this.options.editPdfComment?.(file, comment)
           : undefined,
-        tags,
-        color: annotation.color,
-        badge: annotationBadge(comment?.title),
-        meta: `第 ${annotation.anchor.pageNumber} 页${metaParts.length > 0 ? ` · ${metaParts.join(" · ")}` : ""}`,
-        hasNote: comment !== null,
-      },
-      {
-        onEdit:
-          comment && this.options.editPdfComment
-            ? () => void this.options.editPdfComment?.(file, comment)
-            : undefined,
-        onAddNote:
-          highlight && this.options.addNoteToPdfHighlight
-            ? () => void this.options.addNoteToPdfHighlight?.(file, highlight)
-            : undefined,
-        onDelete: () => void this.removeAnnotation(file, annotation.id),
-        onTagsChange: this.options.setTags
-          ? (next) => this.options.setTags?.(file, annotation.id, next)
+      onAddNote:
+        highlight && this.options.addNoteToPdfHighlight
+          ? () => void this.options.addNoteToPdfHighlight?.(file, highlight)
           : undefined,
-        tagSuggestions: () => this.options.getTagSuggestions?.() ?? [],
-        onDismiss: () => {
-          if (this.card === card) {
-            this.card = null;
+      onDelete: () => void this.removeAnnotation(file, annotation.id),
+      onTagsChange: this.options.setTags
+        ? (next) => this.options.setTags?.(file, annotation.id, next)
+        : undefined,
+      tagSuggestions: () => this.options.getTagSuggestions?.() ?? [],
+      ...(actions.openDerivedNote
+        ? { onOpenExport: () => void actions.openDerivedNote?.(cardData.sourcePath) }
+        : {}),
+      ...(actions.createAtomCard ? { onAtomCard: () => void actions.createAtomCard?.(cardData) } : {}),
+      ...(actions.jumpToRelation ? { onJumpRelation: actions.jumpToRelation } : {}),
+      ...(actions.removeRelation
+        ? {
+            onRemoveRelation: (relation) =>
+              void actions.removeRelation?.(cardData.sourcePath, cardData.id, relation),
           }
-        },
+        : {}),
+      onDismiss: () => {
+        if (this.card === card) {
+          this.card = null;
+        }
       },
-    );
+    });
     card.show({ avoid: toPopoverRect(rect), isMobile: Platform.isMobile });
     this.card = card;
   }

@@ -46,9 +46,10 @@ import {
 } from "./EpubFoliateLoader";
 import { EpubNoteModal, EpubNoteResult } from "./EpubNoteModal";
 import type { TagSuggestion } from "../views/tagInput";
-import { normalizeTags } from "../storage/tags";
 import { EpubAiModal } from "./EpubAiModal";
-import { EpubAnnotationCard, EpubAnnotationCardAnchor } from "./EpubAnnotationCard";
+import { AnnotationCard, AnnotationCardAnchor } from "../views/annotationCard";
+import { CardExternalActions } from "../views/cardBody";
+import { buildCards } from "../views/cardModel";
 import { PopoverRect } from "../views/popoverPlacement";
 import { EpubImageViewer } from "./EpubImageViewer";
 
@@ -188,7 +189,15 @@ export interface EpubReaderViewOptions {
 	onTocChanged: () => void;
 	/** 标签补全候选（已有标签 ∪ 概念页名），由 main.ts 注入 */
 	tagSuggestions?: () => TagSuggestion[];
+	/** 卡片上的插件级动作（跨文件跳转/解除关系/派生笔记/原子卡）：由 main.ts 注入 */
+	cardActions?: EpubCardActions;
 }
+
+/**
+ * 点高亮弹出的卡片与侧栏卡片同源同形，但阅读器不掌握跨文件导航与索引写入，
+ * 这几个动作一律由 main.ts 注入；没注入就不渲染对应按钮（不造点了没反应的控件）。
+ */
+export type EpubCardActions = CardExternalActions;
 
 /**
  * yh-inklight EPUB 阅读器核心视图。
@@ -213,6 +222,7 @@ export class EpubReaderView extends FileView {
 	private readonly saveSettings: () => Promise<void>;
 	private readonly onTocChanged: () => void;
 	private readonly tagSuggestions: () => TagSuggestion[];
+	private readonly cardActions: EpubCardActions;
 
 	// ---- foliate 实例 ----
 
@@ -290,7 +300,7 @@ export class EpubReaderView extends FileView {
 	/** 上一次 relocated 的 fraction，用于识别跳转事件 */
 	private lastRelocatedFraction = 0;
 	private contextMenuEl: HTMLElement | null = null;
-	private annotationCardEl: EpubAnnotationCard | null = null;
+	private annotationCardEl: AnnotationCard | null = null;
 	/** 点击图片放大的全屏查看器（单例，复用同一浮层） */
 	private imageViewerEl: EpubImageViewer | null = null;
 		private lastSelectedCfiRange = "";
@@ -362,6 +372,7 @@ export class EpubReaderView extends FileView {
 		this.saveSettings = options.saveSettings;
 		this.onTocChanged = options.onTocChanged;
 		this.tagSuggestions = options.tagSuggestions ?? (() => []);
+		this.cardActions = options.cardActions ?? {};
 		this.themeManager = new EpubThemeManager();
 		this.currentFlowMode = options.settings.epubDefaultFlow;
 		this.currentFontSize = options.settings.epubFontSize;
@@ -2485,31 +2496,43 @@ export class EpubReaderView extends FileView {
 
 		this.annotationCardEl?.dismiss();
 
-		const card = new EpubAnnotationCard(
-			{
-				quote: highlight.anchor.selectedText,
-				note: comment?.note,
-				noteType: comment?.noteType,
-				tags: normalizeTags(highlight.tags),
-				color: highlight.color,
-				chapter: highlight.anchor.chapter,
-				createdAt: highlight.createdAt,
-				hasNote: comment != null,
+		// 卡片数据与侧栏同源：都用 buildCards 拍平，字段不可能再两处各映射一遍
+		const cards = buildCards(document);
+		const cardData = cards.find((item) => item.cfiRange === sidecarCfi && item.mode === "epub")
+			?? cards.find((item) => item.id === highlight.id);
+		if (!cardData) {
+			return;
+		}
+
+		const actions = this.cardActions;
+		const card = new AnnotationCard(cardData, {
+			fileName: this.file?.name ?? cardData.sourcePath,
+			app: this.app,
+			component: this,
+			onEdit: () => this.editComment(sidecarCfi),
+			onAddNote: () => this.addNoteToHighlight(sidecarCfi),
+			onDelete: () => {
+				void this.deleteAnnotation(highlight.id);
 			},
-			{
-				onEdit: () => this.editComment(sidecarCfi),
-				onAddNote: () => this.addNoteToHighlight(sidecarCfi),
-				onDelete: () => {
-					void this.deleteAnnotation(highlight.id);
-				},
-				onTagsChange: (tags) => this.saveAnnotationTags(highlight.id, tags),
-				tagSuggestions: this.tagSuggestions,
-				onDismiss: () => {
-					// 外部点击关闭后清掉引用，避免翻页护栏误判「卡片还开着」
-					if (this.annotationCardEl === card) {
-						this.annotationCardEl = null;
+			onTagsChange: (tags) => this.saveAnnotationTags(highlight.id, tags),
+			tagSuggestions: this.tagSuggestions,
+			...(actions.openDerivedNote
+				? { onOpenExport: () => void actions.openDerivedNote?.(cardData.sourcePath) }
+				: {}),
+			...(actions.createAtomCard ? { onAtomCard: () => void actions.createAtomCard?.(cardData) } : {}),
+			...(actions.jumpToRelation ? { onJumpRelation: actions.jumpToRelation } : {}),
+			...(actions.removeRelation
+				? {
+						onRemoveRelation: (relation) =>
+							void actions.removeRelation?.(cardData.sourcePath, cardData.id, relation),
 					}
-				},
+				: {}),
+			onDismiss: () => {
+				// 外部点击关闭后清掉引用，避免翻页护栏误判「卡片还开着」
+				if (this.annotationCardEl === card) {
+					this.annotationCardEl = null;
+				}
+			},
 			},
 		);
 		card.show(this.resolveAnnotationCardAnchor(index, range));
@@ -2538,7 +2561,7 @@ export class EpubReaderView extends FileView {
 	/**
 	 * 卡片定位参数：划线外接矩形（多行取并集）+ 可用区域（视口 ∩ 阅读区 − 安全区）。
 	 */
-	private resolveAnnotationCardAnchor(index?: number, range?: Range): EpubAnnotationCardAnchor {
+	private resolveAnnotationCardAnchor(index?: number, range?: Range): AnnotationCardAnchor {
 		const doc =
 			index != null
 				? this.foliateView?.renderer?.getContents?.().find((c) => c.index === index)?.doc

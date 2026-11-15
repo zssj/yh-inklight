@@ -159,3 +159,9 @@ export function debounce<T extends (...args: any[]) => any>(fn: T): T {
 }
 
 export function setIcon(): void {}
+
+/** 只用于让 import 通过：Node 下没有 DOM，渲染函数的断言一律走纯数据层 */
+export const MarkdownRenderer = {
+  render: async (): Promise<void> => undefined,
+  renderMarkdown: async (): Promise<void> => undefined,
+};

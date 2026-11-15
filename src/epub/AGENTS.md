@@ -10,7 +10,7 @@ EpubBookshelfView.ts: 书架视图（ItemView），扫描 vault 内电子书文�
 EpubTocView.ts: 目录侧栏，构建 TOC 树、随阅读位置高亮当前章节、点击跳转 CFI。
 EpubChapterResolver.ts: TOC/spine 章节解析，把 TOC 链接解析为 spine index，规范化 CFI 与进度百分比（0–1）。
 EpubProgressManager.ts: 死代码——全仓无引用，勿改动勿依赖（进度恢复逻辑已在 EpubReaderView 内实现）。
-EpubAnnotationCard.ts: 薄适配层——把 EPUB 批注字段（chapter / createdAt / noteType）翻译成 views/annotationCard 的 AnnotationCardData，样式与交互全部由共用卡片提供（md / pdf / epub 三端一致），本文件不再自绘 DOM；新增 EPUB 专属展示字段走这里，不要再把样式逻辑搬回来。
+（EpubAnnotationCard.ts 已删除）：点击高亮的卡片与侧栏同源同形——EpubReaderView 用 views/cardModel 的 buildCards 取卡片、交给 views/annotationCard 外壳，内容由 views/cardBody 统一渲染。不要再建任何「EPUB 专属字段适配层」：两处映射必然漂移，noteType 就是这么丢的。跨文件动作（导出笔记/原子卡/关系跳转与解除）经 EpubReaderViewOptions.cardActions 由 main.ts 注入，没注入就不渲染对应按钮。
 EpubNoteModal.ts: 便签/想法输入弹窗，移动端用 visualViewport 定位避开键盘；提交前 flush 标签输入框里未回车的文本；补全候选为 TagSuggestion[]（带来源）。
 EpubAiModal.ts: AI 解释/翻译/改写弹窗，内置动作预设与自定义提问，回复可存为便签。
 EpubImageViewer.ts: EPUB 内图片全屏放大查看器，点击放大、再点/Esc 关闭。

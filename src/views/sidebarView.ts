@@ -12,10 +12,9 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
-import { ItemView, MarkdownRenderer, MarkdownView, Notice, Platform, setIcon, TFile, WorkspaceLeaf } from "obsidian";
+import { ItemView, Notice, Platform, setIcon, TFile, WorkspaceLeaf } from "obsidian";
 
 import type OverlayAnnotationsPlugin from "../../main";
-import { formatTime } from "../utils/format";
 import { observeKeyboardInset } from "../utils/keyboardInset";
 import {
   ANNOTATION_COLORS,
@@ -34,7 +33,7 @@ import {
   RelationType,
 } from "../storage/types";
 import { AnnotationKind, AnnotationMode, buildCards, SidebarCard } from "./cardModel";
-import { renderTagChips, renderTagInput, TagSuggestion } from "./tagInput";
+import { CardBodyHost, renderCardBody } from "./cardBody";
 import { RelationModel } from "./relationModel";
 import { openAnnotationTarget } from "./navigation";
 import { hasTag, normalizeTag, tagKey, unionTags } from "../storage/tags";
@@ -489,193 +488,99 @@ export class AnnotationSidebarView extends ItemView {
     });
   }
 
-  /**
-   * 提炼成原子卡：正文只放用户自己写的那句，出处与标签进 frontmatter。
-   * 不做 AI 代写、不批量生成——「用自己的话重写」正是知识内化发生的那一步。
-   */
-  private async createAtomCard(file: TFile | null, cardData: SidebarCard): Promise<void> {
-    if (!file) {
-      return;
-    }
-    try {
-      const result = await this.plugin.store.createAtomCard(
-        file,
-        {
-          annotationId: cardData.id,
-          mode: cardData.mode,
-          quote: cardData.text,
-          content: cardData.content,
-          noteType: cardData.noteType,
-          tags: cardData.tags,
-        },
-        this.plugin.settings.atomCardFolder,
-      );
-      const target = this.app.vault.getAbstractFileByPath(result.path);
-      if (target instanceof TFile) {
-        await this.app.workspace.getLeaf("tab").openFile(target);
-      }
-      new Notice(result.created ? `已提炼成卡片：${result.path}` : `这张卡片已存在：${result.path}`);
-    } catch (error) {
-      console.warn("yh-inklight: 生成原子卡失败", error);
-      new Notice("生成卡片失败，请检查写入权限或同步状态");
-    }
-  }
-
   private renderCard(list: Element, cardData: SidebarCard): void {
     const file = this.fileForCard(cardData);
-    const card = list.createDiv({
-      cls: `yh-ov-card yh-ov-card--${cardData.color}`,
-      attr: this.cardAttributes(cardData),
-    });
-    card.toggleClass("is-orphaned", !!cardData.orphaned);
-
-    const head = card.createDiv({ cls: "yh-ov-card-head" });
-    head.createSpan({ cls: `yh-ov-label yh-label--${cardData.color}`, text: COLOR_LABELS[cardData.color] });
-    head.createSpan({ cls: "yh-ov-meta", text: cardData.mode === "md" ? "Markdown" : cardData.mode === "pdf" ? "PDF" : "EPUB" });
-    head.createSpan({ cls: "yh-ov-dot", text: "·" });
-    const title = (cardData.note && "title" in cardData.note ? cardData.note.title : "") ?? "";
-    const kindLabel = cardData.kind === "highlight" ? "高亮" : "笔记";
-    const type = head.createSpan({
-      cls: "yh-ov-type",
-      text: title ? getTitleLabel(title) : kindLabel,
-    });
-    if (title) {
-      type.dataset.title = title;
-    }
-    // 想法分类标签（insight/question/reminder）：noteType 现已提升到卡片层，三端都能显示
-    if (cardData.noteType) {
-      const labelMap: Record<string, string> = { insight: "💡洞见", question: "❓疑问", reminder: "🔔提醒" };
-      head.createSpan({ cls: "yh-ov-note-type", text: labelMap[cardData.noteType] ?? cardData.noteType });
-    }
-    head.createSpan({ cls: "yh-ov-time", text: formatTime(cardData.createdAt) });
-
-    const quote = card.createDiv({ cls: "yh-ov-quote" });
-    quote.textContent = cardData.text;
-    quote.toggleClass("is-code", cardData.isCode || isCodeLikeText(cardData.text));
-    this.addExpandToggle(quote, card);
-    if (cardData.content) {
-      const content = card.createDiv({ cls: "yh-ov-content" });
-      void MarkdownRenderer.render(this.app, cardData.content, content, cardData.sourcePath, this).then(() => {
-        this.addExpandToggle(content, card);
-      });
-    }
-
-    const tagRow = card.createDiv({ cls: "yh-ov-tags" });
-    if (this.editingTagCardId === cardData.id) {
-      this.mountTagEditor(tagRow, file, cardData, this.plugin.getTagSuggestions());
-    } else {
-      this.mountTagRow(tagRow, file, cardData);
-    }
-
-    if (cardData.relations.length > 0) {
-      this.mountRelationList(card, file, cardData);
-    }
-
-    const source = card.createDiv({ cls: "yh-ov-source" });
-    source.createSpan({ cls: "yh-ov-file", text: file?.name ?? cardData.sourcePath });
-    source.createSpan({
-      cls: "yh-ov-mode",
-      text: cardData.mode === "epub"
-        ? (cardData.chapter ?? "EPUB")
-        : cardData.pageNumber
-          ? `p.${cardData.pageNumber}`
-          : "Markdown",
-    });
-
-    const actions = card.createDiv({ cls: "yh-ov-actions" });
-    // 反查指针：只在这批批注确实导出过时才出现，点了在新标签页打开那篇导出笔记
-    const exportRecord = this.plugin.store.getExportRecord(cardData.sourcePath);
-    const exportedFile = exportRecord.notePath ? this.app.vault.getAbstractFileByPath(exportRecord.notePath) : null;
-    if (exportedFile instanceof TFile) {
-      const openExport = actions.createEl("button", {
-        cls: "yh-ov-btn yh-ov-btn--icon",
-        attr: { type: "button", title: `打开导出笔记：${exportedFile.path}`, "data-action": "open-export" },
-      });
-      setIcon(openExport, "file-text");
-      openExport.addEventListener("click", (event) => {
-        event.stopPropagation();
-        void this.app.workspace.getLeaf("tab").openFile(exportedFile);
-      });
-    }
-
-    // 提炼成卡片：只在「洞见 + 有自己写的内容」时出现，避免给纯划线也长出空卡片
-    if (cardData.noteType === "insight" && cardData.content.trim()) {
-      const atom = actions.createEl("button", {
-        cls: "yh-ov-btn",
-        text: "提炼成卡片",
-        attr: { type: "button", title: "把这条洞见提炼成一张独立的原子卡", "data-action": "atom-card" },
-      });
-      atom.disabled = !file;
-      atom.addEventListener("click", (event) => {
-        event.stopPropagation();
-        void this.createAtomCard(file, cardData);
-      });
-    }
-    if (cardData.note) {
-      const edit = actions.createEl("button", {
-        cls: "yh-ov-btn yh-ov-btn--icon",
-        attr: { type: "button", title: "编辑笔记", "data-action": "edit-note" },
-      });
-      setIcon(edit, "pencil");
-      edit.disabled = !file;
-      edit.addEventListener("click", () => {
-        if (file) {
-          this.openInlineEditor(card, file, cardData, cardData.content);
-        }
-      });
-    } else if (cardData.highlight) {
-      const addNote = actions.createEl("button", {
-        cls: "yh-ov-btn",
-        text: "添加笔记",
-        attr: { type: "button", "data-action": "add-note" },
-      });
-      addNote.disabled = !file;
-      addNote.addEventListener("click", () => {
-        if (file) {
-          addNote.addClass("hidden");
-          this.openInlineEditor(card, file, cardData, "");
-        }
-      });
-    }
-
-    const jump = actions.createEl("button", {
-      cls: "yh-ov-btn",
-      text: "跳转",
-      attr: { type: "button", "data-action": "jump" },
-    });
-    jump.disabled = !file;
-    jump.addEventListener("click", () => {
-      if (file) {
-        this.jumpTo(file, cardData.startOffset, cardData.pageNumber, cardData.mode, cardData.cfiRange);
-      }
-    });
-
-    const remove = actions.createEl("button", {
-      cls: "yh-ov-btn yh-ov-btn--danger",
-      text: "删除",
-      attr: { type: "button", "data-action": "delete" },
-    });
-    remove.disabled = !file;
-    remove.addEventListener("click", async () => {
-      if (file) {
-        await this.deleteCard(file, cardData);
-        new Notice("批注已删除");
-        await this.plugin.refreshAnnotations();
-      }
-    });
+    const card = list.createDiv({ attr: this.cardAttributes(cardData) });
+    // 内容、字段顺序、动作行由 views/cardBody 唯一产出，与点击高亮的浮层是同一份 DOM
+    renderCardBody(card, cardData, this.buildCardHost(cardData, file, card));
 
     if (this.plugin.settings.contentRelations) {
       this.renderRelated(card, cardData);
     }
 
     const edit = card.createDiv({ cls: "yh-ov-edit hidden" });
-    const textarea = edit.createEl("textarea", {
+    edit.createEl("textarea", {
       cls: "yh-ov-textarea",
       attr: { placeholder: "写下你的想法..." },
     });
     const editActions = edit.createDiv({ cls: "yh-ov-edit-actions" });
     editActions.createEl("button", { cls: "yh-ov-save", text: "保存", attr: { type: "button" } });
     editActions.createEl("button", { cls: "yh-ov-cancel", text: "取消", attr: { type: "button" } });
+  }
+
+  /**
+   * 把视图能力组装成卡片回调：渲染器只认这张表，列表与浮层各给各的。
+   * 没给回调 = 该动作此刻不可用，不渲染按钮——绝不画「点了没反应」的控件。
+   */
+  private buildCardHost(cardData: SidebarCard, file: TFile | null, root: HTMLElement): CardBodyHost {
+    const exportRecord = this.plugin.store.getExportRecord(cardData.sourcePath);
+    const exportedFile = exportRecord.notePath ? this.app.vault.getAbstractFileByPath(exportRecord.notePath) : null;
+
+    return {
+      host: "list",
+      fileName: file?.name ?? cardData.sourcePath,
+      app: this.app,
+      component: this,
+      tags: {
+        isTagEditing: () => this.editingTagCardId === cardData.id,
+        onStartTagEdit: () => {
+          // 只有用户主动点「+」才抢焦点；整表重绘重建走另一条路径，不置这个标志
+          this.tagEditorAutoFocus = true;
+          this.editingTagCardId = cardData.id;
+        },
+        suggestions: () => this.plugin.getTagSuggestions(),
+        onChange: (tags) => {
+          if (!file) {
+            return;
+          }
+          return this.persistCardTags(file, cardData, tags);
+        },
+        initialQuery: () => this.pendingTagQuery,
+        onQueryChange: (value) => {
+          this.pendingTagQuery = value;
+        },
+        onChipClick: (tag) => this.focusTag(tagKey(tag)),
+        onEditorReady: (row, repaint) => this.wireTagEditor(row, cardData, repaint),
+        quickApply: () => {
+          const currentTags = this.plugin.settings.obTagBridge ? this.plugin.getFileObsidianTags(file) : [];
+          return currentTags.length > 0
+            ? { label: `沿用本文档标签（${currentTags.length}）`, tags: currentTags }
+            : undefined;
+        },
+      },
+      actions: {
+        "open-export":
+          exportedFile instanceof TFile
+            ? () => void this.app.workspace.getLeaf("tab").openFile(exportedFile)
+            : undefined,
+        // 提炼成卡片：只在「洞见 + 有自己写的内容」时出现，避免给纯划线也长出空卡片
+        "atom-card":
+          file && cardData.noteType === "insight" && cardData.content.trim()
+            ? () => void this.plugin.createAtomCardFor(cardData)
+            : undefined,
+        "edit-note": file && cardData.note
+          ? () => this.openInlineEditor(root, file, cardData, cardData.content)
+          : undefined,
+        "add-note": file && !cardData.note
+          ? () => {
+              root.querySelector<HTMLElement>('[data-action="add-note"]')?.addClass("hidden");
+              this.openInlineEditor(root, file, cardData, "");
+            }
+          : undefined,
+        jump: file
+          ? () => this.jumpTo(file, cardData.startOffset, cardData.pageNumber, cardData.mode, cardData.cfiRange)
+          : undefined,
+        delete: file ? () => void this.deleteCardWithNotice(file, cardData) : undefined,
+      },
+      onJumpRelation: (relation) => void this.jumpToRelation(relation),
+      onRemoveRelation: (relation) => void this.removeRelation(file, cardData, relation),
+    };
+  }
+
+  private async deleteCardWithNotice(file: TFile, cardData: SidebarCard): Promise<void> {
+    await this.deleteCard(file, cardData);
+    new Notice("批注已删除");
+    await this.plugin.refreshAnnotations();
   }
 
   /**
@@ -922,57 +827,6 @@ export class AnnotationSidebarView extends ItemView {
     );
   }
 
-  /**
-   * 关系区：把「支持 / 反驳 / 举例 / 延伸」从只活在导出笔记里，搬到卡片上直接可见。
-   * 点一行跳到目标那句，点 × 双向解除——关系在插件内第一次可操作。
-   */
-  private mountRelationList(card: HTMLElement, file: TFile | null, cardData: SidebarCard): void {
-    const box = card.createDiv({ cls: "yh-ov-relations" });
-
-    for (const relation of cardData.relations) {
-      const row = box.createDiv({ cls: `yh-ov-rel yh-ov-rel--${relation.type}` });
-      row.setAttribute("role", "button");
-      row.setAttribute("tabindex", "0");
-
-      const label = RELATION_TYPE_LABELS.find(([type]) => type === relation.type)?.[1] ?? relation.type;
-      row.createSpan({ cls: "yh-ov-rel-type", text: label });
-
-      const fallback = relation.targetPath.split("/").pop() ?? relation.targetPath;
-      const quote = (relation.targetQuote?.trim() || fallback).replace(/\s+/g, " ");
-      row.createSpan({
-        cls: "yh-ov-rel-quote",
-        text: quote.length > 30 ? `${quote.slice(0, 30)}…` : quote,
-        attr: { title: relation.targetPath },
-      });
-
-      const remove = row.createSpan({
-        cls: "yh-ov-rel-remove",
-        text: "×",
-        attr: { role: "button", tabindex: "0", "aria-label": "解除关系", title: "解除关系（两侧一起断开）" },
-      });
-
-      row.addEventListener("click", () => void this.jumpToRelation(relation));
-      row.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          void this.jumpToRelation(relation);
-        }
-      });
-      remove.addEventListener("click", (event) => {
-        event.stopPropagation();
-        void this.removeRelation(file, cardData, relation);
-      });
-      remove.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") {
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        void this.removeRelation(file, cardData, relation);
-      });
-    }
-  }
-
   private async jumpToRelation(relation: AnnotationRelation): Promise<void> {
     const target = this.app.vault.getAbstractFileByPath(relation.targetPath);
     if (!(target instanceof TFile)) {
@@ -1012,81 +866,15 @@ export class AnnotationSidebarView extends ItemView {
     }
   }
 
-  /** 标签行：默认只读 chip + 加号；点加号原地切编辑态，不弹窗 */
-  private mountTagRow(row: HTMLElement, file: TFile | null, cardData: SidebarCard): void {
-    row.empty();
-    row.removeClass("is-editing");
-
-    const suggestions = this.plugin.getTagSuggestions();
-    renderTagChips(row, cardData.tags, {
-      onChipClick: (tag) => this.focusTag(tagKey(tag)),
-      onOverflowClick: () => {
-        this.tagEditorAutoFocus = true;
-        this.mountTagEditor(row, file, cardData, suggestions);
-      },
-    });
-
-    const add = row.createSpan({
-      cls: "yh-ov-tag-add",
-      text: "+",
-      attr: { role: "button", tabindex: "0", "aria-label": "添加标签", title: "添加标签" },
-    });
-    // 阻止 + 抢焦点：否则 click 回调里 row.empty() 删掉的是「正持有焦点的节点」，
-    // 浏览器把焦点退回 body，接着挂载的输入框会立刻失焦。
-    add.addEventListener("mousedown", (event) => {
-      event.preventDefault();
-    });
-    const open = (event: Event): void => {
-      event.stopPropagation();
-      // 只有用户主动点「+」才抢焦点；重绘重建走另一条路径，不置这个标志
-      this.tagEditorAutoFocus = true;
-      this.mountTagEditor(row, file, cardData, suggestions);
-    };
-    add.addEventListener("click", open);
-    add.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        open(event);
-      }
-    });
-  }
-
   /**
-   * 进入标签编辑态。
-   * 编辑态存于 this.editingTagCardId，关闭只由「点卡片外 / Esc」显式触发；
-   * 不再用 blur + 定时器拆解，避免焦点抖动导致输入框一闪即逝。
+   * 标签编辑器由 views/cardBody 统一渲染，这里只接管「列表特有」的行为：
+   * 焦点、滚入可视区、移动端软键盘避让、点卡片外 / Esc 退出编辑态。
+   * 编辑态存于 this.editingTagCardId，重绘不丢；退出后 repaint 把标签行换回 chip。
    */
-  private mountTagEditor(row: HTMLElement, file: TFile | null, cardData: SidebarCard, suggestions: readonly TagSuggestion[]): void {
+  private wireTagEditor(row: HTMLElement, cardData: SidebarCard, repaint: () => void): void {
     // 本次挂载是否由用户主动触发；重绘重建时为 false，不抢焦点、不弹输入法
     const shouldFocus = this.tagEditorAutoFocus;
     this.tagEditorAutoFocus = false;
-    this.editingTagCardId = cardData.id;
-    row.empty();
-    row.addClass("is-editing");
-    // 按当前划线内容推荐用过的标签：只从历史里挑、不发明新词，冷启动或快照未就绪时静默为空
-    const recommended: TagSuggestion[] = this.plugin.settings.contentRelations
-      ? this.relations.getRecommendedTags(cardData).map((name): TagSuggestion => ({ name, kind: "recommended" }))
-      : [];
-    const currentTags = this.plugin.settings.obTagBridge ? this.plugin.getFileObsidianTags(file) : [];
-    const quickApply = currentTags.length > 0
-      ? { label: `沿用本文档标签（${currentTags.length}）`, tags: currentTags }
-      : undefined;
-    renderTagInput(row, {
-      tags: cardData.tags,
-      suggestions: [...recommended, ...suggestions],
-      quickApply,
-      // 侧栏点 + 即刻给出候选：空内容也显示，不必先输入一个字符
-      showSuggestionsOnOpen: true,
-      // 重绘回填未提交输入，避免一次刷新把正在打的标签吞掉
-      initialQuery: this.pendingTagQuery,
-      onQueryChange: (value) => {
-        this.pendingTagQuery = value;
-      },
-      onChange: (tags) => {
-        cardData.tags = tags;
-        void this.persistCardTags(file, cardData, tags);
-      },
-    });
 
     const field = row.querySelector<HTMLInputElement>(".yh-tag-input-field");
     const list = row.closest<HTMLElement>(".yh-ov-list");
@@ -1141,7 +929,7 @@ export class AnnotationSidebarView extends ItemView {
       const shouldRender = this.pendingRender;
       this.pendingRender = false;
       if (row.isConnected) {
-        this.mountTagRow(row, file, cardData);
+        repaint();
       }
       // 编辑期间攒下的刷新请求，退出编辑后补一次
       if (shouldRender) {
@@ -1177,6 +965,7 @@ export class AnnotationSidebarView extends ItemView {
       { signal },
     );
   }
+
 
   /** 写入标签：一张卡片可能是高亮 + 笔记，两者写同一份数组 */
   private async persistCardTags(file: TFile | null, cardData: SidebarCard, tags: string[]): Promise<void> {
@@ -1392,37 +1181,6 @@ export class AnnotationSidebarView extends ItemView {
     };
   }
 
-  private addExpandToggle(contentEl: HTMLElement, wrapperEl: HTMLElement): void {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const lineHeight = parseFloat(getComputedStyle(contentEl).lineHeight);
-        const threshold = lineHeight * 3 + 10;
-        if (contentEl.scrollHeight <= threshold + 2) {
-          return;
-        }
-
-        const button = document.createElement("span");
-        button.className = "yh-ov-expand-btn";
-        button.textContent = "展开";
-        button.tabIndex = 0;
-        button.setAttribute("role", "button");
-        contentEl.insertAdjacentElement("afterend", button);
-        const toggle = (): void => {
-          const expanded = contentEl.hasClass("expanded");
-          contentEl.toggleClass("expanded", !expanded);
-          button.setText(expanded ? "展开" : "收起");
-        };
-        button.addEventListener("click", toggle);
-        button.addEventListener("keydown", (event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            toggle();
-          }
-        });
-      });
-    });
-  }
-
   private async saveCardContent(file: TFile, card: SidebarCard, content: string): Promise<void> {
     if (card.note && card.mode === "pdf") {
       await this.plugin.store.updatePdfComment(file, {
@@ -1589,16 +1347,3 @@ function findAnnotationById(document: FileAnnotationDocument, annotationId: stri
   return null;
 }
 
-function getTitleLabel(title: string): string {
-  const labels: Record<string, string> = {
-    Insight: "洞察",
-    Question: "疑问",
-    Reminder: "提醒",
-  };
-  return labels[title] ?? title;
-}
-
-
-function isCodeLikeText(text: string): boolean {
-  return /^[ \t]{2,}/m.test(text) || /\n[ \t]{2,}\S/.test(text);
-}

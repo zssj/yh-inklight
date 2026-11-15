@@ -1591,142 +1591,6 @@ body.yh-epub-nav-hidden .mobile-navbar {
   cursor: default;
 }
 
-.yh-epub-card-accent {
-  flex-shrink: 0;
-  width: 5px;
-}
-
-.yh-epub-card-body {
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 0;
-  padding: 12px 14px 12px 12px;
-  /* 浮层被 max-height 压缩时只滚动内容，整体仍留在可视区内 */
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.yh-epub-card-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.yh-epub-card-badge {
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: var(--background-secondary);
-  color: var(--text-normal);
-  font-size: var(--yh-font-sm);
-  white-space: nowrap;
-}
-
-.yh-epub-card-color-label {
-  flex: 1 1 auto;
-  font-size: var(--yh-font-sm);
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.yh-epub-card-close {
-  flex-shrink: 0;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.yh-epub-card-close:hover {
-  color: var(--text-normal);
-}
-
-.yh-epub-card-quote {
-  margin-bottom: 8px;
-  padding: 6px 8px;
-  border-left: 3px solid var(--yh-yellow);
-  background: var(--yh-yellow-bg);
-  border-radius: 0 var(--yh-radius-sm) var(--yh-radius-sm) 0;
-  font-size: var(--yh-font-sm);
-  color: var(--text-muted);
-  line-height: 1.5;
-  max-height: 96px;
-  overflow-y: auto;
-}
-
-.yh-epub-card-note {
-  font-size: 13px;
-  color: var(--text-normal);
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 180px;
-  overflow-y: auto;
-  margin-bottom: 8px;
-}
-
-.yh-epub-card-note.is-empty {
-  color: var(--text-muted);
-  font-style: italic;
-}
-
-/* MD/PDF 的笔记是 markdown 渲染结果：块级元素自带外边距，需抵消 pre-wrap 与首尾间距 */
-.yh-epub-card-note.is-markdown {
-  white-space: normal;
-}
-
-.yh-epub-card-note.is-markdown > :first-child {
-  margin-top: 0;
-}
-
-.yh-epub-card-note.is-markdown > :last-child {
-  margin-bottom: 0;
-}
-
-/* 标签行：只读 chip 与内联编辑器共用一个容器 */
-.yh-epub-card-tags {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 4px;
-  margin-top: 8px;
-}
-
-.yh-epub-card-tags:empty {
-  display: none;
-}
-
-.yh-epub-card-tags-label {
-  flex-shrink: 0;
-  padding-top: 1px;
-  font-size: var(--yh-font-xs);
-  line-height: 1.6;
-  color: var(--text-faint);
-}
-
-.yh-epub-card-tag-editor {
-  flex: 1 1 100%;
-  min-width: 0;
-}
-
-.yh-epub-card-tag-field {
-  width: 100%;
-}
-
-.yh-epub-card-tag-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-  margin-top: 6px;
-}
-
 /* 补全下拉改为文档流，避免被浮层 overflow:hidden 裁切 */
 .yh-epub-annotation-popover .yh-tag-suggest {
   position: static;
@@ -1738,64 +1602,46 @@ body.yh-epub-nav-hidden .mobile-navbar {
   box-shadow: none;
 }
 
-.yh-epub-card-meta {
-  margin-top: 8px;
-  font-size: var(--yh-font-xs);
+/* 浮层里的卡片就是侧栏那张卡：配色、字号、字段顺序、动作行全部沿用 .yh-ov-*，
+   这里只把「列表项」的容器属性复位，让外层 .yh-epub-annotation-popover 负责边框与阴影。 */
+.yh-epub-annotation-popover .yh-ov-card {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  border-radius: 0;
+  box-shadow: none;
+  /* 被 max-height 压缩时只滚动卡片内容，整体仍留在可视区内 */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* 浮层不跟随 hover 浮起：它不是列表项，鼠标划过不应当有位移感 */
+.yh-epub-annotation-popover .yh-ov-card:hover {
+  box-shadow: none;
+}
+
+/* 头行右侧关闭按钮（列表没有这个动作，所以只在浮层里出现） */
+.yh-ov-card-close {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
   color: var(--text-faint);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.yh-epub-card-meta:empty {
-  display: none;
-}
-
-.yh-epub-card-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 0.5px solid var(--yh-border);
-}
-
-.yh-epub-card-btn {
-  padding: 4px 10px;
-  border: 1px solid var(--yh-border);
-  border-radius: var(--yh-radius-sm);
-  font-size: var(--yh-font-sm);
+  font-size: 12px;
+  line-height: 1;
   cursor: pointer;
 }
 
-.yh-epub-card-btn.is-edit,
-.yh-epub-card-btn.is-tag {
-  background: var(--background-secondary);
+.yh-ov-card-close:hover {
+  background: rgba(0, 0, 0, 0.08);
   color: var(--text-normal);
 }
 
-.yh-epub-card-btn.is-edit:hover,
-.yh-epub-card-btn.is-tag:hover {
-  background: var(--background-modifier-hover);
-}
-
-.yh-epub-card-btn.is-primary {
-  background: var(--interactive-accent);
-  border-color: var(--interactive-accent);
-  color: var(--text-on-accent);
-}
-
-.yh-epub-card-btn.is-delete {
-  margin-left: auto;
-  background: var(--background-modifier-error);
-  border-color: transparent;
-  color: #fff;
-}
-
-.yh-epub-card-btn.is-delete:hover {
-  background: var(--background-modifier-error-hover);
-  color: #fff;
+.theme-dark .yh-ov-card-close:hover {
+  background: rgba(255, 255, 255, 0.12);
 }
 
 /* 底部卡片不设 max-width 断点：平板/大屏手机 Platform.isMobile 为真时同样有定位。

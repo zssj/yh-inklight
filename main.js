@@ -20328,7 +20328,7 @@ var MarkdownStatsView = class extends import_obsidian19.ItemView {
         const info = row.createDiv({ cls: "md-stats-info" });
         const text = (entry.content || entry.quote).replace(/\s+/g, " ").trim();
         info.createEl("div", {
-          cls: "md-stats-title",
+          cls: "md-stats-title md-stats-review-text",
           text: text.length > 60 ? `${text.slice(0, 60)}\u2026` : text
         });
         const fileName = entry.filePath.split("/").pop() ?? entry.filePath;

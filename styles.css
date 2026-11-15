@@ -2706,6 +2706,18 @@ a.yh-epub-goto-link:hover {
   white-space: nowrap;
 }
 
+/* 出处行（书名 · 关联数）：此前无对应规则，会继承 Obsidian 正文默认字号（约 16px），
+   比上方 14px 的内容还大，层级倒挂。这里固定为最小号 + 次要色，只作注脚。 */
+.md-stats-meta {
+  margin-top: 3px;
+  font-size: var(--yh-font-xs);
+  line-height: 1.4;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .md-stats-badge {
   flex-shrink: 0;
   padding: 2px 8px;
@@ -2799,6 +2811,20 @@ a.yh-epub-goto-link:hover {
 
 .md-stats-item.md-stats-review-item .md-stats-review-meta {
   color: var(--text-muted);
+}
+
+/* 回顾区的正文：比出处行大一档（15 : 11），改用常规字重并允许两行，
+   让「自己的想法」成为卡片主体，书名只作下方注脚。只作用于回顾区，不动「全部笔记」列表。 */
+.md-stats-title.md-stats-review-text {
+  font-size: calc(var(--yh-font-md) + 1px);
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  word-break: break-word;
 }
 
 .yh-md-stats-modal-actions {

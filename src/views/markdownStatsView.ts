@@ -421,8 +421,9 @@ export class MarkdownStatsView extends ItemView {
 
         const info = row.createDiv({ cls: "md-stats-info" });
         const text = (entry.content || entry.quote).replace(/\s+/g, " ").trim();
+        // 正文用 review-text 覆盖 title：允许两行，字号与字重都高于下方出处行
         info.createEl("div", {
-          cls: "md-stats-title",
+          cls: "md-stats-title md-stats-review-text",
           text: text.length > 60 ? `${text.slice(0, 60)}…` : text,
         });
         const fileName = entry.filePath.split("/").pop() ?? entry.filePath;

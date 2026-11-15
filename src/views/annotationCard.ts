@@ -39,8 +39,18 @@ export interface AnnotationCardOptions {
   onDismiss?: () => void;
 }
 
-/** 移动端浮层与屏幕边缘的间距：左右由 CSS 的同名变量控制，底部在这里加 */
-const SHEET_GUTTER = 10;
+/**
+ * 移动端浮层与屏幕边缘的间距。
+ * 底部必须留够：手机底部有手势条/导航栏，贴底时最后一行动作会落在不可点区域。
+ * 左右由 CSS 的 --yh-sheet-gutter 控制，数值与这里保持一致。
+ */
+const SHEET_BOTTOM_GUTTER = 40;
+/** 距屏幕顶部的最小间距（状态栏之外） */
+const SHEET_TOP_GUTTER = 12;
+/** 就近放置时与高亮块的间隙 */
+const SHEET_ANCHOR_GAP = 10;
+/** 空间小于这个值就不值得贴高亮了，改为撑满可用区 */
+const SHEET_MIN_USEFUL = 220;
 
 export interface AnnotationCardAnchor {
   /** 划线/选区在视口坐标下的外接矩形（多行取并集），定位时整块避开 */
@@ -53,7 +63,9 @@ export interface AnnotationCardAnchor {
 /**
  * 点击高亮后弹出的标注详情卡片，Markdown / PDF / EPUB 三端共用。
  * 内容、字段顺序、动作行与侧栏卡片完全一致（同一渲染器），差异只有外壳：
- * 桌面端按选区四侧择优定位，移动端为底部弹出卡片（跟随软键盘上移），点卡片外即关闭。
+ * 桌面端按选区四侧择优定位；移动端贴着选区上/下方就近放置，四边都不贴屏幕
+ * （底部至少留 SHEET_BOTTOM_GUTTER，避开手势区与导航栏），键盘弹起时跟随上移；
+ * 点卡片外即关闭。
  */
 export class AnnotationCard {
   private readonly el: HTMLElement;
@@ -159,18 +171,7 @@ export class AnnotationCard {
     if (this.dismissed || !this.anchor) return;
 
     if (this.anchor.isMobile) {
-      const vv = window.visualViewport;
-      const keyboardInset = vv ? Math.max(0, window.innerHeight - vv.height - (vv.offsetTop ?? 0)) : 0;
-      // 键盘弹出时可视区底边就是键盘顶；导航栏若被键盘盖住则不重复扣减
-      const visualBottom = window.innerHeight - keyboardInset;
-      const bottomInset = Math.min(
-        window.innerHeight,
-        keyboardInset + this.measureMobileBarInset(visualBottom),
-      );
-      // 不贴屏幕底边：键盘/导航栏之外再让出一个间距，四边都不挨边
-      this.el.style.bottom = `${bottomInset + SHEET_GUTTER}px`;
-      const available = Math.max(160, window.innerHeight - bottomInset - SHEET_GUTTER * 2);
-      this.el.style.maxHeight = `min(70vh, ${available}px)`;
+      this.placeMobile();
       return;
     }
 
@@ -186,6 +187,84 @@ export class AnnotationCard {
     this.el.style.maxHeight = `${placement.maxHeight}px`;
     this.el.dataset.side = placement.side;
     this.el.style.visibility = "";
+  }
+
+  /**
+   * 移动端定位：优先贴着高亮的上下方就近放置，并且**任何时候都不贴屏幕底边**。
+   *
+   * 之前一律 bottom:0 + 10px，最后一行动作正好压在手机底部手势区/导航栏上，
+   * 看着在、点不动。现在底部固定留 SHEET_BOTTOM_GUTTER，再把浮层往高亮那边靠：
+   * 高亮下方放不下就翻到上方，两侧都放不下才撑满可用区（内容在卡片内滚动）。
+   * 键盘弹起时不做就近判断——跟随键盘贴住可视区底最稳，否则会被键盘压住。
+   */
+  private placeMobile(): void {
+    const el = this.el;
+    const viewportH = window.innerHeight;
+    const vv = window.visualViewport;
+    const keyboardInset = vv ? Math.max(0, viewportH - vv.height - (vv.offsetTop ?? 0)) : 0;
+    // 键盘弹出时可视区底边就是键盘顶；导航栏若被键盘盖住则不重复扣减
+    const visualBottom = viewportH - keyboardInset;
+    const bottomInset = Math.min(
+      viewportH,
+      keyboardInset + this.measureMobileBarInset(visualBottom),
+    );
+
+    // 可用区：顶部与底部都留白，底部余量要给手势区让位
+    const limitTop = SHEET_TOP_GUTTER;
+    const bottomEdge = viewportH - bottomInset - SHEET_BOTTOM_GUTTER;
+    const fullHeight = Math.max(160, bottomEdge - limitTop);
+
+    // 先量自然高度：清掉三边定位后再读，避免上一次的 maxHeight 把结果压扁
+    el.style.top = "";
+    el.style.bottom = "";
+    el.style.maxHeight = "none";
+    el.style.visibility = "hidden";
+    const natural = el.getBoundingClientRect().height;
+
+    const avoid = this.anchor?.avoid;
+    if (keyboardInset > 0 || !avoid || avoid.bottom <= avoid.top) {
+      // 键盘弹起 / 拿不到高亮位置：贴可视区底部，但保留底部余量
+      el.style.top = "";
+      el.style.bottom = `${bottomInset + SHEET_BOTTOM_GUTTER}px`;
+      el.style.maxHeight = `${fullHeight}px`;
+      el.style.visibility = "";
+      return;
+    }
+
+    const spaceBelow = bottomEdge - (avoid.bottom + SHEET_ANCHOR_GAP);
+    const spaceAbove = avoid.top - SHEET_ANCHOR_GAP - limitTop;
+
+    let top: number | null = null;
+    let bottom: number | null = null;
+    let maxHeight = fullHeight;
+
+    if (spaceBelow >= natural && spaceBelow >= SHEET_MIN_USEFUL) {
+      // 高亮下方放得下整张卡：紧接其下
+      top = avoid.bottom + SHEET_ANCHOR_GAP;
+      maxHeight = spaceBelow;
+    } else if (spaceAbove >= natural && spaceAbove >= SHEET_MIN_USEFUL) {
+      // 下方不够但上方够：翻到高亮上方，底边贴着高亮
+      bottom = viewportH - (avoid.top - SHEET_ANCHOR_GAP);
+      maxHeight = spaceAbove;
+    } else if (Math.max(spaceBelow, spaceAbove) >= SHEET_MIN_USEFUL) {
+      // 两侧都放不下自然高度：选空间大的一侧，内容在卡片内滚动
+      if (spaceBelow >= spaceAbove) {
+        top = avoid.bottom + SHEET_ANCHOR_GAP;
+        maxHeight = spaceBelow;
+      } else {
+        bottom = viewportH - (avoid.top - SHEET_ANCHOR_GAP);
+        maxHeight = spaceAbove;
+      }
+    } else {
+      // 高亮几乎占满可视区：撑满上下留白之间的区域
+      top = limitTop;
+      maxHeight = fullHeight;
+    }
+
+    el.style.top = top == null ? "" : `${top}px`;
+    el.style.bottom = bottom == null ? "auto" : `${bottom}px`;
+    el.style.maxHeight = `${Math.max(160, Math.min(maxHeight, fullHeight))}px`;
+    el.style.visibility = "";
   }
 
   /**

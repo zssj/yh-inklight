@@ -9800,7 +9800,10 @@ function computePopoverPlacement(avoid, size, bounds) {
 }
 
 // src/views/annotationCard.ts
-var SHEET_GUTTER = 10;
+var SHEET_BOTTOM_GUTTER = 40;
+var SHEET_TOP_GUTTER = 12;
+var SHEET_ANCHOR_GAP = 10;
+var SHEET_MIN_USEFUL = 220;
 var AnnotationCard = class {
   constructor(card, options) {
     // 视图状态一律存类字段，任何重绘都不丢编辑态
@@ -9888,16 +9891,7 @@ var AnnotationCard = class {
   place() {
     if (this.dismissed || !this.anchor) return;
     if (this.anchor.isMobile) {
-      const vv = window.visualViewport;
-      const keyboardInset = vv ? Math.max(0, window.innerHeight - vv.height - (vv.offsetTop ?? 0)) : 0;
-      const visualBottom = window.innerHeight - keyboardInset;
-      const bottomInset = Math.min(
-        window.innerHeight,
-        keyboardInset + this.measureMobileBarInset(visualBottom)
-      );
-      this.el.style.bottom = `${bottomInset + SHEET_GUTTER}px`;
-      const available = Math.max(160, window.innerHeight - bottomInset - SHEET_GUTTER * 2);
-      this.el.style.maxHeight = `min(70vh, ${available}px)`;
+      this.placeMobile();
       return;
     }
     this.el.style.visibility = "hidden";
@@ -9912,6 +9906,68 @@ var AnnotationCard = class {
     this.el.style.maxHeight = `${placement.maxHeight}px`;
     this.el.dataset.side = placement.side;
     this.el.style.visibility = "";
+  }
+  /**
+   * 移动端定位：优先贴着高亮的上下方就近放置，并且**任何时候都不贴屏幕底边**。
+   *
+   * 之前一律 bottom:0 + 10px，最后一行动作正好压在手机底部手势区/导航栏上，
+   * 看着在、点不动。现在底部固定留 SHEET_BOTTOM_GUTTER，再把浮层往高亮那边靠：
+   * 高亮下方放不下就翻到上方，两侧都放不下才撑满可用区（内容在卡片内滚动）。
+   * 键盘弹起时不做就近判断——跟随键盘贴住可视区底最稳，否则会被键盘压住。
+   */
+  placeMobile() {
+    const el = this.el;
+    const viewportH = window.innerHeight;
+    const vv = window.visualViewport;
+    const keyboardInset = vv ? Math.max(0, viewportH - vv.height - (vv.offsetTop ?? 0)) : 0;
+    const visualBottom = viewportH - keyboardInset;
+    const bottomInset = Math.min(
+      viewportH,
+      keyboardInset + this.measureMobileBarInset(visualBottom)
+    );
+    const limitTop = SHEET_TOP_GUTTER;
+    const bottomEdge = viewportH - bottomInset - SHEET_BOTTOM_GUTTER;
+    const fullHeight = Math.max(160, bottomEdge - limitTop);
+    el.style.top = "";
+    el.style.bottom = "";
+    el.style.maxHeight = "none";
+    el.style.visibility = "hidden";
+    const natural = el.getBoundingClientRect().height;
+    const avoid = this.anchor?.avoid;
+    if (keyboardInset > 0 || !avoid || avoid.bottom <= avoid.top) {
+      el.style.top = "";
+      el.style.bottom = `${bottomInset + SHEET_BOTTOM_GUTTER}px`;
+      el.style.maxHeight = `${fullHeight}px`;
+      el.style.visibility = "";
+      return;
+    }
+    const spaceBelow = bottomEdge - (avoid.bottom + SHEET_ANCHOR_GAP);
+    const spaceAbove = avoid.top - SHEET_ANCHOR_GAP - limitTop;
+    let top = null;
+    let bottom = null;
+    let maxHeight = fullHeight;
+    if (spaceBelow >= natural && spaceBelow >= SHEET_MIN_USEFUL) {
+      top = avoid.bottom + SHEET_ANCHOR_GAP;
+      maxHeight = spaceBelow;
+    } else if (spaceAbove >= natural && spaceAbove >= SHEET_MIN_USEFUL) {
+      bottom = viewportH - (avoid.top - SHEET_ANCHOR_GAP);
+      maxHeight = spaceAbove;
+    } else if (Math.max(spaceBelow, spaceAbove) >= SHEET_MIN_USEFUL) {
+      if (spaceBelow >= spaceAbove) {
+        top = avoid.bottom + SHEET_ANCHOR_GAP;
+        maxHeight = spaceBelow;
+      } else {
+        bottom = viewportH - (avoid.top - SHEET_ANCHOR_GAP);
+        maxHeight = spaceAbove;
+      }
+    } else {
+      top = limitTop;
+      maxHeight = fullHeight;
+    }
+    el.style.top = top == null ? "" : `${top}px`;
+    el.style.bottom = bottom == null ? "auto" : `${bottom}px`;
+    el.style.maxHeight = `${Math.max(160, Math.min(maxHeight, fullHeight))}px`;
+    el.style.visibility = "";
   }
   /**
    * 移动端底部固定栏（Obsidian 导航栏/工具栏）在可视区内实际占用的高度。

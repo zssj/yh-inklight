@@ -1648,13 +1648,16 @@ body.yh-epub-nav-hidden .mobile-navbar {
    bottom 由卡片按 visualViewport 计算（键盘 + 底部安全区 + 间距），这里只管左右与圆角；
    margin-bottom 吃掉 iOS 底部安全区，避免圆角被 home indicator 压住。 */
 .yh-epub-annotation-popover.is-mobile {
-  left: var(--yh-sheet-gutter, 10px);
-  right: var(--yh-sheet-gutter, 10px);
-  top: auto !important;
+  /* 左右各留 12px（与 annotationCard 的 SHEET 常量同口径），四边都不贴屏幕 */
+  left: 12px;
+  right: 12px;
+  /* 不能加 !important：就近放置时 JS 会写内联 top，贴在高亮的上/下方 */
+  top: auto;
   bottom: 0;
   width: auto;
   max-width: none;
   border-radius: var(--yh-radius);
+  /* 底部间距由 JS 保证（保底 40px）；这里再吃一次安全区，防圆角被手势条压住 */
   margin-bottom: env(safe-area-inset-bottom, 0px);
 }
 

@@ -2,7 +2,7 @@
 > L2 | 父级: /Users/epiphanyxiao/Documents/Playground/obsidian-annotation-plugin/src/AGENTS.md
 
 成员清单
-annotationCard.ts: 标注详情浮层外壳，md/pdf/epub 三端共用（点击高亮弹出）：只负责定位（popoverPlacement）、点外 pointerdown 关闭、Esc、移动端底部弹出与软键盘避让、viewport 变化重排；卡片内容与动作行一律交给 cardBody 渲染，本文件不再自绘任何字段——否则又会出现「两处各映射一遍」的漂移（noteType 曾在浮层里丢过）。构造签名是 AnnotationCard(SidebarCard, options)，数据由宿主用 buildCards 取。
+annotationCard.ts: 标注详情浮层外壳，md/pdf/epub 三端共用（点击高亮弹出）：只负责定位（桌面走 popoverPlacement 四侧择优；移动端 placeMobile 贴着高亮上/下方就近放置，底部保底 40px 避开手势区与导航栏，键盘弹起时改为贴可视区底，两侧都放不下才撑满）、点外 pointerdown 关闭、Esc、viewport 变化重排；卡片内容与动作行一律交给 cardBody 渲染，本文件不再自绘任何字段——否则又会出现「两处各映射一遍」的漂移（noteType 曾在浮层里丢过）。构造签名是 AnnotationCard(SidebarCard, options)，数据由宿主用 buildCards 取。
 popoverPlacement.ts: 浮层定位纯函数（无 DOM），输入划线矩形 + 浮层实测尺寸 + 可用区域，输出 left/top/width/maxHeight/side；四侧都放不下时压缩 maxHeight 由卡片内部滚动，绝不压到选区上；三端共用。
 cardModel.ts: 卡片模型纯函数，把一份 sidecar 文档拍平成 SidebarCard（高亮挂笔记、孤儿笔记单独成卡、标签取并集、noteType 从笔记层或高亮层提升到卡片层、relations 取并集去重），无 IO。
 cardBody.ts: 卡片 DOM 单点——renderCardBody(root, card, host) 同时服务侧栏列表与点击高亮浮层，head/引用/想法/标签行/关系区/来源行/动作行只在这里产出；CARD_ACTIONS 是动作归属表，每个动作显式声明 inList / inPopover（新增动作必须表态，只写一侧就会漂移），「跳转」只给列表；宿主没给回调 = 该动作此刻不可用，不渲染按钮，绝不造「点了没反应」的控件；标签编辑器也在这里，编辑态由宿主持有（侧栏存 editingTagCardId，重绘不丢），宿主通过 onEditorReady 接管聚焦、滚动、键盘避让与外点关闭；字面相关区同样在这里挂载（host.related 缺省则整块不出现）。

@@ -92,6 +92,15 @@ export interface AnnotationRelation {
   targetMode: "md" | "pdf" | "epub";
   type: RelationType;
   createdAt: string;
+  /**
+   * 目标锚点快照。关系自包含之后，导出时不必回查目标文档就能生成可点链接，
+   * 目标被删/被改也只是链接失效，不会让整条关系无法渲染。
+   */
+  targetOffset?: number;
+  targetPage?: number | null;
+  targetCfi?: string;
+  /** 目标原文摘要，侧栏展示与悬停用 */
+  targetQuote?: string;
 }
 
 export interface HighlightAnnotation {

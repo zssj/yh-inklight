@@ -8,6 +8,7 @@
 import {
   AnnotationColor,
   AnnotationNoteType,
+  AnnotationRelation,
   CommentAnnotation,
   EpubCommentAnnotation,
   EpubHighlightAnnotation,
@@ -40,6 +41,8 @@ interface SidebarCardBase {
   tags: string[];
   /** 想法类型：以前只在 EPUB 笔记层存在，卡片层拿到后导出才能写成 noteType:: 字段 */
   noteType?: AnnotationNoteType;
+  /** 卡片级有向关系：高亮与其笔记的并集，侧栏直接展示「支持/反驳… → 目标」 */
+  relations: AnnotationRelation[];
 }
 
 export type SidebarCard =
@@ -55,10 +58,29 @@ export type SidebarCard =
     });
 
 type TagCarrier = { tags?: string[] };
+type RelationCarrier = { relations?: AnnotationRelation[] };
 
 /** 高亮与笔记的标签并集；两者任一为空都能正确处理 */
 function collectTags(highlight: TagCarrier | null, note: TagCarrier | null): string[] {
   return unionTags(highlight?.tags, note?.tags);
+}
+
+/** 关系同样取并集并去重：同一条关系可能同时挂在高亮与它对应的笔记上 */
+function collectRelations(
+  highlight: RelationCarrier | null,
+  note: RelationCarrier | null,
+): AnnotationRelation[] {
+  const seen = new Set<string>();
+  const merged: AnnotationRelation[] = [];
+  for (const relation of [...(highlight?.relations ?? []), ...(note?.relations ?? [])]) {
+    const key = `${relation.type}|${relation.targetPath}|${relation.targetId}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(relation);
+  }
+  return merged;
 }
 
 /**
@@ -89,7 +111,8 @@ export function buildCards(document: FileAnnotationDocument): SidebarCard[] {
       orphaned: highlight.orphaned || note?.orphaned,
       isCode: isCodeAnchor(highlight.anchor),
       tags: collectTags(highlight, note),
-      noteType: note?.noteType,
+      noteType: note?.noteType ?? highlight.noteType,
+      relations: collectRelations(highlight, note),
       highlight,
       note,
     });
@@ -114,7 +137,8 @@ export function buildCards(document: FileAnnotationDocument): SidebarCard[] {
       orphaned: highlight.orphaned || note?.orphaned,
       isCode: false,
       tags: collectTags(highlight, note),
-      noteType: note?.noteType,
+      noteType: note?.noteType ?? highlight.noteType,
+      relations: collectRelations(highlight, note),
       highlight,
       note,
     });
@@ -141,7 +165,8 @@ export function buildCards(document: FileAnnotationDocument): SidebarCard[] {
       orphaned: highlight.orphaned || note?.orphaned,
       isCode: false,
       tags: collectTags(highlight, note),
-      noteType: note?.noteType,
+      noteType: note?.noteType ?? highlight.noteType,
+      relations: collectRelations(highlight, note),
       highlight,
       note,
     });
@@ -163,6 +188,7 @@ export function buildCards(document: FileAnnotationDocument): SidebarCard[] {
       isCode: isCodeAnchor(note.anchor),
       tags: collectTags(null, note),
       noteType: note.noteType,
+      relations: collectRelations(null, note),
       highlight: null,
       note,
     });
@@ -184,6 +210,7 @@ export function buildCards(document: FileAnnotationDocument): SidebarCard[] {
       isCode: false,
       tags: collectTags(null, note),
       noteType: note.noteType,
+      relations: collectRelations(null, note),
       highlight: null,
       note,
     });
@@ -207,6 +234,7 @@ export function buildCards(document: FileAnnotationDocument): SidebarCard[] {
       isCode: false,
       tags: collectTags(null, note),
       noteType: note.noteType,
+      relations: collectRelations(null, note),
       highlight: null,
       note,
     });

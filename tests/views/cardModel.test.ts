@@ -235,3 +235,29 @@ describe("isCodeAnchor", () => {
     expect(isCodeAnchor({ pageNumber: 1, selectedText: "x", rects: [] })).toBe(false);
   });
 });
+
+describe("卡片关系", () => {
+  it("高亮上的有向关系与 noteType 都能带到卡片上（侧栏据此展示）", () => {
+    const document = emptyDocument();
+    const relation = {
+      targetPath: "另一本.md",
+      targetId: "x1",
+      targetMode: "md" as const,
+      type: "supports" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      targetQuote: "目标那句",
+    };
+    document.highlights.push({
+      id: "h1",
+      color: "yellow",
+      anchor: anchor("复利效应"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      noteType: "insight",
+      relations: [relation],
+    });
+
+    const cards = buildCards(document);
+    expect(cards[0].relations).toEqual([relation]);
+    expect(cards[0].noteType).toBe("insight");
+  });
+});

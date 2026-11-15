@@ -21,6 +21,7 @@ import {
   ANNOTATION_COLORS,
   AnnotationColor,
   AnnotationExportFormat,
+  AnnotationRelation,
   AnnotationSortMode,
   COLOR_LABELS,
   CommentAnnotation,
@@ -48,6 +49,21 @@ const RELATION_TYPE_LABELS: ReadonlyArray<readonly [RelationType, string]> = [
   ["example", "举例"],
   ["extends", "延伸"],
 ];
+
+/**
+ * 目标锚点快照：md 存字符偏移、pdf 存页码、epub 存 CFI，另存原文摘要。
+ * 存下来之后关系是自包含的，导出与侧栏跳转都不必回查目标文档。
+ */
+function relationAnchorOf(
+  card: SidebarCard,
+): Pick<AnnotationRelation, "targetOffset" | "targetPage" | "targetCfi" | "targetQuote"> {
+  return {
+    ...(card.mode === "md" ? { targetOffset: card.startOffset } : {}),
+    ...(card.mode === "pdf" ? { targetPage: card.pageNumber } : {}),
+    ...(card.mode === "epub" && card.cfiRange ? { targetCfi: card.cfiRange } : {}),
+    targetQuote: card.text.replace(/\s+/g, " ").trim().slice(0, 80),
+  };
+}
 
 type AnnotationScope = "current" | "all";
 type TypeFilter = "all" | AnnotationKind;
@@ -551,6 +567,10 @@ export class AnnotationSidebarView extends ItemView {
       this.mountTagRow(tagRow, file, cardData);
     }
 
+    if (cardData.relations.length > 0) {
+      this.mountRelationList(card, file, cardData);
+    }
+
     const source = card.createDiv({ cls: "yh-ov-source" });
     source.createSpan({ cls: "yh-ov-file", text: file?.name ?? cardData.sourcePath });
     source.createSpan({
@@ -902,6 +922,96 @@ export class AnnotationSidebarView extends ItemView {
     );
   }
 
+  /**
+   * 关系区：把「支持 / 反驳 / 举例 / 延伸」从只活在导出笔记里，搬到卡片上直接可见。
+   * 点一行跳到目标那句，点 × 双向解除——关系在插件内第一次可操作。
+   */
+  private mountRelationList(card: HTMLElement, file: TFile | null, cardData: SidebarCard): void {
+    const box = card.createDiv({ cls: "yh-ov-relations" });
+
+    for (const relation of cardData.relations) {
+      const row = box.createDiv({ cls: `yh-ov-rel yh-ov-rel--${relation.type}` });
+      row.setAttribute("role", "button");
+      row.setAttribute("tabindex", "0");
+
+      const label = RELATION_TYPE_LABELS.find(([type]) => type === relation.type)?.[1] ?? relation.type;
+      row.createSpan({ cls: "yh-ov-rel-type", text: label });
+
+      const fallback = relation.targetPath.split("/").pop() ?? relation.targetPath;
+      const quote = (relation.targetQuote?.trim() || fallback).replace(/\s+/g, " ");
+      row.createSpan({
+        cls: "yh-ov-rel-quote",
+        text: quote.length > 30 ? `${quote.slice(0, 30)}…` : quote,
+        attr: { title: relation.targetPath },
+      });
+
+      const remove = row.createSpan({
+        cls: "yh-ov-rel-remove",
+        text: "×",
+        attr: { role: "button", tabindex: "0", "aria-label": "解除关系", title: "解除关系（两侧一起断开）" },
+      });
+
+      row.addEventListener("click", () => void this.jumpToRelation(relation));
+      row.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          void this.jumpToRelation(relation);
+        }
+      });
+      remove.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void this.removeRelation(file, cardData, relation);
+      });
+      remove.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        void this.removeRelation(file, cardData, relation);
+      });
+    }
+  }
+
+  private async jumpToRelation(relation: AnnotationRelation): Promise<void> {
+    const target = this.app.vault.getAbstractFileByPath(relation.targetPath);
+    if (!(target instanceof TFile)) {
+      new Notice("目标文件已不存在，可点 × 解除这条关系");
+      return;
+    }
+    await this.jumpTo(
+      target,
+      relation.targetOffset ?? 0,
+      relation.targetPage ?? null,
+      relation.targetMode,
+      relation.targetCfi,
+    );
+  }
+
+  /** 解除关系时两侧一起断：只删一侧会在对方卡片上留下指向自己的孤儿行 */
+  private async removeRelation(
+    file: TFile | null,
+    cardData: SidebarCard,
+    relation: AnnotationRelation,
+  ): Promise<void> {
+    if (!file) {
+      return;
+    }
+    try {
+      await this.plugin.store.removeRelation(file, cardData.id, relation.targetPath, relation.targetId);
+      const target = this.app.vault.getAbstractFileByPath(relation.targetPath);
+      if (target instanceof TFile) {
+        await this.plugin.store.removeRelation(target, relation.targetId, cardData.sourcePath, cardData.id);
+      }
+      this.relations.invalidate();
+      new Notice("已解除关系");
+      await this.plugin.refreshAnnotations();
+    } catch (error) {
+      console.warn("yh-inklight: 解除关系失败", error);
+      new Notice("解除关系失败，请检查写入权限或同步状态");
+    }
+  }
+
   /** 标签行：默认只读 chip + 加号；点加号原地切编辑态，不弹窗 */
   private mountTagRow(row: HTMLElement, file: TFile | null, cardData: SidebarCard): void {
     row.empty();
@@ -1165,6 +1275,7 @@ export class AnnotationSidebarView extends ItemView {
           targetMode: other.mode,
           type: relationType,
           createdAt: new Date().toISOString(),
+          ...relationAnchorOf(other),
         });
       }
       // 标签字典变了，「标签 → 词频」索引不等 3 秒 TTL

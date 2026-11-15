@@ -1023,12 +1023,23 @@ export class AnnotationStore {
     await this.writeIndex();
   }
 
+  /** 关系渲染用：目标源文件 → 它的导出笔记路径；没有导出过就返回 null（走协议链接兜底） */
+  private resolveTargetNote = (sourcePath: string): string | null =>
+    this.index.files[this.normalizeVaultPath(sourcePath)]?.derivedNotePath ?? null;
+
   async exportNotes(file: TFile, format: AnnotationExportFormat = "summary", obTagBridge = false): Promise<TFile> {
     const document = await this.getDocument(file);
     const baseName = file.basename || file.name.replace(/\.md$/i, "");
     const suffix = format === "summary" ? "" : `-${format}`;
     const targetPath = normalizePath(`${file.parent?.path ?? ""}/${baseName}-notes${suffix}.md`);
-    const lines = buildExportLines(`Notes for ${file.path}`, [{ filePath: file.path, document }], format, obTagBridge, "full");
+    const lines = buildExportLines(
+      `Notes for ${file.path}`,
+      [{ filePath: file.path, document }],
+      format,
+      obTagBridge,
+      "full",
+      this.resolveTargetNote,
+    );
 
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
     const target = existing instanceof TFile
@@ -1046,7 +1057,7 @@ export class AnnotationStore {
     const suffix = format === "summary" ? "" : `-${format}`;
     const targetPath = normalizePath(`inklight-all-notes${suffix}.md`);
     const sources = documents.map((document) => ({ filePath: document.filePath, document }));
-    const lines = buildExportLines("墨光批注全库汇总", sources, format, obTagBridge, "marker-only");
+    const lines = buildExportLines("墨光批注全库汇总", sources, format, obTagBridge, "marker-only", this.resolveTargetNote);
 
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
     const target = existing instanceof TFile
@@ -1084,12 +1095,12 @@ export class AnnotationStore {
     const frontmatter = obTagBridge ? renderTagFrontmatter(entries, "marker-only", toObsidianTag(tagKeyFilter) ?? undefined) : [];
     const rendered =
       format === "by-color"
-        ? renderByColor(entries)
+        ? renderByColor(entries, this.resolveTargetNote)
         : format === "notes-only"
-          ? renderNotesOnly(entries)
+          ? renderNotesOnly(entries, this.resolveTargetNote)
           : format === "reading-notes"
-            ? renderReadingNotes(entries)
-            : renderSummary(entries);
+            ? renderReadingNotes(entries, this.resolveTargetNote)
+            : renderSummary(entries, this.resolveTargetNote);
     const lines = [
       ...frontmatter,
       `# ${displayName}`,
@@ -1405,12 +1416,16 @@ function hashPath(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
+/** 关系渲染时的目标导出笔记解析器：拿得到就写成块链接（Graph 有边），拿不到退回协议链接 */
+type ResolveTargetNote = (sourcePath: string) => string | null;
+
 function buildExportLines(
   title: string,
   sources: ExportDocumentSource[],
   format: AnnotationExportFormat,
   obTagBridge: boolean,
   frontmatterMode: "full" | "marker-only",
+  resolveTargetNote?: ResolveTargetNote,
 ): string[] {
   const rawEntries = sources.flatMap((source) => collectExportEntries(source));
   // 开关关闭时清空 tags，保证所有 render 分支的输出与改造前逐字一致
@@ -1423,18 +1438,18 @@ function buildExportLines(
   }
 
   if (format === "by-color") {
-    return [...lines, ...renderByColor(entries)];
+    return [...lines, ...renderByColor(entries, resolveTargetNote)];
   }
 
   if (format === "notes-only") {
-    return [...lines, ...renderNotesOnly(entries)];
+    return [...lines, ...renderNotesOnly(entries, resolveTargetNote)];
   }
 
   if (format === "reading-notes") {
-    return [...lines, ...renderReadingNotes(entries)];
+    return [...lines, ...renderReadingNotes(entries, resolveTargetNote)];
   }
 
-  return [...lines, ...renderSummary(entries)];
+  return [...lines, ...renderSummary(entries, resolveTargetNote)];
 }
 
 /** 原子卡默认落点；settings.atomCardFolder 留空时用它 */
@@ -1630,21 +1645,21 @@ function collectExportEntries(source: ExportDocumentSource): ExportEntry[] {
   return entries.map((entry) => attachExportMetadata(entry, metadata));
 }
 
-function renderSummary(entries: ExportEntry[]): string[] {
+function renderSummary(entries: ExportEntry[], resolveTargetNote?: ResolveTargetNote): string[] {
   const highlights = entries.filter((entry) => entry.kind === "highlight");
   const notes = entries.filter((entry) => entry.kind === "note");
   return [
     "## Highlights",
     "",
-    ...highlights.flatMap((entry) => renderAnnotationBlock(entry)),
+    ...highlights.flatMap((entry) => renderAnnotationBlock(entry, resolveTargetNote)),
     "",
     "## Sticky Notes",
     "",
-    ...notes.flatMap((entry) => renderAnnotationBlock(entry)),
+    ...notes.flatMap((entry) => renderAnnotationBlock(entry, resolveTargetNote)),
   ];
 }
 
-function renderByColor(entries: ExportEntry[]): string[] {
+function renderByColor(entries: ExportEntry[], resolveTargetNote?: ResolveTargetNote): string[] {
   const colors: AnnotationColor[] = ["yellow", "green", "blue", "pink", "orange", "purple"];
   return colors.flatMap((color) => {
     const colorEntries = entries.filter((entry) => entry.color === color);
@@ -1655,26 +1670,26 @@ function renderByColor(entries: ExportEntry[]): string[] {
       `## ${color}`,
       "",
       ...colorEntries.flatMap((entry) => {
-        return renderAnnotationBlock(entry);
+        return renderAnnotationBlock(entry, resolveTargetNote);
       }),
     ];
   });
 }
 
-function renderNotesOnly(entries: ExportEntry[]): string[] {
+function renderNotesOnly(entries: ExportEntry[], resolveTargetNote?: ResolveTargetNote): string[] {
   const notes = entries.filter((entry) => entry.kind === "note" && entry.content.trim());
   if (!notes.length) {
     return ["No sticky notes found.", ""];
   }
-  return ["## Sticky Notes", "", ...notes.flatMap((entry) => renderAnnotationBlock(entry))];
+  return ["## Sticky Notes", "", ...notes.flatMap((entry) => renderAnnotationBlock(entry, resolveTargetNote))];
 }
 
-function renderReadingNotes(entries: ExportEntry[]): string[] {
+function renderReadingNotes(entries: ExportEntry[], resolveTargetNote?: ResolveTargetNote): string[] {
   return [
     "## Reading Notes",
     "",
     ...entries.flatMap((entry) => {
-      return [`### ${entrySource(entry)}`, "", ...renderAnnotationBlock(entry)];
+      return [`### ${entrySource(entry)}`, "", ...renderAnnotationBlock(entry, resolveTargetNote)];
     }),
   ];
 }
@@ -1877,7 +1892,7 @@ function splitExportLines(text: string): string[] {
   return text.split(/\r?\n/);
 }
 
-function renderAnnotationBlock(entry: ExportEntry): string[] {
+function renderAnnotationBlock(entry: ExportEntry, resolveTargetNote?: ResolveTargetNote): string[] {
   const blockId = `${entry.mode}-${entry.id}`;
   const calloutType = entry.mode === "epub" ? "inklight-epub" : entry.mode === "pdf" ? "inklight-pdf" : "inklight-md";
   const header = `> [!${calloutType}|${entry.color}] ${entrySource(entry)} - ${entry.createdAt} ^${blockId}`;
@@ -1911,7 +1926,7 @@ function renderAnnotationBlock(entry: ExportEntry): string[] {
     lines.push(anchor);
   }
 
-  const metadata = renderMetadataLines(entry);
+  const metadata = renderMetadataLines(entry, resolveTargetNote);
   if (metadata.length > 0) {
     lines.push("");
     lines.push(...metadata);
@@ -1928,23 +1943,64 @@ function renderAnnotationBlock(entry: ExportEntry): string[] {
  * 只写「机器要用、人看着不碍事」的字段：chapter 已经在 callout 标题里出现过，不要再抄一行。
  * relations 在同文件时写成块链接（真边）；跨文件先写纯文本，导出笔记路径要等反查指针落库后才能确定。
  */
-function renderMetadataLines(entry: ExportEntry): string[] {
+function renderMetadataLines(entry: ExportEntry, resolveTargetNote?: ResolveTargetNote): string[] {
   const lines: string[] = [];
   if (entry.noteType) {
     lines.push(`noteType:: ${entry.noteType}`);
   }
   for (const relation of entry.relations ?? []) {
-    lines.push(`${relation.type}:: ${renderRelationTarget(relation, entry.sourcePath)}`);
+    lines.push(`${relation.type}:: ${renderRelationTarget(relation, entry.sourcePath, resolveTargetNote)}`);
   }
   return lines;
 }
 
-function renderRelationTarget(relation: AnnotationRelation, selfPath: string): string {
+/** 关系类型的中文名，用于协议链接的可读文字 */
+const RELATION_TYPE_LABEL: Record<AnnotationRelation["type"], string> = {
+  supports: "支持",
+  refutes: "反驳",
+  example: "举例",
+  extends: "延伸",
+};
+
+/**
+ * 关系目标的三级落点：
+ * 1. 同文件 → `[[#^md-id]]`，块链接，能点、Graph 内部跳转；
+ * 2. 跨文件且目标已导出 → `[[目标导出笔记#^mode-id]]`，能点、Graph 里连边；
+ * 3. 其余（没导出过 / epub 与 pdf 目标）→ `obsidian://inklight` 协议链接，靠关系自带锚点定位。
+ * 老关系没有锚点快照，退回纯文本 `"路径#id"`——宁可只读，也不生成点不动的假链接。
+ */
+function renderRelationTarget(
+  relation: AnnotationRelation,
+  selfPath: string,
+  resolveTargetNote?: ResolveTargetNote,
+): string {
   const blockId = `${relation.targetMode}-${relation.targetId}`;
   if (relation.targetPath === selfPath) {
     return `[[#^${blockId}]]`;
   }
-  return `"${relation.targetPath}#${relation.targetId}"`;
+
+  const targetNote = resolveTargetNote?.(relation.targetPath) ?? null;
+  if (targetNote) {
+    return `[[${targetNote.replace(/\.md$/i, "")}#^${blockId}]]`;
+  }
+
+  const hasOffset = typeof relation.targetOffset === "number" && relation.targetOffset >= 0;
+  const hasPage = typeof relation.targetPage === "number" && relation.targetPage > 0;
+  const hasCfi = !!relation.targetCfi;
+  if (!hasOffset && !hasPage && !hasCfi) {
+    return `"${relation.targetPath}#${relation.targetId}"`;
+  }
+
+  const url = buildSourceLinkUrl({
+    sourcePath: relation.targetPath,
+    mode: relation.targetMode,
+    offset: relation.targetMode === "md" ? relation.targetOffset : undefined,
+    pageNumber: relation.targetMode === "pdf" ? relation.targetPage : undefined,
+    cfiRange: relation.targetMode === "epub" ? relation.targetCfi : undefined,
+    quote: relation.targetQuote,
+  });
+  const fileName = (relation.targetPath.split("/").pop() ?? relation.targetPath).replace(/\.[^.]+$/, "");
+  return `[${RELATION_TYPE_LABEL[relation.type]}：${fileName}](${url})`;
 }
 
 /**

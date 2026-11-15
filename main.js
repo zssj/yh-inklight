@@ -11156,6 +11156,8 @@ var AnnotationStore = class {
     this.documents = /* @__PURE__ */ new Map();
     this.index = EMPTY_INDEX;
     this.changeVersion = 0;
+    /** 关系渲染用：目标源文件 → 它的导出笔记路径；没有导出过就返回 null（走协议链接兜底） */
+    this.resolveTargetNote = (sourcePath) => this.index.files[this.normalizeVaultPath(sourcePath)]?.derivedNotePath ?? null;
   }
   get version() {
     return this.changeVersion;
@@ -11897,7 +11899,14 @@ var AnnotationStore = class {
     const baseName = file.basename || file.name.replace(/\.md$/i, "");
     const suffix = format === "summary" ? "" : `-${format}`;
     const targetPath = (0, import_obsidian8.normalizePath)(`${file.parent?.path ?? ""}/${baseName}-notes${suffix}.md`);
-    const lines = buildExportLines(`Notes for ${file.path}`, [{ filePath: file.path, document: document2 }], format, obTagBridge, "full");
+    const lines = buildExportLines(
+      `Notes for ${file.path}`,
+      [{ filePath: file.path, document: document2 }],
+      format,
+      obTagBridge,
+      "full",
+      this.resolveTargetNote
+    );
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
     const target = existing instanceof import_obsidian8.TFile ? (await this.app.vault.modify(existing, mergeExportDocument(await this.app.vault.cachedRead(existing), lines.join("\n"), obTagBridge)), existing) : await this.app.vault.create(targetPath, lines.join("\n"));
     await this.recordExportTargets(
@@ -11910,7 +11919,7 @@ var AnnotationStore = class {
     const suffix = format === "summary" ? "" : `-${format}`;
     const targetPath = (0, import_obsidian8.normalizePath)(`inklight-all-notes${suffix}.md`);
     const sources = documents.map((document2) => ({ filePath: document2.filePath, document: document2 }));
-    const lines = buildExportLines("\u58A8\u5149\u6279\u6CE8\u5168\u5E93\u6C47\u603B", sources, format, obTagBridge, "marker-only");
+    const lines = buildExportLines("\u58A8\u5149\u6279\u6CE8\u5168\u5E93\u6C47\u603B", sources, format, obTagBridge, "marker-only", this.resolveTargetNote);
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
     const target = existing instanceof import_obsidian8.TFile ? (await this.app.vault.modify(existing, mergeExportDocument(await this.app.vault.cachedRead(existing), lines.join("\n"), obTagBridge)), existing) : await this.app.vault.create(targetPath, lines.join("\n"));
     const targets = /* @__PURE__ */ new Map();
@@ -11938,7 +11947,7 @@ var AnnotationStore = class {
     const displayName = this.getTagDictionary().find((item) => item.key === filterKey)?.name ?? filterKey;
     const entries = obTagBridge ? matched : matched.map((entry) => ({ ...entry, tags: [] }));
     const frontmatter = obTagBridge ? renderTagFrontmatter(entries, "marker-only", toObsidianTag(tagKeyFilter) ?? void 0) : [];
-    const rendered = format === "by-color" ? renderByColor(entries) : format === "notes-only" ? renderNotesOnly(entries) : format === "reading-notes" ? renderReadingNotes(entries) : renderSummary(entries);
+    const rendered = format === "by-color" ? renderByColor(entries, this.resolveTargetNote) : format === "notes-only" ? renderNotesOnly(entries, this.resolveTargetNote) : format === "reading-notes" ? renderReadingNotes(entries, this.resolveTargetNote) : renderSummary(entries, this.resolveTargetNote);
     const lines = [
       ...frontmatter,
       `# ${displayName}`,
@@ -12193,7 +12202,7 @@ function hashPath(value) {
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
-function buildExportLines(title, sources, format, obTagBridge, frontmatterMode) {
+function buildExportLines(title, sources, format, obTagBridge, frontmatterMode, resolveTargetNote) {
   const rawEntries = sources.flatMap((source) => collectExportEntries(source));
   const entries = obTagBridge ? rawEntries : rawEntries.map((entry) => ({ ...entry, tags: [] }));
   const frontmatter = obTagBridge ? renderTagFrontmatter(entries, frontmatterMode) : [];
@@ -12202,15 +12211,15 @@ function buildExportLines(title, sources, format, obTagBridge, frontmatterMode) 
     return [...lines, "No annotations found.", ""];
   }
   if (format === "by-color") {
-    return [...lines, ...renderByColor(entries)];
+    return [...lines, ...renderByColor(entries, resolveTargetNote)];
   }
   if (format === "notes-only") {
-    return [...lines, ...renderNotesOnly(entries)];
+    return [...lines, ...renderNotesOnly(entries, resolveTargetNote)];
   }
   if (format === "reading-notes") {
-    return [...lines, ...renderReadingNotes(entries)];
+    return [...lines, ...renderReadingNotes(entries, resolveTargetNote)];
   }
-  return [...lines, ...renderSummary(entries)];
+  return [...lines, ...renderSummary(entries, resolveTargetNote)];
 }
 var DEFAULT_ATOM_CARD_FOLDER = "\u5361\u7247";
 function atomCardBaseName(input) {
@@ -12369,20 +12378,20 @@ function collectExportEntries(source) {
   });
   return entries.map((entry) => attachExportMetadata(entry, metadata));
 }
-function renderSummary(entries) {
+function renderSummary(entries, resolveTargetNote) {
   const highlights = entries.filter((entry) => entry.kind === "highlight");
   const notes = entries.filter((entry) => entry.kind === "note");
   return [
     "## Highlights",
     "",
-    ...highlights.flatMap((entry) => renderAnnotationBlock(entry)),
+    ...highlights.flatMap((entry) => renderAnnotationBlock(entry, resolveTargetNote)),
     "",
     "## Sticky Notes",
     "",
-    ...notes.flatMap((entry) => renderAnnotationBlock(entry))
+    ...notes.flatMap((entry) => renderAnnotationBlock(entry, resolveTargetNote))
   ];
 }
-function renderByColor(entries) {
+function renderByColor(entries, resolveTargetNote) {
   const colors = ["yellow", "green", "blue", "pink", "orange", "purple"];
   return colors.flatMap((color) => {
     const colorEntries = entries.filter((entry) => entry.color === color);
@@ -12393,24 +12402,24 @@ function renderByColor(entries) {
       `## ${color}`,
       "",
       ...colorEntries.flatMap((entry) => {
-        return renderAnnotationBlock(entry);
+        return renderAnnotationBlock(entry, resolveTargetNote);
       })
     ];
   });
 }
-function renderNotesOnly(entries) {
+function renderNotesOnly(entries, resolveTargetNote) {
   const notes = entries.filter((entry) => entry.kind === "note" && entry.content.trim());
   if (!notes.length) {
     return ["No sticky notes found.", ""];
   }
-  return ["## Sticky Notes", "", ...notes.flatMap((entry) => renderAnnotationBlock(entry))];
+  return ["## Sticky Notes", "", ...notes.flatMap((entry) => renderAnnotationBlock(entry, resolveTargetNote))];
 }
-function renderReadingNotes(entries) {
+function renderReadingNotes(entries, resolveTargetNote) {
   return [
     "## Reading Notes",
     "",
     ...entries.flatMap((entry) => {
-      return [`### ${entrySource(entry)}`, "", ...renderAnnotationBlock(entry)];
+      return [`### ${entrySource(entry)}`, "", ...renderAnnotationBlock(entry, resolveTargetNote)];
     })
   ];
 }
@@ -12562,7 +12571,7 @@ function extractExportBlocks(lines) {
 function splitExportLines(text) {
   return text.split(/\r?\n/);
 }
-function renderAnnotationBlock(entry) {
+function renderAnnotationBlock(entry, resolveTargetNote) {
   const blockId = `${entry.mode}-${entry.id}`;
   const calloutType = entry.mode === "epub" ? "inklight-epub" : entry.mode === "pdf" ? "inklight-pdf" : "inklight-md";
   const header = `> [!${calloutType}|${entry.color}] ${entrySource(entry)} - ${entry.createdAt} ^${blockId}`;
@@ -12590,7 +12599,7 @@ function renderAnnotationBlock(entry) {
   if (anchor) {
     lines.push(anchor);
   }
-  const metadata = renderMetadataLines(entry);
+  const metadata = renderMetadataLines(entry, resolveTargetNote);
   if (metadata.length > 0) {
     lines.push("");
     lines.push(...metadata);
@@ -12599,22 +12608,47 @@ function renderAnnotationBlock(entry) {
   lines.push("");
   return lines;
 }
-function renderMetadataLines(entry) {
+function renderMetadataLines(entry, resolveTargetNote) {
   const lines = [];
   if (entry.noteType) {
     lines.push(`noteType:: ${entry.noteType}`);
   }
   for (const relation of entry.relations ?? []) {
-    lines.push(`${relation.type}:: ${renderRelationTarget(relation, entry.sourcePath)}`);
+    lines.push(`${relation.type}:: ${renderRelationTarget(relation, entry.sourcePath, resolveTargetNote)}`);
   }
   return lines;
 }
-function renderRelationTarget(relation, selfPath) {
+var RELATION_TYPE_LABEL = {
+  supports: "\u652F\u6301",
+  refutes: "\u53CD\u9A73",
+  example: "\u4E3E\u4F8B",
+  extends: "\u5EF6\u4F38"
+};
+function renderRelationTarget(relation, selfPath, resolveTargetNote) {
   const blockId = `${relation.targetMode}-${relation.targetId}`;
   if (relation.targetPath === selfPath) {
     return `[[#^${blockId}]]`;
   }
-  return `"${relation.targetPath}#${relation.targetId}"`;
+  const targetNote = resolveTargetNote?.(relation.targetPath) ?? null;
+  if (targetNote) {
+    return `[[${targetNote.replace(/\.md$/i, "")}#^${blockId}]]`;
+  }
+  const hasOffset = typeof relation.targetOffset === "number" && relation.targetOffset >= 0;
+  const hasPage = typeof relation.targetPage === "number" && relation.targetPage > 0;
+  const hasCfi = !!relation.targetCfi;
+  if (!hasOffset && !hasPage && !hasCfi) {
+    return `"${relation.targetPath}#${relation.targetId}"`;
+  }
+  const url = buildSourceLinkUrl({
+    sourcePath: relation.targetPath,
+    mode: relation.targetMode,
+    offset: relation.targetMode === "md" ? relation.targetOffset : void 0,
+    pageNumber: relation.targetMode === "pdf" ? relation.targetPage : void 0,
+    cfiRange: relation.targetMode === "epub" ? relation.targetCfi : void 0,
+    quote: relation.targetQuote
+  });
+  const fileName = (relation.targetPath.split("/").pop() ?? relation.targetPath).replace(/\.[^.]+$/, "");
+  return `[${RELATION_TYPE_LABEL[relation.type]}\uFF1A${fileName}](${url})`;
 }
 function entryBackLink(entry) {
   const url = buildSourceLinkUrl({
@@ -12717,6 +12751,19 @@ function observeKeyboardInset(onChange, isAlive = () => true) {
 function collectTags(highlight, note) {
   return unionTags(highlight?.tags, note?.tags);
 }
+function collectRelations(highlight, note) {
+  const seen = /* @__PURE__ */ new Set();
+  const merged = [];
+  for (const relation of [...highlight?.relations ?? [], ...note?.relations ?? []]) {
+    const key = `${relation.type}|${relation.targetPath}|${relation.targetId}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(relation);
+  }
+  return merged;
+}
 function buildCards(document2) {
   const usedNotes = /* @__PURE__ */ new Set();
   const cards = [];
@@ -12739,7 +12786,8 @@ function buildCards(document2) {
       orphaned: highlight.orphaned || note?.orphaned,
       isCode: isCodeAnchor(highlight.anchor),
       tags: collectTags(highlight, note),
-      noteType: note?.noteType,
+      noteType: note?.noteType ?? highlight.noteType,
+      relations: collectRelations(highlight, note),
       highlight,
       note
     });
@@ -12763,7 +12811,8 @@ function buildCards(document2) {
       orphaned: highlight.orphaned || note?.orphaned,
       isCode: false,
       tags: collectTags(highlight, note),
-      noteType: note?.noteType,
+      noteType: note?.noteType ?? highlight.noteType,
+      relations: collectRelations(highlight, note),
       highlight,
       note
     });
@@ -12789,7 +12838,8 @@ function buildCards(document2) {
       orphaned: highlight.orphaned || note?.orphaned,
       isCode: false,
       tags: collectTags(highlight, note),
-      noteType: note?.noteType,
+      noteType: note?.noteType ?? highlight.noteType,
+      relations: collectRelations(highlight, note),
       highlight,
       note
     });
@@ -12810,6 +12860,7 @@ function buildCards(document2) {
       isCode: isCodeAnchor(note.anchor),
       tags: collectTags(null, note),
       noteType: note.noteType,
+      relations: collectRelations(null, note),
       highlight: null,
       note
     });
@@ -12830,6 +12881,7 @@ function buildCards(document2) {
       isCode: false,
       tags: collectTags(null, note),
       noteType: note.noteType,
+      relations: collectRelations(null, note),
       highlight: null,
       note
     });
@@ -12852,6 +12904,7 @@ function buildCards(document2) {
       isCode: false,
       tags: collectTags(null, note),
       noteType: note.noteType,
+      relations: collectRelations(null, note),
       highlight: null,
       note
     });
@@ -13774,6 +13827,14 @@ var RELATION_TYPE_LABELS = [
   ["example", "\u4E3E\u4F8B"],
   ["extends", "\u5EF6\u4F38"]
 ];
+function relationAnchorOf(card) {
+  return {
+    ...card.mode === "md" ? { targetOffset: card.startOffset } : {},
+    ...card.mode === "pdf" ? { targetPage: card.pageNumber } : {},
+    ...card.mode === "epub" && card.cfiRange ? { targetCfi: card.cfiRange } : {},
+    targetQuote: card.text.replace(/\s+/g, " ").trim().slice(0, 80)
+  };
+}
 var AnnotationSidebarView = class extends import_obsidian10.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -14204,6 +14265,9 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
     } else {
       this.mountTagRow(tagRow, file, cardData);
     }
+    if (cardData.relations.length > 0) {
+      this.mountRelationList(card, file, cardData);
+    }
     const source = card.createDiv({ cls: "yh-ov-source" });
     source.createSpan({ cls: "yh-ov-file", text: file?.name ?? cardData.sourcePath });
     source.createSpan({
@@ -14515,6 +14579,84 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
       { signal: listeners.signal }
     );
   }
+  /**
+   * 关系区：把「支持 / 反驳 / 举例 / 延伸」从只活在导出笔记里，搬到卡片上直接可见。
+   * 点一行跳到目标那句，点 × 双向解除——关系在插件内第一次可操作。
+   */
+  mountRelationList(card, file, cardData) {
+    const box = card.createDiv({ cls: "yh-ov-relations" });
+    for (const relation of cardData.relations) {
+      const row = box.createDiv({ cls: `yh-ov-rel yh-ov-rel--${relation.type}` });
+      row.setAttribute("role", "button");
+      row.setAttribute("tabindex", "0");
+      const label = RELATION_TYPE_LABELS.find(([type]) => type === relation.type)?.[1] ?? relation.type;
+      row.createSpan({ cls: "yh-ov-rel-type", text: label });
+      const fallback = relation.targetPath.split("/").pop() ?? relation.targetPath;
+      const quote = (relation.targetQuote?.trim() || fallback).replace(/\s+/g, " ");
+      row.createSpan({
+        cls: "yh-ov-rel-quote",
+        text: quote.length > 30 ? `${quote.slice(0, 30)}\u2026` : quote,
+        attr: { title: relation.targetPath }
+      });
+      const remove = row.createSpan({
+        cls: "yh-ov-rel-remove",
+        text: "\xD7",
+        attr: { role: "button", tabindex: "0", "aria-label": "\u89E3\u9664\u5173\u7CFB", title: "\u89E3\u9664\u5173\u7CFB\uFF08\u4E24\u4FA7\u4E00\u8D77\u65AD\u5F00\uFF09" }
+      });
+      row.addEventListener("click", () => void this.jumpToRelation(relation));
+      row.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          void this.jumpToRelation(relation);
+        }
+      });
+      remove.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void this.removeRelation(file, cardData, relation);
+      });
+      remove.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        void this.removeRelation(file, cardData, relation);
+      });
+    }
+  }
+  async jumpToRelation(relation) {
+    const target = this.app.vault.getAbstractFileByPath(relation.targetPath);
+    if (!(target instanceof import_obsidian10.TFile)) {
+      new import_obsidian10.Notice("\u76EE\u6807\u6587\u4EF6\u5DF2\u4E0D\u5B58\u5728\uFF0C\u53EF\u70B9 \xD7 \u89E3\u9664\u8FD9\u6761\u5173\u7CFB");
+      return;
+    }
+    await this.jumpTo(
+      target,
+      relation.targetOffset ?? 0,
+      relation.targetPage ?? null,
+      relation.targetMode,
+      relation.targetCfi
+    );
+  }
+  /** 解除关系时两侧一起断：只删一侧会在对方卡片上留下指向自己的孤儿行 */
+  async removeRelation(file, cardData, relation) {
+    if (!file) {
+      return;
+    }
+    try {
+      await this.plugin.store.removeRelation(file, cardData.id, relation.targetPath, relation.targetId);
+      const target = this.app.vault.getAbstractFileByPath(relation.targetPath);
+      if (target instanceof import_obsidian10.TFile) {
+        await this.plugin.store.removeRelation(target, relation.targetId, cardData.sourcePath, cardData.id);
+      }
+      this.relations.invalidate();
+      new import_obsidian10.Notice("\u5DF2\u89E3\u9664\u5173\u7CFB");
+      await this.plugin.refreshAnnotations();
+    } catch (error) {
+      console.warn("yh-inklight: \u89E3\u9664\u5173\u7CFB\u5931\u8D25", error);
+      new import_obsidian10.Notice("\u89E3\u9664\u5173\u7CFB\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u5199\u5165\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001");
+    }
+  }
   /** 标签行：默认只读 chip + 加号；点加号原地切编辑态，不弹窗 */
   mountTagRow(row, file, cardData) {
     row.empty();
@@ -14738,7 +14880,8 @@ var AnnotationSidebarView = class extends import_obsidian10.ItemView {
           targetId: other.id,
           targetMode: other.mode,
           type: relationType,
-          createdAt: (/* @__PURE__ */ new Date()).toISOString()
+          createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+          ...relationAnchorOf(other)
         });
       }
       this.relations.invalidate();

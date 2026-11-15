@@ -550,8 +550,7 @@ describe("EPUB 回链", () => {
     expect(content).toContain('refutes:: "另一本书.md#x9"');
   });
 
-  it("同一目标同一类型重复确认只留一条关系；断开后关系消失", async () => {
-    const { store, file } = await setup();
+  it("同一目标同一类型重复确认只留一条关系；断开后关系消失", async () => {    const { store, file } = await setup();
     await store.addHighlight(file, highlightOf("h1", "复利效应", 2));
     const relation = {
       targetPath: file.path,
@@ -612,6 +611,53 @@ describe("EPUB 回链", () => {
 
     const report = await store.findOrphanBlocks();
     expect(report).toEqual([{ notePath: "读书笔记/复利-notes.md", blockIds: ["md-h2"] }]);
+  });
+
+  it("跨文件关系在目标未导出时落成协议链接，锚点来自关系快照", async () => {
+    const { store, vault, file } = await setup();
+    await store.addHighlight(file, highlightOf("h1", "复利效应", 2));
+    await store.addRelation(file, "h1", {
+      targetPath: "books/穷查理宝典.epub",
+      targetId: "x9",
+      targetMode: "epub",
+      type: "supports",
+      createdAt: "2026-02-01T00:00:00.000Z",
+      targetCfi: "epubcfi(/6/12!/4/18,/1:0,/1:53)",
+      targetQuote: "复利的敌人是中断",
+    });
+    await store.exportNotes(file);
+
+    const content = vault.readText("读书笔记/复利-notes.md");
+    const matched = content.match(/supports:: \[支持：穷查理宝典\]\((obsidian:\/\/[^)]+)\)/);
+    expect(matched, content).not.toBeNull();
+
+    const url = new URL(matched![1]);
+    expect(url.searchParams.get("mode")).toBe("epub");
+    expect(url.searchParams.get("file")).toBe("books/穷查理宝典.epub");
+    expect(url.searchParams.get("cfi")).toBe("epubcfi(/6/12!/4/18,/1:0,/1:53)");
+  });
+
+  it("目标文件已导出时，跨文件关系指向那篇导出笔记的块（Graph 有边）", async () => {
+    const { app, vault } = createApp({ files: { "notes/a.md": "", "notes/b.md": "" } });
+    const store = new AnnotationStore(app);
+    await store.initialize();
+    const a = vault.fileAt("notes/a.md");
+    const b = vault.fileAt("notes/b.md");
+
+    await store.addHighlight(b, highlightOf("h2", "目标句", 0));
+    await store.exportNotes(b);
+
+    await store.addHighlight(a, highlightOf("h1", "来源句", 0));
+    await store.addRelation(a, "h1", {
+      targetPath: b.path,
+      targetId: "h2",
+      targetMode: "md",
+      type: "supports",
+      createdAt: "2026-02-01T00:00:00.000Z",
+    });
+    await store.exportNotes(a);
+
+    expect(vault.readText("notes/a-notes.md")).toContain("supports:: [[notes/b-notes#^md-h2]]");
   });
 
   it("提炼原子卡：写到指定目录、带出处块链接，重复点不重复生成", async () => {

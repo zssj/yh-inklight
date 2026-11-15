@@ -1514,7 +1514,7 @@ function renderAnnotationBlock(entry: ExportEntry): string[] {
     lines.push(`> Tags: ${tagLine.map((tag) => `#${tag}`).join(" ")}`);
   }
 
-  const backLink = entryBackLink(entry, blockId);
+  const backLink = entryBackLink(entry);
   if (backLink) {
     lines.push(">");
     lines.push(`> ${backLink}`);
@@ -1530,17 +1530,37 @@ function renderAnnotationBlock(entry: ExportEntry): string[] {
   return lines;
 }
 
-function entryBackLink(entry: ExportEntry, blockId: string): string {
+function entryBackLink(entry: ExportEntry): string {
   if (entry.mode === "pdf" && entry.pageNumber) {
     return `[[${entry.sourcePath}#page=${entry.pageNumber}|Back to source]]`;
   }
   if (entry.mode === "epub" && entry.cfiRange) {
-    return `[Back to source](#^${blockId})`;
+    return `[Back to source](${epubGotoUrl(entry.sourcePath, entry.cfiRange)})`;
   }
   if (entry.mode === "md") {
     return `[[${entry.sourcePath}|Back to source]]`;
   }
   return "";
+}
+
+/**
+ * EPUB 回跳链接：直接交给 main.ts 注册的 `obsidian://inklight-epub` 协议处理器。
+ * 历史实现是 `[Back to source](#^<blockId>)`——指向导出笔记自己的块 id，不是源书，
+ * 只有被 EpubGotoHandler 的 post processor 劫持才有跳转能力；标签 MOC 页（MOC/<标签>.md）
+ * 不匹配该处理器的导出页路径白名单，劫持不生效，点击就表现为「没反应」。
+ * 写成协议链接后，链接本身自带目标（源文件 + CFI），不依赖页面路径与后处理器。
+ */
+function epubGotoUrl(sourcePath: string, cfiRange: string): string {
+  return `obsidian://inklight-epub?file=${encodeLinkValue(sourcePath)}&cfi=${encodeLinkValue(cfiRange)}`;
+}
+
+/**
+ * Markdown 链接目标转义：`encodeURIComponent` 不会转义 `( ) ! ' *`，
+ * 而 CFI 形如 `epubcfi(/6/28[...])`、中文书名常含 `(刘润)`，
+ * 这些括号会让 `[text](url)` 在第一个 `)` 处提前结束，链接被截断成死链。
+ */
+function encodeLinkValue(value: string): string {
+  return encodeURIComponent(value).replace(/[()'!*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 function hiddenAnchor(entry: ExportEntry): string {

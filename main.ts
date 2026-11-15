@@ -303,8 +303,17 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     // Phase 4-B P1: EPUB 双向溯源 + 摘录导出
     registerEpubGotoHandler(this, (file, cfi) => this.openEpubAtCfi(file, cfi));
     this.registerObsidianProtocolHandler("inklight-epub", (params) => {
-      const filePath = typeof params.file === "string" ? decodeURIComponent(params.file) : "";
-      const cfi = typeof params.cfi === "string" ? decodeURIComponent(params.cfi) : "";
+      // Obsidian 交来的参数可能已解码，再解一次会对含 `%` 的路径抛 URIError，故容错处理
+      const decode = (value: unknown): string => {
+        if (typeof value !== "string") return "";
+        try {
+          return decodeURIComponent(value);
+        } catch {
+          return value;
+        }
+      };
+      const filePath = decode(params.file);
+      const cfi = decode(params.cfi);
       if (filePath && cfi) {
         void this.openEpubAtCfi(filePath, cfi);
       }

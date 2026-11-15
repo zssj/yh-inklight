@@ -14,7 +14,7 @@ EpubAnnotationCard.ts: 薄适配层——把 EPUB 批注字段（chapter / creat
 EpubNoteModal.ts: 便签/想法输入弹窗，移动端用 visualViewport 定位避开键盘；提交前 flush 标签输入框里未回车的文本；补全候选为 TagSuggestion[]（带来源）。
 EpubAiModal.ts: AI 解释/翻译/改写弹窗，内置动作预设与自定义提问，回复可存为便签。
 EpubImageViewer.ts: EPUB 内图片全屏放大查看器，点击放大、再点/Esc 关闭。
-EpubGotoHandler.ts: 导出批注 Markdown 的回链处理器，点击「回到原文」callout 链接跳回 EPUB 对应 CFI。
+EpubGotoHandler.ts: 导出批注 Markdown 的回链处理器，点击「回到原文」callout 链接跳回 EPUB 对应 CFI。接管判定 `shouldHandleAnnotationPage(path, hasCfiAnchor)` = 路径白名单（`-notes*.md` / `*摘录.md` / `excerpt.md`）**或**页内存在 `[data-yh-cfi]`——标签 MOC 页（`MOC/<标签>.md`）不属于白名单，必须走锚点这条；只命中路径而不认锚点会让 MOC 页回链静默失效。解析不到目标时不劫持 href，交给回链自身的 `obsidian://inklight-epub` 协议链接。
 EpubStylesheetInliner.ts: 书籍 CSS 内联器，把 epub 内嵌样式表注入 iframe 保证渲染一致。
 EpubThemeManager.ts: 主题管理，6 种阅读主题与系统深浅色跟随，通过 --theme-bg-color 等 foliate 官方钩子应用。
 EpubFontCatalog.ts: 本机可用字体探测与目录管理，中英/新旧 family 名变体匹配，手填字体校验后实时预览。

@@ -5,7 +5,7 @@
  * [PROTOCOL]: When changed, update this header and check AGENTS.md
  */
 
-import { App, MarkdownPostProcessorContext, Notice, Plugin } from "obsidian";
+import { App, MarkdownPostProcessorContext, Plugin } from "obsidian";
 
 const CALLOUT_TYPE = "inklight-epub";
 const CFI_COMMENT_RE = /<!--\s*yh-epub-cfi:\s*(epubcfi\([\s\S]*?\))\s*-->/;
@@ -21,7 +21,10 @@ export function registerEpubGotoHandler(
   resolveAnn?: EpubGotoResolver,
 ): void {
   plugin.registerMarkdownPostProcessor((el: HTMLElement, ctx: MarkdownPostProcessorContext) => {
-    if (!isExportedAnnotationPath(ctx.sourcePath)) {
+    // 路径白名单只是快速通道：标签 MOC 页（MOC/<标签>.md）不在其中，
+    // 但它同样含墨光写的 [data-yh-cfi] 锚点，必须靠页内特征兜底接管，否则回链点击无反应。
+    const hasCfiAnchor = el.querySelector("[data-yh-cfi]") !== null;
+    if (!shouldHandleAnnotationPage(ctx.sourcePath, hasCfiAnchor)) {
       return;
     }
 
@@ -36,7 +39,16 @@ export function registerEpubGotoHandler(
   });
 }
 
-function isExportedAnnotationPath(sourcePath: string): boolean {
+/**
+ * 是否接管该区块的 EPUB 回链。
+ * 路径命中导出命名规则（`-notes*.md` / `*摘录.md` / `excerpt.md`）时直接接管；
+ * 否则只要区块内出现 `[data-yh-cfi]`（只有墨光导出会写）也接管——这条覆盖 MOC 页与用户改过名的导出页。
+ */
+export function shouldHandleAnnotationPage(sourcePath: string, hasCfiAnchor: boolean): boolean {
+  return hasCfiAnchor || isExportedAnnotationPath(sourcePath);
+}
+
+export function isExportedAnnotationPath(sourcePath: string): boolean {
   const basename = sourcePath.split("/").pop() ?? sourcePath;
   return /-notes(?:-[^.]+)?\.md$/i.test(basename) || basename.endsWith("摘录.md") || basename.endsWith("excerpt.md");
 }
@@ -72,6 +84,12 @@ function wireGotoAnchor(
   const callout = anchor.closest(".callout");
   const target = callout ? findTargetNear(callout as HTMLElement, sourcePath, app) : null;
 
+  // 解析不到目标时不劫持：新导出的回链本身是 obsidian://inklight-epub 协议链接，原生点击即可跳；
+  // 老导出页（href 为 #^<blockId> 自引用锚点）本来也无效，保持原样不会更差。
+  if (!target) {
+    return;
+  }
+
   anchor.dataset.yhEpubGotoWired = "1";
   anchor.addClass("yh-epub-goto-link");
   anchor.title = "Open source annotation";
@@ -80,11 +98,7 @@ function wireGotoAnchor(
   anchor.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    if (target) {
-      void goto(target.file, target.cfi);
-      return;
-    }
-    new Notice("Unable to resolve source annotation");
+    void goto(target.file, target.cfi);
   });
 }
 

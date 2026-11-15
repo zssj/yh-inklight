@@ -409,6 +409,61 @@ describe("导出", () => {
   });
 });
 
+describe("EPUB 回链", () => {
+  const EPUB_PATH = "books/复利 破局.epub";
+  const CFI = "epubcfi(/6/28!/4[BE6O0]/140,/1:0,/1:118)";
+
+  async function setupEpub(tags?: string[]): Promise<Harness & { epub: ReturnType<FakeVault["fileAt"]> }> {
+    const { app, vault } = createApp({ files: { [EPUB_PATH]: "" } });
+    const store = new AnnotationStore(app);
+    await store.initialize();
+    const epub = vault.fileAt(EPUB_PATH);
+    await store.addEpubHighlight(epub, {
+      id: "h1",
+      type: "epub-highlight",
+      color: "yellow",
+      style: "fill",
+      anchor: { cfiRange: CFI, chapter: "第一章", selectedText: "复利效应" },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      ...(tags ? { tags } : {}),
+    });
+    return { vault, store, file: epub, epub };
+  }
+
+  function backLinkOf(content: string): string {
+    const matched = content.match(/\[Back to source\]\((obsidian:\/\/[^)]+)\)/);
+    expect(matched, `导出内容里没有协议回链：\n${content}`).not.toBeNull();
+    return matched![1];
+  }
+
+  it("单文件导出的回链是自带目标（源文件 + CFI）的协议链接，不再是 #^ 自引用锚点", async () => {
+    const { store, vault, epub } = await setupEpub();
+    await store.exportNotes(epub);
+
+    const content = vault.readText("books/复利 破局-notes.md");
+    expect(content).not.toContain("(#^epub-h1)");
+
+    const url = new URL(backLinkOf(content));
+    expect(url.protocol).toBe("obsidian:");
+    expect(url.hostname).toBe("inklight-epub");
+    expect(url.searchParams.get("file")).toBe(EPUB_PATH);
+    expect(url.searchParams.get("cfi")).toBe(CFI);
+  });
+
+  it("标签 MOC 页的 EPUB 回链同样是协议链接（MOC 页不在导出页路径白名单内）", async () => {
+    const { store, vault } = await setupEpub(["复利效应"]);
+    const result = await store.exportTagMoc("复利效应");
+
+    expect(result.status).toBe("written");
+    const content = vault.readText("MOC/复利效应.md");
+    expect(content).not.toContain("(#^epub-h1)");
+
+    const url = new URL(backLinkOf(content));
+    expect(url.searchParams.get("file")).toBe(EPUB_PATH);
+    expect(url.searchParams.get("cfi")).toBe(CFI);
+  });
+});
+
 describe("toSidecarPath", () => {
   it("短路径用可读的 legacy 命名（路径段以 __ 连接）", async () => {
     const { store } = await setup();

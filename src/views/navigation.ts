@@ -30,10 +30,16 @@ export interface AnnotationTarget {
  * EPUB 必须先复用已有 leaf：重复 openFile 会二次触发 onLoadFile，
  * 进度恢复的 goTo 与批注跳转互相覆盖，还会同时留下两个同文件视图。
  */
+export interface OpenAnnotationTargetOptions {
+  /** 协议回链（外部点击）用新标签页打开，避免把正在读的导出笔记顶掉 */
+  newTab?: boolean;
+}
+
 export async function openAnnotationTarget(
   app: App,
   target: AnnotationTarget,
   navigateEpub: (file: TFile, cfiRange: string) => void,
+  options?: OpenAnnotationTargetOptions,
 ): Promise<void> {
   if (target.mode === "epub") {
     const existing = findOpenEpubLeaf(app, target.file);
@@ -46,7 +52,7 @@ export async function openAnnotationTarget(
     }
   }
 
-  const leaf = app.workspace.getLeaf(false);
+  const leaf = app.workspace.getLeaf(options?.newTab ? "tab" : false);
   await leaf.openFile(target.file);
 
   if (target.mode === "epub" && target.cfiRange) {

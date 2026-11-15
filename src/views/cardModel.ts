@@ -7,6 +7,7 @@
 
 import {
   AnnotationColor,
+  AnnotationNoteType,
   CommentAnnotation,
   EpubCommentAnnotation,
   EpubHighlightAnnotation,
@@ -37,6 +38,8 @@ interface SidebarCardBase {
   isCode: boolean;
   /** 卡片级标签：高亮与其笔记的并集，编辑时对两者写同一份数组 */
   tags: string[];
+  /** 想法类型：以前只在 EPUB 笔记层存在，卡片层拿到后导出才能写成 noteType:: 字段 */
+  noteType?: AnnotationNoteType;
 }
 
 export type SidebarCard =
@@ -86,6 +89,7 @@ export function buildCards(document: FileAnnotationDocument): SidebarCard[] {
       orphaned: highlight.orphaned || note?.orphaned,
       isCode: isCodeAnchor(highlight.anchor),
       tags: collectTags(highlight, note),
+      noteType: note?.noteType,
       highlight,
       note,
     });
@@ -110,6 +114,7 @@ export function buildCards(document: FileAnnotationDocument): SidebarCard[] {
       orphaned: highlight.orphaned || note?.orphaned,
       isCode: false,
       tags: collectTags(highlight, note),
+      noteType: note?.noteType,
       highlight,
       note,
     });
@@ -136,6 +141,7 @@ export function buildCards(document: FileAnnotationDocument): SidebarCard[] {
       orphaned: highlight.orphaned || note?.orphaned,
       isCode: false,
       tags: collectTags(highlight, note),
+      noteType: note?.noteType,
       highlight,
       note,
     });
@@ -156,6 +162,7 @@ export function buildCards(document: FileAnnotationDocument): SidebarCard[] {
       orphaned: note.orphaned,
       isCode: isCodeAnchor(note.anchor),
       tags: collectTags(null, note),
+      noteType: note.noteType,
       highlight: null,
       note,
     });
@@ -176,6 +183,7 @@ export function buildCards(document: FileAnnotationDocument): SidebarCard[] {
       orphaned: note.orphaned,
       isCode: false,
       tags: collectTags(null, note),
+      noteType: note.noteType,
       highlight: null,
       note,
     });
@@ -198,6 +206,7 @@ export function buildCards(document: FileAnnotationDocument): SidebarCard[] {
       orphaned: note.orphaned,
       isCode: false,
       tags: collectTags(null, note),
+      noteType: note.noteType,
       highlight: null,
       note,
     });

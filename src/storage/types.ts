@@ -75,6 +75,25 @@ export interface LocatedAnchor {
   confidence: number;
 }
 
+/** 批注的「想法类型」：导出笔记里写成 noteType:: 字段，供 Dataview 筛选 */
+export type AnnotationNoteType = "insight" | "question" | "reminder";
+
+/** 关系语义：回答「A 和 B 是什么关系」，而不只是「它们打了同一个标签」 */
+export type RelationType = "supports" | "refutes" | "example" | "extends";
+
+/**
+ * 一条有向关系：从「持有该字段的批注」指向 target。
+ * 只存引用（路径 + id + 载体），不存对方内容——对方删了不会污染这条数据。
+ */
+export interface AnnotationRelation {
+  targetPath: string;
+  targetId: string;
+  /** 目标批注的载体：块 id 由 `${targetMode}-${targetId}` 组成 */
+  targetMode: "md" | "pdf" | "epub";
+  type: RelationType;
+  createdAt: string;
+}
+
 export interface HighlightAnnotation {
   id: string;
   color: AnnotationColor;
@@ -83,6 +102,8 @@ export interface HighlightAnnotation {
   orphaned?: boolean;
   /** 自由标签；空数组在序列化时被清成 undefined，与老数据完全一致 */
   tags?: string[];
+  noteType?: AnnotationNoteType;
+  relations?: AnnotationRelation[];
 }
 
 export interface PdfRectAnchor {
@@ -107,6 +128,8 @@ export interface PdfHighlightAnnotation {
   orphaned?: boolean;
   /** 自由标签；空数组在序列化时被清成 undefined */
   tags?: string[];
+  noteType?: AnnotationNoteType;
+  relations?: AnnotationRelation[];
 }
 
 export interface ReplyAnnotation {
@@ -137,6 +160,8 @@ export interface CommentAnnotation {
   orphaned?: boolean;
   /** 自由标签；空数组在序列化时被清成 undefined */
   tags?: string[];
+  noteType?: AnnotationNoteType;
+  relations?: AnnotationRelation[];
 }
 
 export interface PdfCommentAnnotation {
@@ -156,6 +181,8 @@ export interface PdfCommentAnnotation {
   orphaned?: boolean;
   /** 自由标签；空数组在序列化时被清成 undefined */
   tags?: string[];
+  noteType?: AnnotationNoteType;
+  relations?: AnnotationRelation[];
 }
 
 export interface FileAnnotationDocument {
@@ -335,6 +362,8 @@ export interface EpubHighlightAnnotation {
   orphaned?: boolean;
   /** 自由标签；空数组在序列化时被清成 undefined */
   tags?: string[];
+  noteType?: AnnotationNoteType;
+  relations?: AnnotationRelation[];
 }
 
 export interface EpubCommentAnnotation {
@@ -344,7 +373,6 @@ export interface EpubCommentAnnotation {
   style: EpubHighlightStyle;
   anchor: EpubCfiAnchor;
   note: string;
-  noteType?: "insight" | "question" | "reminder";
   createdAt: string;
   collapsed: boolean;
   author: string;
@@ -354,6 +382,8 @@ export interface EpubCommentAnnotation {
   orphaned?: boolean;
   /** 自由标签；空数组在序列化时被清成 undefined */
   tags?: string[];
+  noteType?: AnnotationNoteType;
+  relations?: AnnotationRelation[];
 }
 
 export interface EpubReadingProgress {

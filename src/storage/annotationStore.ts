@@ -13,6 +13,8 @@ import {
   AnnotationIndexEntry,
   AnnotationColor,
   AnnotationExportFormat,
+  AnnotationNoteType,
+  AnnotationRelation,
   CommentAnnotation,
   EMPTY_INDEX,
   FileAnnotationDocument,
@@ -26,6 +28,7 @@ import {
   ReadingBookmark,
 } from "./types";
 import { normalizeTags, sortTagKeys, tagKey, toObsidianTag, toObsidianTags } from "./tags";
+import { buildSourceLinkUrl } from "./sourceLink";
 
 const STORE_DIR = ".obsidian-annotations";
 const INDEX_PATH = normalizePath(`${STORE_DIR}/index.json`);
@@ -76,6 +79,10 @@ interface ExportEntry {
   startOffset: number;
   /** 该条批注的插件标签，仅在 OB 标签互通开启时写入导出笔记 */
   tags: string[];
+  /** 想法类型（insight/question/reminder），导出为 noteType:: 字段 */
+  noteType?: AnnotationNoteType;
+  /** 有向关系，导出为 supports:: / refutes:: / example:: / extends:: 字段 */
+  relations?: AnnotationRelation[];
 }
 
 /** 一条待改标签的批注定位（跨文档批量操作用） */
@@ -445,6 +452,88 @@ export class AnnotationStore {
       epubHighlights: document.epubHighlights.filter((item) => item.id !== annotationId),
       epubComments: document.epubComments.filter((item) => item.id !== annotationId),
       bookmarks: document.bookmarks.filter((item) => item.id !== annotationId),
+      lastModified: new Date().toISOString(),
+    };
+    await this.saveDocument(nextDocument);
+    return nextDocument;
+  }
+
+  /**
+   * 写入某条批注的关系（空数组即清除）。id 可能落在任一数组里，故按数组类型统一 patch。
+   * 关系只存「指向」不存对方内容：对方被删后这条数据仍然可读，不会级联失效。
+   */
+  async setRelations(
+    file: TFile,
+    annotationId: string,
+    relations: AnnotationRelation[],
+  ): Promise<FileAnnotationDocument> {
+    const document = await this.getDocument(file);
+    const next = relations.length > 0 ? relations : undefined;
+    const patch = <T extends { id: string; relations?: AnnotationRelation[] }>(item: T): T =>
+      item.id === annotationId ? { ...item, relations: next } : item;
+
+    const nextDocument: FileAnnotationDocument = {
+      ...document,
+      highlights: document.highlights.map(patch),
+      comments: document.comments.map(patch),
+      pdfHighlights: document.pdfHighlights.map(patch),
+      pdfComments: document.pdfComments.map(patch),
+      epubHighlights: document.epubHighlights.map(patch),
+      epubComments: document.epubComments.map(patch),
+      lastModified: new Date().toISOString(),
+    };
+    await this.saveDocument(nextDocument);
+    return nextDocument;
+  }
+
+  /** 追加一条有向关系；同一目标同一类型重复确认不会产生重复行 */
+  async addRelation(
+    file: TFile,
+    annotationId: string,
+    relation: AnnotationRelation,
+  ): Promise<FileAnnotationDocument> {
+    return this.patchRelations(file, annotationId, (existing) => [
+      ...existing.filter(
+        (item) => !(item.targetPath === relation.targetPath && item.targetId === relation.targetId && item.type === relation.type),
+      ),
+      relation,
+    ]);
+  }
+
+  /** 移除指向某条批注的全部关系；断开关联时与标签一起清理，避免导出后残留死链接 */
+  async removeRelation(
+    file: TFile,
+    annotationId: string,
+    targetPath: string,
+    targetId: string,
+  ): Promise<FileAnnotationDocument> {
+    return this.patchRelations(file, annotationId, (existing) =>
+      existing.filter((item) => !(item.targetPath === targetPath && item.targetId === targetId)),
+    );
+  }
+
+  private async patchRelations(
+    file: TFile,
+    annotationId: string,
+    update: (existing: AnnotationRelation[]) => AnnotationRelation[],
+  ): Promise<FileAnnotationDocument> {
+    const document = await this.getDocument(file);
+    const patchRelationsOf = <T extends { id: string; relations?: AnnotationRelation[] }>(item: T): T => {
+      if (item.id !== annotationId) {
+        return item;
+      }
+      const next = update(item.relations ?? []);
+      return { ...item, relations: next.length > 0 ? next : undefined };
+    };
+
+    const nextDocument: FileAnnotationDocument = {
+      ...document,
+      highlights: document.highlights.map(patchRelationsOf),
+      comments: document.comments.map(patchRelationsOf),
+      pdfHighlights: document.pdfHighlights.map(patchRelationsOf),
+      pdfComments: document.pdfComments.map(patchRelationsOf),
+      epubHighlights: document.epubHighlights.map(patchRelationsOf),
+      epubComments: document.epubComments.map(patchRelationsOf),
       lastModified: new Date().toISOString(),
     };
     await this.saveDocument(nextDocument);
@@ -1155,8 +1244,37 @@ function buildExportLines(
   return [...lines, ...renderSummary(entries)];
 }
 
+/** 把 noteType / relations 补到对应条目上；没有就原样返回，老数据导出结果保持不变 */
+function attachExportMetadata(
+  entry: ExportEntry,
+  metadata: Map<string, Pick<ExportEntry, "noteType" | "relations">>,
+): ExportEntry {
+  const extra = metadata.get(entry.id);
+  return extra ? { ...entry, ...extra } : entry;
+}
+
 function collectExportEntries(source: ExportDocumentSource): ExportEntry[] {
-  return [
+  // noteType / relations 只挂在部分批注上（历史上只有 EPUB 笔记有 noteType），
+  // 统一在末尾补齐，避免 6 个 map 分支各写一遍、漏一个就静默丢失。
+  const metadata = new Map<string, Pick<ExportEntry, "noteType" | "relations">>();
+  const collect = (item: {
+    id: string;
+    noteType?: AnnotationNoteType;
+    relations?: AnnotationRelation[];
+  }): void => {
+    if (item.noteType || item.relations?.length) {
+      metadata.set(item.id, { noteType: item.noteType, relations: item.relations });
+    }
+  };
+  const document = source.document;
+  document.highlights.forEach(collect);
+  document.comments.forEach(collect);
+  document.pdfHighlights.forEach(collect);
+  document.pdfComments.forEach(collect);
+  document.epubHighlights.forEach(collect);
+  document.epubComments.forEach(collect);
+
+  const entries: ExportEntry[] = [
     ...source.document.highlights.map((highlight): ExportEntry => ({
       id: highlight.id,
       kind: "highlight",
@@ -1242,6 +1360,8 @@ function collectExportEntries(source: ExportDocumentSource): ExportEntry[] {
   ].sort((left, right) => {
     return left.sourcePath.localeCompare(right.sourcePath) || left.startOffset - right.startOffset;
   });
+
+  return entries.map((entry) => attachExportMetadata(entry, metadata));
 }
 
 function renderSummary(entries: ExportEntry[]): string[] {
@@ -1525,44 +1645,69 @@ function renderAnnotationBlock(entry: ExportEntry): string[] {
     lines.push(anchor);
   }
 
+  const metadata = renderMetadataLines(entry);
+  if (metadata.length > 0) {
+    lines.push("");
+    lines.push(...metadata);
+  }
+
   lines.push(blockEndMarker(blockId));
   lines.push("");
   return lines;
 }
 
+/**
+ * 结构化字段：写在 callout 之外的块内区域——Dataview 能直接读成 inline field，
+ * 又不影响 callout 的渲染。这些行同样在受控块内，重复导出会被刷新，块外手写内容不受影响。
+ * relations 在同文件时写成块链接（真边）；跨文件先写纯文本，导出笔记路径要等反查指针落库后才能确定。
+ */
+function renderMetadataLines(entry: ExportEntry): string[] {
+  const lines: string[] = [];
+  if (entry.noteType) {
+    lines.push(`noteType:: ${entry.noteType}`);
+  }
+  if (entry.chapter?.trim()) {
+    lines.push(`chapter:: ${entry.chapter.trim()}`);
+  }
+  for (const relation of entry.relations ?? []) {
+    lines.push(`${relation.type}:: ${renderRelationTarget(relation, entry.sourcePath)}`);
+  }
+  return lines;
+}
+
+function renderRelationTarget(relation: AnnotationRelation, selfPath: string): string {
+  const blockId = `${relation.targetMode}-${relation.targetId}`;
+  if (relation.targetPath === selfPath) {
+    return `[[#^${blockId}]]`;
+  }
+  return `"${relation.targetPath}#${relation.targetId}"`;
+}
+
+/**
+ * 回链统一走 `obsidian://inklight` 协议：链接本身自带目标（源文件 + 锚点 + 原文片段），
+ * 不依赖导出页的路径，也不依赖任何 post processor 劫持。
+ *
+ * 历史实现分三套：md 用 `[[源文件]]`（只能落到文件头）、pdf 用 `[[源文件#page=N]]`
+ * （赌 Obsidian 私有锚点语法）、epub 用 `#^<blockId>` 自引用锚点（指向导出笔记自己，
+ * 只有被 EpubGotoHandler 劫持才有跳转能力，MOC 页不在白名单里就点了没反应）。
+ * 现在三端同一套：md 带 offset + 原文片段（偏移漂移可就近校正），pdf 带 page，epub 带 CFI。
+ */
 function entryBackLink(entry: ExportEntry): string {
-  if (entry.mode === "pdf" && entry.pageNumber) {
-    return `[[${entry.sourcePath}#page=${entry.pageNumber}|Back to source]]`;
-  }
-  if (entry.mode === "epub" && entry.cfiRange) {
-    return `[Back to source](${epubGotoUrl(entry.sourcePath, entry.cfiRange)})`;
-  }
-  if (entry.mode === "md") {
-    return `[[${entry.sourcePath}|Back to source]]`;
-  }
-  return "";
+  const url = buildSourceLinkUrl({
+    sourcePath: entry.sourcePath,
+    mode: entry.mode,
+    offset: entry.mode === "md" ? entry.startOffset : undefined,
+    pageNumber: entry.pageNumber,
+    cfiRange: entry.mode === "epub" ? entry.cfiRange : undefined,
+    quote: entry.text,
+  });
+  return `[Back to source](${url})`;
 }
 
 /**
- * EPUB 回跳链接：直接交给 main.ts 注册的 `obsidian://inklight-epub` 协议处理器。
- * 历史实现是 `[Back to source](#^<blockId>)`——指向导出笔记自己的块 id，不是源书，
- * 只有被 EpubGotoHandler 的 post processor 劫持才有跳转能力；标签 MOC 页（MOC/<标签>.md）
- * 不匹配该处理器的导出页路径白名单，劫持不生效，点击就表现为「没反应」。
- * 写成协议链接后，链接本身自带目标（源文件 + CFI），不依赖页面路径与后处理器。
+ * 隐藏锚点保留给 EpubGotoHandler：老导出页的回链是 `#^<blockId>` 自引用锚点，
+ * 只能靠它从页内 CFI / 页码反推目标。新导出页已改用协议链接，锚点仅作兜底与兼容。
  */
-function epubGotoUrl(sourcePath: string, cfiRange: string): string {
-  return `obsidian://inklight-epub?file=${encodeLinkValue(sourcePath)}&cfi=${encodeLinkValue(cfiRange)}`;
-}
-
-/**
- * Markdown 链接目标转义：`encodeURIComponent` 不会转义 `( ) ! ' *`，
- * 而 CFI 形如 `epubcfi(/6/28[...])`、中文书名常含 `(刘润)`，
- * 这些括号会让 `[text](url)` 在第一个 `)` 处提前结束，链接被截断成死链。
- */
-function encodeLinkValue(value: string): string {
-  return encodeURIComponent(value).replace(/[()'!*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
-}
-
 function hiddenAnchor(entry: ExportEntry): string {
   if (entry.mode === "epub" && entry.cfiRange) {
     return `> <span style="display:none" data-yh-cfi="${escapeHtmlAttribute(entry.cfiRange)}" data-yh-source-path="${escapeHtmlAttribute(entry.sourcePath)}"></span>`;

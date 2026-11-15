@@ -30,6 +30,8 @@ import {
 import { AnnotationCard, annotationBadge, formatAnnotationTime } from "./src/views/annotationCard";
 import { toPopoverRect } from "./src/views/popoverPlacement";
 import { ANNOTATION_SIDEBAR_VIEW, AnnotationSidebarView } from "./src/views/sidebarView";
+import { openAnnotationTarget } from "./src/views/navigation";
+import { parseSourceLinkParams, refineOffset, SourceLinkTarget } from "./src/storage/sourceLink";
 import { StickyNoteLane } from "./src/views/stickyNoteLane";
 import { EpubReaderView, EPUB_READER_VIEW_TYPE } from "./src/epub/EpubReaderView";
 import { EpubBookshelfView, EPUB_BOOKSHELF_VIEW_TYPE } from "./src/epub/EpubBookshelfView";
@@ -317,6 +319,10 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       if (filePath && cfi) {
         void this.openEpubAtCfi(filePath, cfi);
       }
+    });
+    // 统一回链入口：md 带 offset + 原文片段、pdf 带 page、epub 带 CFI，三端同一套参数
+    this.registerObsidianProtocolHandler("inklight", (params) => {
+      void this.openSourceLink(params);
     });
     this.registerMarkdownPostProcessor((element, context) => this.renderReadingHighlights(element, context));
   }
@@ -1269,6 +1275,48 @@ export default class OverlayAnnotationsPlugin extends Plugin {
    * 打开 EPUB 文件并导航到指定 CFI 位置。
    * 供 EpubGotoHandler（摘录回跳）和 Obsidian 协议处理器调用。
    */
+  /**
+   * 统一回链跳转：解析 `obsidian://inklight` 参数后复用 openAnnotationTarget，
+   * 保证「导出笔记里点回链」与「侧栏点卡片」走同一条定位逻辑，不会两套行为漂移。
+   * md 的 startOffset 是裸字符下标，原文上方改过字就会偏，先用携带的原文片段就近校正。
+   */
+  async openSourceLink(params: Record<string, unknown>): Promise<void> {
+    const target = parseSourceLinkParams(params);
+    if (!target) {
+      new Notice("回链参数缺失，无法定位原文");
+      return;
+    }
+
+    const file = this.app.vault.getAbstractFileByPath(target.file);
+    if (!(file instanceof TFile)) {
+      new Notice(`找不到源文件：${target.file}`);
+      return;
+    }
+
+    if (target.mode === "epub" && target.cfi) {
+      await this.openEpubAtCfi(file.path, target.cfi);
+      return;
+    }
+
+    let offset = target.offset ?? 0;
+    if (target.mode === "md") {
+      offset = refineOffset(await this.app.vault.cachedRead(file), offset, target.quote);
+    }
+
+    await openAnnotationTarget(
+      this.app,
+      {
+        file,
+        offset,
+        pageNumber: target.page,
+        mode: target.mode,
+        cfiRange: target.cfi ?? undefined,
+      },
+      (targetFile, cfi) => this.openEpubAtCfi(targetFile.path, cfi),
+      { newTab: true },
+    );
+  }
+
   async openEpubAtCfi(filePath: string, cfi: string): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(filePath);
     if (!(file instanceof TFile) || file.extension.toLowerCase() !== "epub") {

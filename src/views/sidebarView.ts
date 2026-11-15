@@ -30,6 +30,7 @@ import {
   HighlightAnnotation,
   PdfCommentAnnotation,
   PdfHighlightAnnotation,
+  RelationType,
 } from "../storage/types";
 import { AnnotationKind, AnnotationMode, buildCards, SidebarCard } from "./cardModel";
 import { renderTagChips, renderTagInput, TagSuggestion } from "./tagInput";
@@ -39,6 +40,14 @@ import { hasTag, normalizeTag, tagKey, unionTags } from "../storage/tags";
 import type { TagRef } from "../storage/annotationStore";
 
 export const ANNOTATION_SIDEBAR_VIEW = "yh-inklight-sidebar";
+
+/** 关系类型只留四种：再多用户每次连边都要先做一道选择题，很快就懒得连了 */
+const RELATION_TYPE_LABELS: ReadonlyArray<readonly [RelationType, string]> = [
+  ["supports", "支持"],
+  ["refutes", "反驳"],
+  ["example", "举例"],
+  ["extends", "延伸"],
+];
 
 type AnnotationScope = "current" | "all";
 type TypeFilter = "all" | AnnotationKind;
@@ -712,6 +721,38 @@ export class AnnotationSidebarView extends ItemView {
     };
 
     const chips = picker.createDiv({ cls: "yh-ov-related-picker-chips" });
+    // 关系类型行：先选「这是什么关系」，再选标签。不选类型时只写共享标签（与旧行为一致），
+    // 选了类型才会在批注上落一条有向关系，导出时写成 supports:: / refutes:: 等 inline field。
+    const typeRow = picker.createDiv({ cls: "yh-ov-related-types" });
+    let chosenType: RelationType | null = null;
+    for (const [type, label] of RELATION_TYPE_LABELS) {
+      const button = typeRow.createSpan({
+        cls: "yh-ov-related-type",
+        text: label,
+        attr: { role: "button", tabindex: "0", "aria-pressed": "false", title: `标记为「${label}」：再选一个标签建立有向关联` },
+      });
+      const toggle = (): void => {
+        chosenType = chosenType === type ? null : type;
+        typeRow.querySelectorAll(".yh-ov-related-type").forEach((node) => node.removeClass("is-active"));
+        button.setAttribute("aria-pressed", chosenType ? "true" : "false");
+        if (chosenType) {
+          button.addClass("is-active");
+        }
+      };
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        toggle();
+      });
+      button.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        toggle();
+      });
+    }
+
     const candidates: string[] = [];
     const phrase = reasons[0]; // selectDistinctPhrases 按长度降序，第一条即最长短语
     if (phrase) {
@@ -744,7 +785,7 @@ export class AnnotationSidebarView extends ItemView {
       });
       chip.addEventListener("click", () => {
         close();
-        void this.applyRelationTag(self, other, name);
+        void this.applyRelationTag(self, other, name, chosenType);
       });
     }
 
@@ -772,7 +813,7 @@ export class AnnotationSidebarView extends ItemView {
           return;
         }
         close();
-        void this.applyRelationTag(self, other, value);
+        void this.applyRelationTag(self, other, value, chosenType);
       }
     });
 
@@ -1031,8 +1072,17 @@ export class AnnotationSidebarView extends ItemView {
     return { refs, live };
   }
 
-  /** 确认关联：把同一个标签写入两侧；先两侧都活读成功再写，避免一侧成功一侧失败的不对称 */
-  private async applyRelationTag(self: SidebarCard, other: SidebarCard, rawTag: string): Promise<void> {
+  /**
+   * 确认关联：把同一个标签写入两侧（旧行为不变）；选了关系类型时再落一条有向关系
+   * （self → other），导出时写成 `supports:: [[#^块id]]`。先两侧都活读成功再写，
+   * 避免一侧成功一侧失败的不对称。
+   */
+  private async applyRelationTag(
+    self: SidebarCard,
+    other: SidebarCard,
+    rawTag: string,
+    relationType: RelationType | null = null,
+  ): Promise<void> {
     const tag = normalizeTag(rawTag);
     if (!tag) {
       return;
@@ -1049,9 +1099,20 @@ export class AnnotationSidebarView extends ItemView {
       // setTags 是覆盖式：每侧单独一次调用，写入「该侧最新 tags ∪ 确认标签」
       await this.plugin.store.setTags(preparedSelf.refs, unionTags(preparedSelf.live, [tag]));
       await this.plugin.store.setTags(preparedOther.refs, unionTags(preparedOther.live, [tag]));
+      const selfFile = this.app.vault.getAbstractFileByPath(self.sourcePath);
+      if (relationType && selfFile instanceof TFile) {
+        await this.plugin.store.addRelation(selfFile, self.id, {
+          targetPath: other.sourcePath,
+          targetId: other.id,
+          targetMode: other.mode,
+          type: relationType,
+          createdAt: new Date().toISOString(),
+        });
+      }
       // 标签字典变了，「标签 → 词频」索引不等 3 秒 TTL
       this.relations.invalidate();
-      new Notice(`已用「${tag}」关联两侧批注`);
+      const label = RELATION_TYPE_LABELS.find(([type]) => type === relationType)?.[1];
+      new Notice(label ? `已建立「${label}」关系，并共享标签「${tag}」` : `已用「${tag}」关联两侧批注`);
       await this.plugin.refreshAnnotations();
     } catch (error) {
       console.warn("yh-inklight: 写入关联标签失败", error);
@@ -1082,6 +1143,15 @@ export class AnnotationSidebarView extends ItemView {
         preparedOther.refs,
         unionTags(preparedOther.live).filter((item) => tagKey(item) !== key),
       );
+      // 关系与标签一起断开：只删标签会在导出笔记里留下指向已断开关联的 supports:: 行
+      const selfFile = this.app.vault.getAbstractFileByPath(self.sourcePath);
+      if (selfFile instanceof TFile) {
+        await this.plugin.store.removeRelation(selfFile, self.id, other.sourcePath, other.id);
+      }
+      const otherFile = this.app.vault.getAbstractFileByPath(other.sourcePath);
+      if (otherFile instanceof TFile) {
+        await this.plugin.store.removeRelation(otherFile, other.id, self.sourcePath, self.id);
+      }
       this.relations.invalidate();
       new Notice(`已断开关联标签「${rawTag}」`);
       await this.plugin.refreshAnnotations();

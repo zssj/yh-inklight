@@ -3388,6 +3388,35 @@ a.yh-epub-goto-link:hover {
   background: var(--background-secondary);
 }
 
+.yh-ov-related-types {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 5px;
+}
+
+.yh-ov-related-type {
+  padding: 0 7px;
+  border: 0.5px dashed var(--yh-border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 0.85em;
+  cursor: pointer;
+  user-select: none;
+}
+
+.yh-ov-related-type:hover {
+  border-color: var(--text-accent);
+  color: var(--text-accent);
+}
+
+.yh-ov-related-type.is-active {
+  border-style: solid;
+  border-color: var(--text-accent);
+  background: var(--background-modifier-hover);
+  color: var(--text-accent);
+}
+
 .yh-ov-related-picker-chips {
   display: flex;
   flex-wrap: wrap;

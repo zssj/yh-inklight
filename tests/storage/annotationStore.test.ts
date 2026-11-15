@@ -17,6 +17,7 @@ import { FileAnnotationDocument, HighlightAnnotation, TextAnchor } from "../../s
 import { FakeVault, createApp } from "../helpers/fakeVault";
 
 const MD_PATH = "读书笔记/复利.md";
+const PDF_PATH = "papers/成本.pdf";
 const SIDECAR_DIR = ".obsidian-annotations";
 
 function anchorOf(text: string, start = 0): TextAnchor {
@@ -445,7 +446,8 @@ describe("EPUB 回链", () => {
 
     const url = new URL(backLinkOf(content));
     expect(url.protocol).toBe("obsidian:");
-    expect(url.hostname).toBe("inklight-epub");
+    expect(url.hostname).toBe("inklight");
+    expect(url.searchParams.get("mode")).toBe("epub");
     expect(url.searchParams.get("file")).toBe(EPUB_PATH);
     expect(url.searchParams.get("cfi")).toBe(CFI);
   });
@@ -461,6 +463,107 @@ describe("EPUB 回链", () => {
     const url = new URL(backLinkOf(content));
     expect(url.searchParams.get("file")).toBe(EPUB_PATH);
     expect(url.searchParams.get("cfi")).toBe(CFI);
+  });
+
+  it("Markdown 回链带 offset 与原文片段，不再只到文件头", async () => {
+    const { store, vault, file } = await setup();
+    await store.addHighlight(file, highlightOf("h1", "复利效应", 2));
+    await store.exportNotes(file);
+
+    const content = vault.readText("读书笔记/复利-notes.md");
+    const url = new URL(backLinkOf(content));
+
+    expect(url.hostname).toBe("inklight");
+    expect(url.searchParams.get("mode")).toBe("md");
+    expect(url.searchParams.get("file")).toBe(file.path);
+    expect(url.searchParams.get("offset")).toBe("2");
+    expect(url.searchParams.get("text")).toBe("复利效应");
+    expect(content).not.toContain(`[[${file.path}|Back to source]]`);
+  });
+
+  it("PDF 回链带 page 参数，不再赌 [[#page=N]] 私有锚点", async () => {
+    const { app, vault } = createApp({ files: { [PDF_PATH]: "" } });
+    const store = new AnnotationStore(app);
+    await store.initialize();
+    const pdf = vault.fileAt(PDF_PATH);
+    await store.addPdfHighlight(pdf, {
+      id: "p1",
+      color: "green",
+      anchor: { pageNumber: 7, rects: [{ pageNumber: 7, left: 0.1, top: 0.2, width: 0.3, height: 0.02 }], selectedText: "边际成本" },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    await store.exportNotes(pdf);
+
+    const content = vault.readText(PDF_PATH.replace(/\.pdf$/i, "-notes.md"));
+    const url = new URL(backLinkOf(content));
+
+    expect(url.searchParams.get("mode")).toBe("pdf");
+    expect(url.searchParams.get("page")).toBe("7");
+    expect(content).not.toContain("#page=7|Back to source");
+  });
+
+  it("导出块写出 noteType:: 与 chapter:: 结构化字段", async () => {
+    const { app, vault } = createApp({ files: { [EPUB_PATH]: "" } });
+    const store = new AnnotationStore(app);
+    await store.initialize();
+    const epub = vault.fileAt(EPUB_PATH);
+    await store.addEpubHighlight(epub, {
+      id: "h1",
+      type: "epub-highlight",
+      color: "yellow",
+      style: "fill",
+      anchor: { cfiRange: CFI, chapter: "第三章 复利", selectedText: "复利效应" },
+      noteType: "insight",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    await store.exportNotes(epub);
+
+    const content = vault.readText("books/复利 破局-notes.md");
+    expect(content).toContain("noteType:: insight");
+    expect(content).toContain("chapter:: 第三章 复利");
+  });
+
+  it("同文件的关系导出成块链接，跨文件回落成纯文本引用", async () => {
+    const { store, vault, file } = await setup();
+    await store.addHighlight(file, highlightOf("h1", "复利效应", 2));
+    await store.addHighlight(file, highlightOf("h2", "长期投资", 13));
+    await store.addRelation(file, "h1", {
+      targetPath: file.path,
+      targetId: "h2",
+      targetMode: "md",
+      type: "supports",
+      createdAt: "2026-02-01T00:00:00.000Z",
+    });
+    await store.addRelation(file, "h1", {
+      targetPath: "另一本书.md",
+      targetId: "x9",
+      targetMode: "md",
+      type: "refutes",
+      createdAt: "2026-02-01T00:00:00.000Z",
+    });
+    await store.exportNotes(file);
+
+    const content = vault.readText("读书笔记/复利-notes.md");
+    expect(content).toContain("supports:: [[#^md-h2]]");
+    expect(content).toContain('refutes:: "另一本书.md#x9"');
+  });
+
+  it("同一目标同一类型重复确认只留一条关系；断开后关系消失", async () => {
+    const { store, file } = await setup();
+    await store.addHighlight(file, highlightOf("h1", "复利效应", 2));
+    const relation = {
+      targetPath: file.path,
+      targetId: "h2",
+      targetMode: "md" as const,
+      type: "supports" as const,
+      createdAt: "2026-02-01T00:00:00.000Z",
+    };
+    await store.addRelation(file, "h1", relation);
+    await store.addRelation(file, "h1", relation);
+    expect((await store.getDocument(file)).highlights[0].relations).toHaveLength(1);
+
+    await store.removeRelation(file, "h1", file.path, "h2");
+    expect((await store.getDocument(file)).highlights[0].relations).toBeUndefined();
   });
 });
 

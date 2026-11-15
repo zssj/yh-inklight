@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 obsidian App/Vault/Adapter 的文件读写能力，依赖 storage/types 的 sidecar JSON 合约
- * [OUTPUT]: 对外提供 AnnotationStore，负责 Markdown/PDF/EPUB 的 .obsidian-annotations sidecar 文件、索引、标签索引与标签字典、缓存、导出（单文件/全库/按标签 MOC 页）、孤立批注清理与文件哈希校验迁移
+ * [OUTPUT]: 对外提供 AnnotationStore，负责 Markdown/PDF/EPUB 的 .obsidian-annotations sidecar 文件、索引、标签索引与标签字典、缓存、导出（单文件/全库/按标签 MOC 页，正文按批注块增量合并）、孤立批注清理与文件哈希校验迁移
  * [POS]: storage 模块的唯一持久化入口，隔离原始 Markdown 与注释数据
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
@@ -38,6 +38,23 @@ const TAG_BLOCK_END = "  # inklight:tags:end";
 
 /** 按标签导出 MOC 页的落点：vault 根目录的 MOC 文件夹 */
 const MOC_DIR = "MOC";
+
+/**
+ * 导出笔记里每条批注块的受控边界。用 HTML 注释而非 Obsidian 的 %%：
+ * 阅读视图同样不可见，且不参与 Markdown 解析，不会把 callout 吞进注释。
+ */
+function blockStartMarker(blockId: string): string {
+  return `<!-- inklight:block:${blockId}:start -->`;
+}
+
+function blockEndMarker(blockId: string): string {
+  return `<!-- inklight:block:${blockId}:end -->`;
+}
+
+/** 老格式（升级前导出）没有注释标记，只能靠 callout 头与行尾 block-id 推断块边界 */
+const EXPORT_CALLOUT_HEAD = /^> \[!inklight-(?:md|pdf|epub)\|/;
+const EXPORT_SECTION_HEAD = /^#{1,6}\s/;
+const EXPORT_BLOCK_ID = /\^((?:md|pdf|epub)-[A-Za-z0-9_-]+)\s*$/;
 
 interface ExportDocumentSource {
   filePath: string;
@@ -749,10 +766,7 @@ export class AnnotationStore {
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
     if (existing instanceof TFile) {
       const generated = lines.join("\n");
-      // 开启互通时合并用户手改过的 frontmatter；关闭时保持原有全量覆盖行为
-      const content = obTagBridge
-        ? mergeExportFrontmatter(await this.app.vault.cachedRead(existing), generated)
-        : generated;
+      const content = mergeExportDocument(await this.app.vault.cachedRead(existing), generated, obTagBridge);
       await this.app.vault.modify(existing, content);
       return existing;
     }
@@ -770,9 +784,7 @@ export class AnnotationStore {
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
     if (existing instanceof TFile) {
       const generated = lines.join("\n");
-      const content = obTagBridge
-        ? mergeExportFrontmatter(await this.app.vault.cachedRead(existing), generated)
-        : generated;
+      const content = mergeExportDocument(await this.app.vault.cachedRead(existing), generated, obTagBridge);
       await this.app.vault.modify(existing, content);
       return existing;
     }
@@ -822,9 +834,7 @@ export class AnnotationStore {
         return { status: "skipped-foreign", path: targetPath };
       }
       const generated = lines.join("\n");
-      const content = obTagBridge
-        ? mergeExportFrontmatter(await this.app.vault.cachedRead(existing), generated)
-        : generated;
+      const content = mergeExportDocument(await this.app.vault.cachedRead(existing), generated, obTagBridge);
       await this.app.vault.modify(existing, content);
       return { status: "written", file: existing };
     }
@@ -1336,44 +1346,156 @@ function splitFrontmatter(text: string): { lines: string[]; body: string } | nul
 }
 
 /**
- * 覆盖导出笔记时保护用户手改过的 frontmatter。
- * - 有受控标记：只替换标记内的 tags 行，frontmatter 其它字段保留
- * - 有 frontmatter 但无标记：整块保留，不注入 tags（正文 #标签 仍会被 OB 索引）
- * - 无 frontmatter：直接使用新生成的内容
- * 正文始终用生成内容（与改造前的全量覆盖行为一致）。
+ * 覆盖导出笔记时的合并策略：frontmatter 保留用户字段，正文按批注块增量替换。
+ * - frontmatter：仅开启互通且存在受控标记时替换 tags 行，其余字段一律保留
+ * - 正文：按 `<!-- inklight:block:<mode>-<id>:start/end -->` 定位，同 id 块整块替换
+ * - 块外内容（用户手写段落、双链、新标题）原样保留
+ * - 导出里新出现的批注追加到文末；导出已不含的块不删除（避免误删用户写在块内的内容）
+ * - 文件里完全没有可识别块时，保留原正文并把新块追加进去，绝不覆盖用户文件
  */
-function mergeExportFrontmatter(existingText: string, generatedText: string): string {
-  const generated = splitFrontmatter(generatedText);
-  if (!generated) {
-    return generatedText;
-  }
-  const existing = splitFrontmatter(existingText);
-  if (!existing) {
-    return generatedText;
+function mergeExportDocument(existingText: string, generatedText: string, obTagBridge: boolean): string {
+  const existingFrontmatter = splitFrontmatter(existingText);
+  const generatedFrontmatter = splitFrontmatter(generatedText);
+  const existingBody = existingFrontmatter ? existingFrontmatter.body : existingText;
+  const generatedBody = generatedFrontmatter ? generatedFrontmatter.body : generatedText;
+  const mergedBody = mergeExportBody(existingBody, generatedBody);
+
+  if (!existingFrontmatter) {
+    return generatedFrontmatter
+      ? `---\n${generatedFrontmatter.lines.join("\n")}\n---\n${mergedBody}`
+      : mergedBody;
   }
 
-  const startIdx = existing.lines.indexOf(TAG_BLOCK_START);
-  const endIdx = existing.lines.indexOf(TAG_BLOCK_END);
-  if (startIdx >= 0 && endIdx > startIdx) {
-    const newStart = generated.lines.indexOf(TAG_BLOCK_START);
-    const newEnd = generated.lines.indexOf(TAG_BLOCK_END);
-    const tags = newStart >= 0 && newEnd > newStart ? generated.lines.slice(newStart + 1, newEnd) : [];
-    const merged = [
-      ...existing.lines.slice(0, startIdx + 1),
-      ...tags,
-      ...existing.lines.slice(endIdx),
-    ];
-    return `---\n${merged.join("\n")}\n---\n${generated.body}`;
+  const mergedFrontmatter = mergeFrontmatterLines(existingFrontmatter.lines, generatedFrontmatter?.lines ?? [], obTagBridge);
+  return `---\n${mergedFrontmatter.join("\n")}\n---\n${mergedBody}`;
+}
+
+/** frontmatter 合并：互通关闭或没有受控标记时，整块保留用户写的字段 */
+function mergeFrontmatterLines(existing: string[], generated: string[], obTagBridge: boolean): string[] {
+  if (!obTagBridge) {
+    return existing;
+  }
+  const startIdx = existing.indexOf(TAG_BLOCK_START);
+  const endIdx = existing.indexOf(TAG_BLOCK_END);
+  if (startIdx < 0 || endIdx <= startIdx) {
+    return existing;
+  }
+  const newStart = generated.indexOf(TAG_BLOCK_START);
+  const newEnd = generated.indexOf(TAG_BLOCK_END);
+  const tags = newStart >= 0 && newEnd > newStart ? generated.slice(newStart + 1, newEnd) : [];
+  return [...existing.slice(0, startIdx + 1), ...tags, ...existing.slice(endIdx)];
+}
+
+/**
+ * 正文块合并：只替换同 id 的批注块，块外内容不动。
+ * 找不到任何块时按「保留原正文 + 追加新块」处理，避免把用户文件当插件产物覆盖。
+ */
+function mergeExportBody(existingBody: string, generatedBody: string): string {
+  const generatedLines = splitExportLines(generatedBody);
+  const generatedBlocks = extractExportBlocks(generatedLines);
+  if (generatedBlocks.size === 0) {
+    // 没有批注可导出：不动用户已有内容
+    return existingBody;
   }
 
-  return `---\n${existing.lines.join("\n")}\n---\n${generated.body}`;
+  const existingLines = splitExportLines(existingBody);
+  const existingBlocks = extractExportBlocks(existingLines);
+
+  const replacements: Array<{ start: number; end: number; block: string[] }> = [];
+  const missing: string[][] = [];
+  for (const [id, generated] of generatedBlocks) {
+    const block = generatedLines.slice(generated.start, generated.end + 1);
+    const existing = existingBlocks.get(id);
+    if (existing) {
+      replacements.push({ start: existing.start, end: existing.end, block });
+    } else {
+      missing.push(block);
+    }
+  }
+
+  // 从后往前替换，避免前面的改动让后面的索引失效
+  replacements.sort((left, right) => right.start - left.start);
+  const merged = [...existingLines];
+  for (const item of replacements) {
+    merged.splice(item.start, item.end - item.start + 1, ...item.block);
+  }
+
+  if (missing.length > 0) {
+    while (merged.length > 0 && merged[merged.length - 1].trim() === "") {
+      merged.pop();
+    }
+    if (merged.length > 0) {
+      merged.push("");
+    }
+    for (const block of missing) {
+      merged.push(...block, "");
+    }
+  }
+
+  return `${merged.join("\n").replace(/\s+$/, "")}\n`;
+}
+
+/**
+ * 找出正文里所有批注块的位置。新格式靠 HTML 注释标记；老格式（升级前导出）
+ * 回退到「callout 头 + 行尾 ^<mode>-<id>」推断，保证第一次升级也不会覆盖用户内容。
+ */
+function extractExportBlocks(lines: string[]): Map<string, { start: number; end: number }> {
+  const blocks = new Map<string, { start: number; end: number }>();
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const startMatch = /^<!-- inklight:block:([^:\s]+):start -->$/.exec(lines[index].trim());
+    if (!startMatch) {
+      continue;
+    }
+    const id = startMatch[1];
+    const endMarker = blockEndMarker(id);
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      if (lines[cursor].trim() === endMarker) {
+        blocks.set(id, { start: index, end: cursor });
+        index = cursor;
+        break;
+      }
+    }
+  }
+
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!EXPORT_CALLOUT_HEAD.test(lines[index])) {
+      continue;
+    }
+    let end = lines.length - 1;
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      if (EXPORT_CALLOUT_HEAD.test(lines[cursor]) || EXPORT_SECTION_HEAD.test(lines[cursor])) {
+        end = cursor - 1;
+        break;
+      }
+    }
+    while (end > index && lines[end].trim() === "") {
+      end -= 1;
+    }
+    for (let cursor = index; cursor <= end; cursor += 1) {
+      const idMatch = EXPORT_BLOCK_ID.exec(lines[cursor]);
+      if (idMatch) {
+        if (!blocks.has(idMatch[1])) {
+          blocks.set(idMatch[1], { start: index, end });
+        }
+        break;
+      }
+    }
+    index = end;
+  }
+
+  return blocks;
+}
+
+function splitExportLines(text: string): string[] {
+  return text.split(/\r?\n/);
 }
 
 function renderAnnotationBlock(entry: ExportEntry): string[] {
   const blockId = `${entry.mode}-${entry.id}`;
   const calloutType = entry.mode === "epub" ? "inklight-epub" : entry.mode === "pdf" ? "inklight-pdf" : "inklight-md";
   const header = `> [!${calloutType}|${entry.color}] ${entrySource(entry)} - ${entry.createdAt} ^${blockId}`;
-  const lines = [header];
+  const lines = [blockStartMarker(blockId), header];
 
   for (const line of entry.text.split(/\r?\n/)) {
     lines.push(`> ${line}`);
@@ -1403,6 +1525,7 @@ function renderAnnotationBlock(entry: ExportEntry): string[] {
     lines.push(anchor);
   }
 
+  lines.push(blockEndMarker(blockId));
   lines.push("");
   return lines;
 }

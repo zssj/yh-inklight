@@ -161,7 +161,8 @@ export function computePopoverPlacement(
   // 完整高度优先；按 push 顺序（下/上/右/左）取第一个不压缩的
   const full = free.find((c) => c.height >= height - 1);
   if (full) {
-    return { left: full.left, top: full.top, width, maxHeight: boundsHeight, side: full.side };
+    // maxHeight 必须落在该侧剩余空间内：返回 boundsHeight 会让长内容撑到视口外压住划线
+    return { left: full.left, top: full.top, width, maxHeight: Math.min(boundsHeight, full.height), side: full.side };
   }
   const shrunk = free.slice().sort((x, y) => y.height - x.height)[0];
   if (shrunk) {

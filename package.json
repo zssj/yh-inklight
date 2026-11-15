@@ -1,6 +1,6 @@
 {
 	"name": "yh-inklight",
-	"version": "0.18.17",
+	"version": "0.18.18",
 	"private": true,
 	"description": "Non-invasive Obsidian reading annotations for Markdown and PDF with overlay highlights, sticky notes, and sidecar storage.",
 	"main": "main.js",
@@ -8,6 +8,9 @@
 		"build": "node esbuild.config.mjs production",
 		"dev": "node esbuild.config.mjs",
 		"check": "npx tsc --noEmit && node esbuild.config.mjs production",
+		"verify": "npx tsc --noEmit && vitest run && node esbuild.config.mjs production",
+		"test": "vitest run",
+		"test:watch": "vitest",
 		"release-check": "node scripts/release-check.mjs"
 	},
 	"devDependencies": {
@@ -18,7 +21,8 @@
 		"esbuild": "^0.25.0",
 		"obsidian": "^1.7.2",
 		"tslib": "^2.8.1",
-		"typescript": "^5.6.3"
+		"typescript": "^5.6.3",
+		"vitest": "^3.2.7"
 	},
 	"dependencies": {
 		"foliate-js": "^1.0.1",

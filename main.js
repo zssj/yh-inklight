@@ -9227,7 +9227,7 @@ function computePopoverPlacement(avoid, size, bounds) {
   const free = candidates.filter((c2) => c2.overlap === 0);
   const full = free.find((c2) => c2.height >= height - 1);
   if (full) {
-    return { left: full.left, top: full.top, width, maxHeight: boundsHeight, side: full.side };
+    return { left: full.left, top: full.top, width, maxHeight: Math.min(boundsHeight, full.height), side: full.side };
   }
   const shrunk = free.slice().sort((x3, y3) => y3.height - x3.height)[0];
   if (shrunk) {
@@ -11000,6 +11000,15 @@ var MAX_COMPACT_SIDECAR_PREFIX_LENGTH = 96;
 var TAG_BLOCK_START = "  # inklight:tags:start";
 var TAG_BLOCK_END = "  # inklight:tags:end";
 var MOC_DIR = "MOC";
+function blockStartMarker(blockId) {
+  return `<!-- inklight:block:${blockId}:start -->`;
+}
+function blockEndMarker(blockId) {
+  return `<!-- inklight:block:${blockId}:end -->`;
+}
+var EXPORT_CALLOUT_HEAD = /^> \[!inklight-(?:md|pdf|epub)\|/;
+var EXPORT_SECTION_HEAD = /^#{1,6}\s/;
+var EXPORT_BLOCK_ID = /\^((?:md|pdf|epub)-[A-Za-z0-9_-]+)\s*$/;
 var AnnotationStoreReadError = class extends Error {
   constructor(path, originalError) {
     super(`Failed to read annotation sidecar JSON: ${path}`);
@@ -11569,7 +11578,7 @@ var AnnotationStore = class {
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
     if (existing instanceof import_obsidian8.TFile) {
       const generated = lines.join("\n");
-      const content = obTagBridge ? mergeExportFrontmatter(await this.app.vault.cachedRead(existing), generated) : generated;
+      const content = mergeExportDocument(await this.app.vault.cachedRead(existing), generated, obTagBridge);
       await this.app.vault.modify(existing, content);
       return existing;
     }
@@ -11584,7 +11593,7 @@ var AnnotationStore = class {
     const existing = this.app.vault.getAbstractFileByPath(targetPath);
     if (existing instanceof import_obsidian8.TFile) {
       const generated = lines.join("\n");
-      const content = obTagBridge ? mergeExportFrontmatter(await this.app.vault.cachedRead(existing), generated) : generated;
+      const content = mergeExportDocument(await this.app.vault.cachedRead(existing), generated, obTagBridge);
       await this.app.vault.modify(existing, content);
       return existing;
     }
@@ -11621,7 +11630,7 @@ var AnnotationStore = class {
         return { status: "skipped-foreign", path: targetPath };
       }
       const generated = lines.join("\n");
-      const content = obTagBridge ? mergeExportFrontmatter(await this.app.vault.cachedRead(existing), generated) : generated;
+      const content = mergeExportDocument(await this.app.vault.cachedRead(existing), generated, obTagBridge);
       await this.app.vault.modify(existing, content);
       return { status: "written", file: existing };
     }
@@ -12034,41 +12043,128 @@ function splitFrontmatter(text) {
     body: text.slice(match[0].length)
   };
 }
-function mergeExportFrontmatter(existingText, generatedText) {
-  const generated = splitFrontmatter(generatedText);
-  if (!generated) {
-    return generatedText;
-  }
-  const existing = splitFrontmatter(existingText);
-  if (!existing) {
-    return generatedText;
-  }
-  const startIdx = existing.lines.indexOf(TAG_BLOCK_START);
-  const endIdx = existing.lines.indexOf(TAG_BLOCK_END);
-  if (startIdx >= 0 && endIdx > startIdx) {
-    const newStart = generated.lines.indexOf(TAG_BLOCK_START);
-    const newEnd = generated.lines.indexOf(TAG_BLOCK_END);
-    const tags = newStart >= 0 && newEnd > newStart ? generated.lines.slice(newStart + 1, newEnd) : [];
-    const merged = [
-      ...existing.lines.slice(0, startIdx + 1),
-      ...tags,
-      ...existing.lines.slice(endIdx)
-    ];
-    return `---
-${merged.join("\n")}
+function mergeExportDocument(existingText, generatedText, obTagBridge) {
+  const existingFrontmatter = splitFrontmatter(existingText);
+  const generatedFrontmatter = splitFrontmatter(generatedText);
+  const existingBody = existingFrontmatter ? existingFrontmatter.body : existingText;
+  const generatedBody = generatedFrontmatter ? generatedFrontmatter.body : generatedText;
+  const mergedBody = mergeExportBody(existingBody, generatedBody);
+  if (!existingFrontmatter) {
+    return generatedFrontmatter ? `---
+${generatedFrontmatter.lines.join("\n")}
 ---
-${generated.body}`;
+${mergedBody}` : mergedBody;
   }
+  const mergedFrontmatter = mergeFrontmatterLines(existingFrontmatter.lines, generatedFrontmatter?.lines ?? [], obTagBridge);
   return `---
-${existing.lines.join("\n")}
+${mergedFrontmatter.join("\n")}
 ---
-${generated.body}`;
+${mergedBody}`;
+}
+function mergeFrontmatterLines(existing, generated, obTagBridge) {
+  if (!obTagBridge) {
+    return existing;
+  }
+  const startIdx = existing.indexOf(TAG_BLOCK_START);
+  const endIdx = existing.indexOf(TAG_BLOCK_END);
+  if (startIdx < 0 || endIdx <= startIdx) {
+    return existing;
+  }
+  const newStart = generated.indexOf(TAG_BLOCK_START);
+  const newEnd = generated.indexOf(TAG_BLOCK_END);
+  const tags = newStart >= 0 && newEnd > newStart ? generated.slice(newStart + 1, newEnd) : [];
+  return [...existing.slice(0, startIdx + 1), ...tags, ...existing.slice(endIdx)];
+}
+function mergeExportBody(existingBody, generatedBody) {
+  const generatedLines = splitExportLines(generatedBody);
+  const generatedBlocks = extractExportBlocks(generatedLines);
+  if (generatedBlocks.size === 0) {
+    return existingBody;
+  }
+  const existingLines = splitExportLines(existingBody);
+  const existingBlocks = extractExportBlocks(existingLines);
+  const replacements = [];
+  const missing = [];
+  for (const [id, generated] of generatedBlocks) {
+    const block = generatedLines.slice(generated.start, generated.end + 1);
+    const existing = existingBlocks.get(id);
+    if (existing) {
+      replacements.push({ start: existing.start, end: existing.end, block });
+    } else {
+      missing.push(block);
+    }
+  }
+  replacements.sort((left, right) => right.start - left.start);
+  const merged = [...existingLines];
+  for (const item of replacements) {
+    merged.splice(item.start, item.end - item.start + 1, ...item.block);
+  }
+  if (missing.length > 0) {
+    while (merged.length > 0 && merged[merged.length - 1].trim() === "") {
+      merged.pop();
+    }
+    if (merged.length > 0) {
+      merged.push("");
+    }
+    for (const block of missing) {
+      merged.push(...block, "");
+    }
+  }
+  return `${merged.join("\n").replace(/\s+$/, "")}
+`;
+}
+function extractExportBlocks(lines) {
+  const blocks = /* @__PURE__ */ new Map();
+  for (let index = 0; index < lines.length; index += 1) {
+    const startMatch = /^<!-- inklight:block:([^:\s]+):start -->$/.exec(lines[index].trim());
+    if (!startMatch) {
+      continue;
+    }
+    const id = startMatch[1];
+    const endMarker = blockEndMarker(id);
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      if (lines[cursor].trim() === endMarker) {
+        blocks.set(id, { start: index, end: cursor });
+        index = cursor;
+        break;
+      }
+    }
+  }
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!EXPORT_CALLOUT_HEAD.test(lines[index])) {
+      continue;
+    }
+    let end = lines.length - 1;
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      if (EXPORT_CALLOUT_HEAD.test(lines[cursor]) || EXPORT_SECTION_HEAD.test(lines[cursor])) {
+        end = cursor - 1;
+        break;
+      }
+    }
+    while (end > index && lines[end].trim() === "") {
+      end -= 1;
+    }
+    for (let cursor = index; cursor <= end; cursor += 1) {
+      const idMatch = EXPORT_BLOCK_ID.exec(lines[cursor]);
+      if (idMatch) {
+        if (!blocks.has(idMatch[1])) {
+          blocks.set(idMatch[1], { start: index, end });
+        }
+        break;
+      }
+    }
+    index = end;
+  }
+  return blocks;
+}
+function splitExportLines(text) {
+  return text.split(/\r?\n/);
 }
 function renderAnnotationBlock(entry) {
   const blockId = `${entry.mode}-${entry.id}`;
   const calloutType = entry.mode === "epub" ? "inklight-epub" : entry.mode === "pdf" ? "inklight-pdf" : "inklight-md";
   const header = `> [!${calloutType}|${entry.color}] ${entrySource(entry)} - ${entry.createdAt} ^${blockId}`;
-  const lines = [header];
+  const lines = [blockStartMarker(blockId), header];
   for (const line of entry.text.split(/\r?\n/)) {
     lines.push(`> ${line}`);
   }
@@ -12092,6 +12188,7 @@ function renderAnnotationBlock(entry) {
   if (anchor) {
     lines.push(anchor);
   }
+  lines.push(blockEndMarker(blockId));
   lines.push("");
   return lines;
 }

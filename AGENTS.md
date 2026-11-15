@@ -8,11 +8,14 @@ Obsidian 非侵入式阅读批注插件，支持 Markdown / PDF / EPUB。
 npm run dev          # esbuild watch mode, outputs main.js
 npm run build        # esbuild production bundle
 npm run check        # tsc --noEmit + build 一条命令（改动收敛后跑一次，勿边改边反复构建）
+npm run verify       # tsc --noEmit + vitest run + build：改完代码的默认收尾命令，退出码 0 才算完成
+npm test             # vitest run：L1 纯逻辑 + L2 storage 契约（约 5s，改动后必跑）
+npm run test:watch   # vitest 监听模式，写用例时用
 npx tsc --noEmit     # 只做类型检查（build 本身不做类型检查）
 npm run release-check [vX.Y.Z]   # 发版验收，见下方 Release Workflow
 ```
 
-No lint, no test, no formatter config. CI only verifies `npm run build`.
+No lint, no formatter config. CI 跑 `npm run build`（三平台）与 `npm test`（linux）。
 
 ## Release Workflow (发版流程)
 
@@ -68,4 +71,15 @@ npm run release-check              # 默认取 package.json 版本；也可 npm 
 
 ## Testing
 
-No test framework. Manual testing: copy `main.js` + `manifest.json` + `styles.css` to `<vault>/.obsidian/plugins/yh-inklight/` and reload Obsidian.
+**硬约定**：任何 `main.ts` / `src/**` 改动，收尾必须跑 `npm run verify`（类型检查 + 全部用例 + 生产构建）并拿到退出码 0。测试红时不得 commit、不得打 tag、不得部署到测试库；先定位失败用例是「测试预期错」还是「代码缺陷」，分别处理，禁止用 `.skip` / 放宽断言绕过去。
+
+测试分两层，全部在 Node 下跑，不需要 Obsidian（`obsidian` 由 `vitest.config.ts` 的 alias 指到 `tests/mocks/obsidian.ts`）：
+
+- **L1 纯逻辑**（`tests/anchor`、`tests/storage/tags`、`tests/views`、`tests/utils`、`tests/epub`）：零 mock，直接 import 源文件。覆盖锚点三级降级、模糊匹配、标签归一与 Obsidian 语法转换、卡片配对、浮层几何、CFI 规范化。
+- **L2 存储契约**（`tests/storage/annotationStore.test.ts`）：`tests/helpers/fakeVault.ts` 提供内存 Vault + 可注入写入失败。覆盖 sidecar 读写、索引 v2/tagNames、写入失败保护、损坏 JSON 不覆盖、孤儿清理、改名迁移、导出。
+
+**新增用例的约定**：只用源码实际调用的 obsidian API；`tests/mocks/obsidian.ts` 缺符号时按真实行为补齐，不要为了让测试变绿放宽 mock（例如让不存在的目录也能写）。断言写「对外契约」而不是内部实现细节。
+
+**自动化盲区**（仍需手工验证）：foliate 真实渲染与跨章节 overlay、触摸手势与移动端侧栏、真实 Obsidian API 的时序（vault 事件、metadataCache）。发版前按 `docs/TESTING.md` 的冒烟清单在真机过一遍。
+
+Manual deploy for verification: copy `main.js` + `manifest.json` + `styles.css` to `<vault>/.obsidian/plugins/yh-inklight/` and reload Obsidian.

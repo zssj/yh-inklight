@@ -49,3 +49,5 @@ jobs:
         run: npm run build
       - name: Confirm output exists
         run: test -f main.js
+      - name: Test
+        run: npm test

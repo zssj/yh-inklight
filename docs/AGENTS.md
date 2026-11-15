@@ -2,6 +2,7 @@
 > L2 | 父级: /Users/epiphanyxiao/Documents/Playground/obsidian-annotation-plugin/AGENTS.md
 
 成员清单
+TESTING.md: 测试分层、用例写法约定、mock 原则与发版前真机冒烟清单。
 images/install-axl-light.png: GitHub release 到 Obsidian 插件目录的安装流程图。
 images/install-axl-light-command.png: Terminal 一条命令安装 Axl Light 的新版安装流程图。
 images/highlight-with-axl-light.png: 选中文本并用浮动工具栏高亮的使用流程图。

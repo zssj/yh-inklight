@@ -3282,6 +3282,9 @@ a.yh-epub-goto-link:hover {
 /* 多条相关之间加一条浅色细线：只在行与行之间出现（首条不加），
    起点跳过 padding-left 对齐文字左沿，终点到内容右沿——
    既不横穿左侧那条 2px 竖线，也不超出文字区域。
+   线宽用 1px 而不是 0.5px：Windows 100% 缩放下 0.5px 会被舍成 0 或极淡一丝。
+   颜色用 border-hover 档并带回退：深色主题里 --background-modifier-border 与卡片背景
+   几乎同色，线等于没画；hover 档亮/深一档，仍属低调分隔，不抢文字。
    左偏移 8px 必须与上面 .yh-ov-related-row 的 padding-left 保持一致。 */
 .yh-ov-related-row + .yh-ov-related-row {
   position: relative;
@@ -3294,7 +3297,7 @@ a.yh-epub-goto-link:hover {
   top: 0;
   left: 8px;
   right: 0;
-  border-top: 0.5px solid var(--yh-border);
+  border-top: 1px solid var(--background-modifier-border-hover, var(--yh-border));
 }
 
 .yh-ov-related-text {

@@ -772,6 +772,31 @@ describe("EPUB 回链", () => {
     expect(vault.readText(b.path)).toContain("inklightId: md-h2");
   });
 
+  it("提炼原子卡：目录留空时落到默认的「原子笔记」", async () => {
+    const { store, vault, file } = await setup();
+    await store.addHighlight(file, { ...highlightOf("h1", "复利效应", 2), noteType: "insight" });
+
+    const result = await store.createAtomCard(
+      file,
+      {
+        annotationId: "h1",
+        mode: "md",
+        quote: "复利效应",
+        content: "重读的成本，是复利公式里的分母。",
+        noteType: "insight",
+        tags: [],
+      },
+      "",
+    );
+
+    expect(result.status).toBe("created");
+    if (result.status !== "created") {
+      throw new Error("expected created");
+    }
+    expect(vault.has(result.path)).toBe(true);
+    expect(result.path.startsWith("原子笔记/")).toBe(true);
+  });
+
   it("提炼原子卡：老卡片没有 inklightId 时不误认，也不覆盖原文件", async () => {
     const { store, vault, file } = await setup();
     await store.addHighlight(file, { ...highlightOf("h1", "复利效应", 2), noteType: "insight" });

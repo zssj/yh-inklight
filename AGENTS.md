@@ -63,7 +63,7 @@ npm run release-check              # 默认取 package.json 版本；也可 npm 
 ## Conventions
 
 - Non-invasive first: all annotation data in sidecar, document zero-modification.
-- **原子卡目录是资产区**：`settings.atomCardFolder`（默认 `卡片/`）下的文件由用户书写。提炼（抽卡）是一次性分叉，之后卡片与批注互不同步；任何清理/迁移/导出逻辑不得删除或覆盖其中文件。卡片去重只认 frontmatter 的 `inklightId`（= `${mode}-${annotationId}`），文件名仅作人类可读标题，可自由改。
+- **原子卡目录是资产区**：`settings.atomCardFolder`（默认 `原子笔记/`，v0.19.15 前为 `卡片/`）下的文件由用户书写。提炼（抽卡）是一次性分叉，之后卡片与批注互不同步；任何清理/迁移/导出逻辑不得删除或覆盖其中文件。卡片去重只认 frontmatter 的 `inklightId`（= `${mode}-${annotationId}`），文件名仅作人类可读标题，可自由改。改目录名不影响已有卡片：ID 在 frontmatter 里，改完在设置里指到新路径即可。
 - Three disjoint annotation coordinate systems: CM6 offset (MD), page+rect (PDF), CFI (EPUB).
 - UI strings are Chinese (zh-CN). Comments and notices in Chinese.
 - Module header convention: `[INPUT]` / `[OUTPUT]` / `[POS]` / `[PROTOCOL]` doc comments.

@@ -150,7 +150,7 @@ export class AnnotationSettingsTab extends PluginSettingTab {
       )
       .addText((text) => {
         text
-          .setPlaceholder("卡片")
+          .setPlaceholder("原子笔记")
           .setValue(this.plugin.settings.atomCardFolder)
           .onChange(async (value) => {
             this.plugin.settings.atomCardFolder = value.trim();

@@ -8521,7 +8521,7 @@ var DEFAULT_SETTINGS = {
   mdOpenTracking: true,
   // 与 Obsidian 标签互通（默认关，保持既有导出内容不变）
   obTagBridge: false,
-  atomCardFolder: "\u5361\u7247",
+  atomCardFolder: "\u539F\u5B50\u7B14\u8BB0",
   // 字面内容关联默认开：纯本地计算、零隐私成本，设置页可关
   contentRelations: true,
   // EPUB 手机端沉浸式导航栏
@@ -11412,7 +11412,7 @@ var AnnotationSettingsTab = class extends import_obsidian8.PluginSettingTab {
     new import_obsidian8.Setting(containerEl).setName("\u539F\u5B50\u5361\u5B58\u653E\u76EE\u5F55").setDesc(
       "\u628A\u6279\u6CE8\u91CC\u81EA\u5DF1\u5199\u7684\u60F3\u6CD5\u63D0\u70BC\u6210\u72EC\u7ACB\u5361\u7247\u65F6\u5199\u5230\u8FD9\u4E2A\u76EE\u5F55\uFF08\u76F8\u5BF9 vault \u6839\uFF0C\u7559\u7A7A\u7528\u300C\u5361\u7247\u300D\uFF09\u3002\u5361\u7247\u662F\u72EC\u7ACB\u8D44\u4EA7\uFF1A\u63D0\u70BC\u540E\u4E0E\u6279\u6CE8\u5206\u53C9\uFF0C\u5361\u4E0A\u5199\u7684\u5185\u5BB9\u4E0D\u4F1A\u88AB\u518D\u6B21\u63D0\u70BC\u6216\u5BFC\u51FA\u8986\u76D6\uFF0C\u5220\u6389\u6279\u6CE8\u4E5F\u4E0D\u5F71\u54CD\u5DF2\u751F\u6210\u7684\u5361\u7247\uFF1B\u53CD\u8FC7\u6765\u8BF4\uFF0C\u63D2\u4EF6\u7684\u6E05\u7406\u903B\u8F91\u6C38\u8FDC\u4E0D\u4F1A\u52A8\u8FD9\u4E2A\u76EE\u5F55\uFF0C\u4E0D\u9700\u8981\u65F6\u8BF7\u624B\u52A8\u5220\u9664\u3002"
     ).addText((text) => {
-      text.setPlaceholder("\u5361\u7247").setValue(this.plugin.settings.atomCardFolder).onChange(async (value) => {
+      text.setPlaceholder("\u539F\u5B50\u7B14\u8BB0").setValue(this.plugin.settings.atomCardFolder).onChange(async (value) => {
         this.plugin.settings.atomCardFolder = value.trim();
         await this.plugin.saveSettings();
       });
@@ -12955,7 +12955,7 @@ function buildExportLines(title, sources, format, obTagBridge, frontmatterMode, 
   }
   return [...lines, ...renderSummary(entries, resolveTargetNote)];
 }
-var DEFAULT_ATOM_CARD_FOLDER = "\u5361\u7247";
+var DEFAULT_ATOM_CARD_FOLDER = "\u539F\u5B50\u7B14\u8BB0";
 function atomCardBaseName(input) {
   const firstLine = input.content.split(/\r?\n/).find((line) => line.trim()) ?? "";
   const raw = (firstLine || input.quote).trim();

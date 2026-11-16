@@ -346,7 +346,7 @@ export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   mdOpenTracking: true,
   // 与 Obsidian 标签互通（默认关，保持既有导出内容不变）
   obTagBridge: false,
-  atomCardFolder: "卡片",
+  atomCardFolder: "原子笔记",
   // 字面内容关联默认开：纯本地计算、零隐私成本，设置页可关
   contentRelations: true,
   // EPUB 手机端沉浸式导航栏

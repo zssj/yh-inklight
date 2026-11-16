@@ -1529,8 +1529,8 @@ function buildExportLines(
   return [...lines, ...renderSummary(entries, resolveTargetNote)];
 }
 
-/** 原子卡默认落点；settings.atomCardFolder 留空时用它 */
-const DEFAULT_ATOM_CARD_FOLDER = "卡片";
+/** 原子卡默认落点；settings.atomCardFolder 留空时用它（v0.19.15 前叫「卡片」，改名不影响已生成的卡） */
+const DEFAULT_ATOM_CARD_FOLDER = "原子笔记";
 
 /** 卡片文件名：取想法第一句，去掉文件名非法字符；正文为空时退回被划原文 */
 function atomCardBaseName(input: AtomCardInput): string {

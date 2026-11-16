@@ -37,17 +37,67 @@ const MIN_WIDTH = 200;
 const MIN_HEIGHT = 120;
 
 /**
- * 移动端浮层的四边留白。手机屏小，卡片要尽量占满屏幕：
- * 左右各 20、上下各 40（上下留得多是因为顶部有标题栏、底部有手势条/导航栏）。
- * 键盘弹起时可视区已经很矮，边距收紧到 12，把空间让给内容。
+ * 移动端浮层的四边留白。**这些值不在代码里定死**——运行时从样式表的
+ * `--yh-sheet-gutter-x / -y / -compact` 读取，并叠加 CSS 提供的
+ * `--yh-safe-top / --yh-safe-bottom`（env(safe-area-inset-*)）。
+ * 换手机、刘海深浅、横竖屏、手势条高度都由浏览器给值，主题或用户片段也能覆盖。
+ * 下面这组仅在读不到 CSS 变量时兜底（例如测试环境没有样式表）。
  */
-export const MOBILE_SHEET_GUTTERS = {
+export const DEFAULT_MOBILE_SHEET_GUTTERS = {
   side: 20,
   top: 40,
   bottom: 40,
   /** 键盘弹起（可视区被压矮）时的紧凑边距 */
   compact: 12,
 } as const;
+
+export interface MobileSheetGutters {
+  side: number;
+  top: number;
+  bottom: number;
+  compact: number;
+}
+
+function toPx(raw: string, fallback: number): number {
+  const value = Number.parseFloat(raw);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+/** 读一个有 used value 的 env()：自定义属性里的 env() 不会被 getComputedStyle 展开，必须过一遍布局 */
+function readSafeInsets(): { top: number; bottom: number } {
+  if (typeof document === "undefined" || !document.body) {
+    return { top: 0, bottom: 0 };
+  }
+  const probe = document.createElement("div");
+  probe.style.cssText =
+    "position:fixed;top:0;left:0;width:0;height:0;visibility:hidden;pointer-events:none;" +
+    "padding-top:var(--yh-safe-top,0px);padding-bottom:var(--yh-safe-bottom,0px);";
+  document.body.appendChild(probe);
+  const style = getComputedStyle(probe);
+  const insets = {
+    top: toPx(style.paddingTop, 0),
+    bottom: toPx(style.paddingBottom, 0),
+  };
+  probe.remove();
+  return insets;
+}
+
+/**
+ * 从宿主元素继承的实际样式里读四边留白。
+ * 用 el 而不是 :root，主题/片段可以针对浮层单独设置（例如外接键盘平板）。
+ */
+export function readMobileSheetGutters(el: HTMLElement): MobileSheetGutters {
+  const style = getComputedStyle(el);
+  const side = toPx(style.getPropertyValue("--yh-sheet-gutter-x"), DEFAULT_MOBILE_SHEET_GUTTERS.side);
+  const top = toPx(style.getPropertyValue("--yh-sheet-gutter-y"), DEFAULT_MOBILE_SHEET_GUTTERS.top);
+  const bottom = toPx(style.getPropertyValue("--yh-sheet-gutter-y"), DEFAULT_MOBILE_SHEET_GUTTERS.bottom);
+  const compact = toPx(
+    style.getPropertyValue("--yh-sheet-gutter-compact"),
+    DEFAULT_MOBILE_SHEET_GUTTERS.compact,
+  );
+  const safe = readSafeInsets();
+  return { side, top: top + safe.top, bottom: bottom + safe.bottom, compact };
+}
 
 export interface MobileSheetInput {
   viewportHeight: number;
@@ -57,25 +107,31 @@ export interface MobileSheetInput {
   bottomInset: number;
   /** 键盘是否弹起（弹起时用紧凑边距） */
   compact: boolean;
+  /** 四边留白；不传时用 DEFAULT（仅测试/兜底，生产必须传实际样式值） */
+  gutters?: MobileSheetGutters;
 }
 
 /**
- * 移动端浮层的落位：**固定占满「四边留白」之间的区域**，不再按内容高度测量。
+ * 移动端浮层的落位：**固定占满「四边留白」之间的区域**，不按内容高度测量。
  *
- * 为什么要改成固定高度（v0.19.10）：按 `min(自然高度, 可用高度)` 依赖一次 DOM 测量，
- * 而卡片里的想法是 Markdown 异步渲染的——show() 里立刻测量时内容还没落地，量出来的
- * 高度偏小，maxHeight 跟着偏小，卡片就只剩一小条，看起来「弹出来太小」。
- * 现在高度只由视口决定：内容少时卡片仍然大（像一张 sheet），内容多时内部滚动，
- * 既不会因为测量时序变小，也不会溢出屏幕。
+ * 为什么不能按内容测量（v0.19.10）：卡片里的想法是 Markdown 异步渲染的，
+ * show() 里立刻 getBoundingClientRect 量出来的高度偏小，maxHeight 跟着偏小，
+ * 卡片就只剩一小块。高度只由视口决定后，内容少时是一张大卡片，多时内部滚动，
+ * 既不会因测量时序变小，也不会溢出屏幕。
+ *
+ * 视口很矮（横屏、分屏、键盘弹起）时边距自动收紧，不针对任何具体机型写死。
  */
 export function computeMobileSheet(input: MobileSheetInput): { top: number; height: number } {
   const { viewportHeight, visualOffsetTop, bottomInset, compact } = input;
-  const gutter = MOBILE_SHEET_GUTTERS;
-  const topGutter = compact ? gutter.compact : gutter.top;
-  const bottomGutter = compact ? gutter.compact : gutter.bottom;
+  const gutters = input.gutters ?? DEFAULT_MOBILE_SHEET_GUTTERS;
 
-  const top = Math.max(0, visualOffsetTop) + topGutter;
-  const bottomLimit = viewportHeight - Math.max(0, bottomInset) - bottomGutter;
+  // 矮视口下 40px 边距占比过大，按比例收到 16px（响应式，不是机型假设）
+  const tightViewport = viewportHeight > 0 && viewportHeight < 480;
+  const verticalGutter = (value: number): number =>
+    compact ? gutters.compact : tightViewport ? Math.min(value, 16) : value;
+
+  const top = Math.max(0, visualOffsetTop) + verticalGutter(gutters.top);
+  const bottomLimit = viewportHeight - Math.max(0, bottomInset) - verticalGutter(gutters.bottom);
   // 可用高度优先：宁可矮到极限，也不让浮层底部溢出屏幕
   const height = Math.max(0, bottomLimit - top);
   return { top, height };

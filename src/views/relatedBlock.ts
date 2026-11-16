@@ -56,6 +56,23 @@ export function renderRelatedBlock(root: HTMLElement, self: SidebarCard, host: R
     .catch(() => undefined);
 }
 
+/**
+ * 原文摘录超过这个长度就在行内折叠（CSS 限 3 行 + 「展开」按钮）。
+ * 用字符数而不是 DOM 测量：相关行常常在 <details> 收起状态下渲染，
+ * 此时 clientHeight 为 0，量 scrollHeight 会误判「没有溢出」。
+ */
+export const RELATED_TEXT_COLLAPSE_LENGTH = 80;
+
+/** 这条摘录是否需要「展开 / 收起」 */
+export function shouldCollapseRelatedText(text: string): boolean {
+  return text.trim().length > RELATED_TEXT_COLLAPSE_LENGTH;
+}
+
+/**
+ * 折叠区：整块仍是 <details>（要不要看相关由用户决定），
+ * 展开后**每一条的原文摘录各自可折叠**——长摘录默认限 3 行，点「展开」看全文，再点收起。
+ * 行本身可点跳转，所以展开按钮必须 stopPropagation，否则一点就跳走。
+ */
 function paint(root: HTMLElement, self: SidebarCard, hits: RelatedHitView[], host: RelatedBlockHost): void {
   const box = root.createEl("details", { cls: "yh-ov-related" });
   box.open = host.isOpen(self.id);
@@ -64,62 +81,97 @@ function paint(root: HTMLElement, self: SidebarCard, hits: RelatedHitView[], hos
   const list = box.createDiv({ cls: "yh-ov-related-list" });
 
   for (const hit of hits) {
-    const row = list.createDiv({ cls: "yh-ov-related-row" });
-    const excerpt = hit.card.text.length > 60 ? `${hit.card.text.slice(0, 60)}…` : hit.card.text;
-    row.createDiv({ cls: "yh-ov-related-text", text: excerpt });
+    list.appendChild(renderHitRow(list, self, hit, host));
+  }
+}
 
-    const meta = row.createDiv({ cls: "yh-ov-related-meta" });
-    meta.createSpan({ cls: "yh-ov-related-reason", text: `都提到「${hit.reasons.join("」「")}」` });
-    meta.createSpan({ cls: "yh-ov-related-file", text: host.fileName(hit.card) });
-
-    // 已确认的关联 = 两侧共享的标签（确认动作的持久结果）；点 chip 从两侧移除该标签
-    for (const tag of sharedTags(self, hit.card)) {
-      const chip = meta.createSpan({
-        cls: "yh-ov-related-chip",
-        text: `已关联 ${tag}`,
-        attr: { title: "点击断开该关联标签（两侧同时移除）" },
-      });
-      chip.addEventListener("click", (event) => {
-        event.stopPropagation();
-        runMutation(host.onRemoveSharedTag(hit.card, tag), host);
-      });
-    }
-
-    const linkable = host.canLink(hit.card);
-    const link = meta.createSpan({
-      cls: "yh-ov-related-link",
-      text: "关联",
-      attr: linkable
-        ? { role: "button", tabindex: "0", "aria-label": "确认关联", title: "确认关联：把一个共享标签写入两侧批注" }
-        : { "aria-disabled": "true", title: "源文件缺失，无法建立关联" },
+/** 单条相关行：摘录 + 命中短语 + 文件名 + 已关联 chip + 「关联」入口 */
+function renderHitRow(
+  parent: HTMLElement,
+  self: SidebarCard,
+  hit: RelatedHitView,
+  host: RelatedBlockHost,
+): HTMLElement {
+  const row = parent.createDiv({ cls: "yh-ov-related-row" });
+  const excerpt = hit.card.text;
+  const textEl = row.createDiv({ cls: "yh-ov-related-text", text: excerpt });
+  if (shouldCollapseRelatedText(excerpt)) {
+    textEl.addClass("is-collapsible");
+    const toggle = row.createEl("span", {
+      cls: "yh-ov-related-expand",
+      text: "展开",
+      attr: { role: "button", tabindex: "0", "aria-label": "展开这条相关摘录" },
     });
-    if (!linkable) {
-      link.addClass("is-disabled");
-    }
-    const openPicker = (event: Event): void => {
+    const flip = (event: Event): void => {
+      // 行本身点击是「跳到那一句」，展开必须拦住冒泡
       event.stopPropagation();
-      if (linkable) {
-        mountPicker(row, self, hit.card, hit.reasons, host);
-      }
+      const expanded = !textEl.hasClass("is-expanded");
+      textEl.toggleClass("is-expanded", expanded);
+      toggle.setText(expanded ? "收起" : "展开");
+      toggle.setAttribute("aria-label", expanded ? "收起这条相关摘录" : "展开这条相关摘录");
     };
-    link.addEventListener("click", openPicker);
-    link.addEventListener("keydown", (event) => {
+    toggle.addEventListener("click", flip);
+    toggle.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") {
         return;
       }
       event.preventDefault();
-      event.stopPropagation();
-      if (linkable) {
-        mountPicker(row, self, hit.card, hit.reasons, host);
-      }
+      flip(event);
     });
-
-    if (host.canLink(hit.card)) {
-      row.addClass("is-clickable");
-      row.setAttribute("role", "button");
-      row.addEventListener("click", () => host.onJump(hit.card));
-    }
   }
+
+  const meta = row.createDiv({ cls: "yh-ov-related-meta" });
+  meta.createSpan({ cls: "yh-ov-related-reason", text: `都提到「${hit.reasons.join("」「")}」` });
+  meta.createSpan({ cls: "yh-ov-related-file", text: host.fileName(hit.card) });
+
+  // 已确认的关联 = 两侧共享的标签（确认动作的持久结果）；点 chip 从两侧移除该标签
+  for (const tag of sharedTags(self, hit.card)) {
+    const chip = meta.createSpan({
+      cls: "yh-ov-related-chip",
+      text: `已关联 ${tag}`,
+      attr: { title: "点击断开该关联标签（两侧同时移除）" },
+    });
+    chip.addEventListener("click", (event) => {
+      event.stopPropagation();
+      runMutation(host.onRemoveSharedTag(hit.card, tag), host);
+    });
+  }
+
+  const linkable = host.canLink(hit.card);
+  const link = meta.createSpan({
+    cls: "yh-ov-related-link",
+    text: "关联",
+    attr: linkable
+      ? { role: "button", tabindex: "0", "aria-label": "确认关联", title: "确认关联：把一个共享标签写入两侧批注" }
+      : { "aria-disabled": "true", title: "源文件缺失，无法建立关联" },
+  });
+  if (!linkable) {
+    link.addClass("is-disabled");
+  }
+  const openPicker = (event: Event): void => {
+    event.stopPropagation();
+    if (linkable) {
+      mountPicker(row, self, hit.card, hit.reasons, host);
+    }
+  };
+  link.addEventListener("click", openPicker);
+  link.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (linkable) {
+      mountPicker(row, self, hit.card, hit.reasons, host);
+    }
+  });
+
+  if (host.canLink(hit.card)) {
+    row.addClass("is-clickable");
+    row.setAttribute("role", "button");
+    row.addEventListener("click", () => host.onJump(hit.card));
+  }
+  return row;
 }
 
 /** 写入是异步的：等它落地再重绘，否则 chip 会刷出旧状态 */

@@ -14,6 +14,11 @@
   --yh-border: var(--background-modifier-border);
   --yh-safe-top: 0px;
   --yh-safe-bottom: 0px;
+  /* 手机端浮层四边留白：唯一配置点。JS 运行时读这三个值 + safe-area，
+     换机型 / 主题 / 用户片段都能覆盖，代码里不写死任何设备尺寸 */
+  --yh-sheet-gutter-x: 20px;
+  --yh-sheet-gutter-y: 40px;
+  --yh-sheet-gutter-compact: 12px;
 }
 
 @supports (padding-top: env(safe-area-inset-top)) {
@@ -1650,10 +1655,10 @@ body.yh-epub-nav-hidden .mobile-navbar {
    bottom 由卡片按 visualViewport 计算（键盘 + 底部安全区 + 间距），这里只管左右与圆角；
    margin-bottom 吃掉 iOS 底部安全区，避免圆角被 home indicator 压住。 */
 .yh-epub-annotation-popover.is-mobile {
-  /* 左右各留 20px（与 popoverPlacement.MOBILE_SHEET_GUTTERS 同口径），
-     上下 40px 与高度由 JS 按视口写内联样式；四边都留白，卡片居中占满可用区 */
-  left: 20px;
-  right: 20px;
+  /* 左右留白取 --yh-sheet-gutter-x（JS 的上下留白与高度用同一组变量），
+     四边都留白、卡片居中占满可用区；变量可被主题或用户片段覆盖 */
+  left: var(--yh-sheet-gutter-x, 20px);
+  right: var(--yh-sheet-gutter-x, 20px);
   /* 不能加 !important：JS 会写内联 top / height */
   top: auto;
   bottom: 0;
@@ -3279,6 +3284,35 @@ a.yh-epub-goto-link:hover {
   line-height: 1.45;
   color: var(--text-normal);
 }
+
+/* 长摘录默认限 3 行，点「展开」看全文；这是「每条内容」的折叠，
+   整块「相关的 N 条」的折叠仍由外层 <details> 负责 */
+.yh-ov-related-text.is-collapsible {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.yh-ov-related-text.is-expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
+.yh-ov-related-expand {
+  display: inline-block;
+  margin-top: 2px;
+  color: var(--text-accent);
+  font-size: 0.75em;
+  cursor: pointer;
+  user-select: none;
+}
+
+.yh-ov-related-expand:hover {
+  text-decoration: underline;
+}
+
 
 .yh-ov-related-meta {
   display: flex;

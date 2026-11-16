@@ -15,7 +15,13 @@ import { SidebarCard } from "./cardModel";
 import { CardExtraAction, renderCardBody } from "./cardBody";
 import { RelatedBlockHost } from "./relatedBlock";
 import { TagSuggestion } from "./tagInput";
-import { computeMobileSheet, computePopoverPlacement, PopoverRect, viewportRect } from "./popoverPlacement";
+import {
+  computeMobileSheet,
+  computePopoverPlacement,
+  PopoverRect,
+  readMobileSheetGutters,
+  viewportRect,
+} from "./popoverPlacement";
 
 export interface AnnotationCardOptions {
   /** 来源行左侧的文件名；宿主已解析过 TFile，传入 basename 即可 */
@@ -210,6 +216,9 @@ export class AnnotationCard {
       visualOffsetTop: vv?.offsetTop ?? 0,
       bottomInset,
       compact: keyboardInset > 0,
+      // 留白与安全区都来自样式/浏览器（--yh-sheet-gutter-* + env(safe-area-inset-*)），
+      // 代码不假设任何机型；换手机、横竖屏、手势条高度都会自动跟着变
+      gutters: readMobileSheetGutters(el),
     });
 
     el.style.top = `${sheet.top}px`;

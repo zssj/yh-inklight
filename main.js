@@ -9152,6 +9152,10 @@ function renderRelatedBlock(root, self, host) {
     paint(root, self, hits, host);
   }).catch(() => void 0);
 }
+var RELATED_TEXT_COLLAPSE_LENGTH = 80;
+function shouldCollapseRelatedText(text) {
+  return text.trim().length > RELATED_TEXT_COLLAPSE_LENGTH;
+}
 function paint(root, self, hits, host) {
   const box = root.createEl("details", { cls: "yh-ov-related" });
   box.open = host.isOpen(self.id);
@@ -9159,55 +9163,82 @@ function paint(root, self, hits, host) {
   box.createEl("summary", { text: `\u76F8\u5173\u7684 ${hits.length} \u6761` });
   const list = box.createDiv({ cls: "yh-ov-related-list" });
   for (const hit of hits) {
-    const row = list.createDiv({ cls: "yh-ov-related-row" });
-    const excerpt = hit.card.text.length > 60 ? `${hit.card.text.slice(0, 60)}\u2026` : hit.card.text;
-    row.createDiv({ cls: "yh-ov-related-text", text: excerpt });
-    const meta = row.createDiv({ cls: "yh-ov-related-meta" });
-    meta.createSpan({ cls: "yh-ov-related-reason", text: `\u90FD\u63D0\u5230\u300C${hit.reasons.join("\u300D\u300C")}\u300D` });
-    meta.createSpan({ cls: "yh-ov-related-file", text: host.fileName(hit.card) });
-    for (const tag of sharedTags(self, hit.card)) {
-      const chip = meta.createSpan({
-        cls: "yh-ov-related-chip",
-        text: `\u5DF2\u5173\u8054 ${tag}`,
-        attr: { title: "\u70B9\u51FB\u65AD\u5F00\u8BE5\u5173\u8054\u6807\u7B7E\uFF08\u4E24\u4FA7\u540C\u65F6\u79FB\u9664\uFF09" }
-      });
-      chip.addEventListener("click", (event) => {
-        event.stopPropagation();
-        runMutation(host.onRemoveSharedTag(hit.card, tag), host);
-      });
-    }
-    const linkable = host.canLink(hit.card);
-    const link = meta.createSpan({
-      cls: "yh-ov-related-link",
-      text: "\u5173\u8054",
-      attr: linkable ? { role: "button", tabindex: "0", "aria-label": "\u786E\u8BA4\u5173\u8054", title: "\u786E\u8BA4\u5173\u8054\uFF1A\u628A\u4E00\u4E2A\u5171\u4EAB\u6807\u7B7E\u5199\u5165\u4E24\u4FA7\u6279\u6CE8" } : { "aria-disabled": "true", title: "\u6E90\u6587\u4EF6\u7F3A\u5931\uFF0C\u65E0\u6CD5\u5EFA\u7ACB\u5173\u8054" }
+    list.appendChild(renderHitRow(list, self, hit, host));
+  }
+}
+function renderHitRow(parent, self, hit, host) {
+  const row = parent.createDiv({ cls: "yh-ov-related-row" });
+  const excerpt = hit.card.text;
+  const textEl = row.createDiv({ cls: "yh-ov-related-text", text: excerpt });
+  if (shouldCollapseRelatedText(excerpt)) {
+    textEl.addClass("is-collapsible");
+    const toggle = row.createEl("span", {
+      cls: "yh-ov-related-expand",
+      text: "\u5C55\u5F00",
+      attr: { role: "button", tabindex: "0", "aria-label": "\u5C55\u5F00\u8FD9\u6761\u76F8\u5173\u6458\u5F55" }
     });
-    if (!linkable) {
-      link.addClass("is-disabled");
-    }
-    const openPicker = (event) => {
+    const flip = (event) => {
       event.stopPropagation();
-      if (linkable) {
-        mountPicker(row, self, hit.card, hit.reasons, host);
-      }
+      const expanded = !textEl.hasClass("is-expanded");
+      textEl.toggleClass("is-expanded", expanded);
+      toggle.setText(expanded ? "\u6536\u8D77" : "\u5C55\u5F00");
+      toggle.setAttribute("aria-label", expanded ? "\u6536\u8D77\u8FD9\u6761\u76F8\u5173\u6458\u5F55" : "\u5C55\u5F00\u8FD9\u6761\u76F8\u5173\u6458\u5F55");
     };
-    link.addEventListener("click", openPicker);
-    link.addEventListener("keydown", (event) => {
+    toggle.addEventListener("click", flip);
+    toggle.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") {
         return;
       }
       event.preventDefault();
-      event.stopPropagation();
-      if (linkable) {
-        mountPicker(row, self, hit.card, hit.reasons, host);
-      }
+      flip(event);
     });
-    if (host.canLink(hit.card)) {
-      row.addClass("is-clickable");
-      row.setAttribute("role", "button");
-      row.addEventListener("click", () => host.onJump(hit.card));
-    }
   }
+  const meta = row.createDiv({ cls: "yh-ov-related-meta" });
+  meta.createSpan({ cls: "yh-ov-related-reason", text: `\u90FD\u63D0\u5230\u300C${hit.reasons.join("\u300D\u300C")}\u300D` });
+  meta.createSpan({ cls: "yh-ov-related-file", text: host.fileName(hit.card) });
+  for (const tag of sharedTags(self, hit.card)) {
+    const chip = meta.createSpan({
+      cls: "yh-ov-related-chip",
+      text: `\u5DF2\u5173\u8054 ${tag}`,
+      attr: { title: "\u70B9\u51FB\u65AD\u5F00\u8BE5\u5173\u8054\u6807\u7B7E\uFF08\u4E24\u4FA7\u540C\u65F6\u79FB\u9664\uFF09" }
+    });
+    chip.addEventListener("click", (event) => {
+      event.stopPropagation();
+      runMutation(host.onRemoveSharedTag(hit.card, tag), host);
+    });
+  }
+  const linkable = host.canLink(hit.card);
+  const link = meta.createSpan({
+    cls: "yh-ov-related-link",
+    text: "\u5173\u8054",
+    attr: linkable ? { role: "button", tabindex: "0", "aria-label": "\u786E\u8BA4\u5173\u8054", title: "\u786E\u8BA4\u5173\u8054\uFF1A\u628A\u4E00\u4E2A\u5171\u4EAB\u6807\u7B7E\u5199\u5165\u4E24\u4FA7\u6279\u6CE8" } : { "aria-disabled": "true", title: "\u6E90\u6587\u4EF6\u7F3A\u5931\uFF0C\u65E0\u6CD5\u5EFA\u7ACB\u5173\u8054" }
+  });
+  if (!linkable) {
+    link.addClass("is-disabled");
+  }
+  const openPicker = (event) => {
+    event.stopPropagation();
+    if (linkable) {
+      mountPicker(row, self, hit.card, hit.reasons, host);
+    }
+  };
+  link.addEventListener("click", openPicker);
+  link.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (linkable) {
+      mountPicker(row, self, hit.card, hit.reasons, host);
+    }
+  });
+  if (host.canLink(hit.card)) {
+    row.addClass("is-clickable");
+    row.setAttribute("role", "button");
+    row.addEventListener("click", () => host.onJump(hit.card));
+  }
+  return row;
 }
 function runMutation(result, host) {
   void Promise.resolve(result).then(() => host.afterMutate?.()).catch(() => void 0);
@@ -9365,7 +9396,10 @@ var CARD_ACTIONS = [
 ];
 var ICON_ACTIONS = {
   "open-export": "file-text",
-  "edit-note": "pencil"
+  "atom-card": "file-plus",
+  "edit-note": "pencil",
+  "add-note": "message-square",
+  "delete": "trash-2"
 };
 function renderCardBody(root, card, host) {
   root.empty();
@@ -9694,20 +9728,51 @@ var GAP = 10;
 var EDGE = 8;
 var MIN_WIDTH = 200;
 var MIN_HEIGHT = 120;
-var MOBILE_SHEET_GUTTERS = {
+var DEFAULT_MOBILE_SHEET_GUTTERS = {
   side: 20,
   top: 40,
   bottom: 40,
   /** 键盘弹起（可视区被压矮）时的紧凑边距 */
   compact: 12
 };
+function toPx(raw, fallback) {
+  const value = Number.parseFloat(raw);
+  return Number.isFinite(value) ? value : fallback;
+}
+function readSafeInsets() {
+  if (typeof document === "undefined" || !document.body) {
+    return { top: 0, bottom: 0 };
+  }
+  const probe = document.createElement("div");
+  probe.style.cssText = "position:fixed;top:0;left:0;width:0;height:0;visibility:hidden;pointer-events:none;padding-top:var(--yh-safe-top,0px);padding-bottom:var(--yh-safe-bottom,0px);";
+  document.body.appendChild(probe);
+  const style2 = getComputedStyle(probe);
+  const insets = {
+    top: toPx(style2.paddingTop, 0),
+    bottom: toPx(style2.paddingBottom, 0)
+  };
+  probe.remove();
+  return insets;
+}
+function readMobileSheetGutters(el) {
+  const style2 = getComputedStyle(el);
+  const side = toPx(style2.getPropertyValue("--yh-sheet-gutter-x"), DEFAULT_MOBILE_SHEET_GUTTERS.side);
+  const top = toPx(style2.getPropertyValue("--yh-sheet-gutter-y"), DEFAULT_MOBILE_SHEET_GUTTERS.top);
+  const bottom = toPx(style2.getPropertyValue("--yh-sheet-gutter-y"), DEFAULT_MOBILE_SHEET_GUTTERS.bottom);
+  const compact = toPx(
+    style2.getPropertyValue("--yh-sheet-gutter-compact"),
+    DEFAULT_MOBILE_SHEET_GUTTERS.compact
+  );
+  const safe = readSafeInsets();
+  return { side, top: top + safe.top, bottom: bottom + safe.bottom, compact };
+}
 function computeMobileSheet(input) {
   const { viewportHeight, visualOffsetTop, bottomInset, compact } = input;
-  const gutter = MOBILE_SHEET_GUTTERS;
-  const topGutter = compact ? gutter.compact : gutter.top;
-  const bottomGutter = compact ? gutter.compact : gutter.bottom;
-  const top = Math.max(0, visualOffsetTop) + topGutter;
-  const bottomLimit = viewportHeight - Math.max(0, bottomInset) - bottomGutter;
+  const gutters = input.gutters ?? DEFAULT_MOBILE_SHEET_GUTTERS;
+  const tightViewport = viewportHeight > 0 && viewportHeight < 480;
+  const verticalGutter = (value) => compact ? gutters.compact : tightViewport ? Math.min(value, 16) : value;
+  const top = Math.max(0, visualOffsetTop) + verticalGutter(gutters.top);
+  const bottomLimit = viewportHeight - Math.max(0, bottomInset) - verticalGutter(gutters.bottom);
   const height = Math.max(0, bottomLimit - top);
   return { top, height };
 }
@@ -9908,7 +9973,10 @@ var AnnotationCard = class {
       viewportHeight: viewportH,
       visualOffsetTop: vv?.offsetTop ?? 0,
       bottomInset,
-      compact: keyboardInset > 0
+      compact: keyboardInset > 0,
+      // 留白与安全区都来自样式/浏览器（--yh-sheet-gutter-* + env(safe-area-inset-*)），
+      // 代码不假设任何机型；换手机、横竖屏、手势条高度都会自动跟着变
+      gutters: readMobileSheetGutters(el)
     });
     el.style.top = `${sheet.top}px`;
     el.style.bottom = "auto";

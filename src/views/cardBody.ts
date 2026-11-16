@@ -42,10 +42,17 @@ export const CARD_ACTIONS: readonly CardActionSpec[] = [
   { id: "delete", label: "删除", inList: true, inPopover: true },
 ];
 
-/** 需要图标而不是文字的动作；两侧一致，避免「同样一个动作两种长相」 */
+/**
+ * 需要图标而不是文字的动作；两侧一致，避免「同样一个动作两种长相」。
+ * 图标名取自 Obsidian 内置 lucide 集，纯图标按钮必须给 title（见 actionTitle），
+ * 否则新用户认不出「file-plus / message-square / trash-2」分别是干什么的。
+ */
 const ICON_ACTIONS: Partial<Record<CardActionId, string>> = {
   "open-export": "file-text",
+  "atom-card": "file-plus",
   "edit-note": "pencil",
+  "add-note": "message-square",
+  "delete": "trash-2",
 };
 
 export interface CardExtraAction {

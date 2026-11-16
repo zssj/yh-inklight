@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeMobileSheet,
   computePopoverPlacement,
-  MOBILE_SHEET_GUTTERS,
+  DEFAULT_MOBILE_SHEET_GUTTERS,
   PopoverRect,
 } from "../../src/views/popoverPlacement";
 
@@ -123,7 +123,7 @@ describe("computeMobileSheet", () => {
       compact: false,
     });
 
-    expect(sheet.top).toBe(MOBILE_SHEET_GUTTERS.top);
+    expect(sheet.top).toBe(DEFAULT_MOBILE_SHEET_GUTTERS.top);
     expect(sheet.height).toBe(800 - 40 - 40);
   });
 
@@ -135,7 +135,7 @@ describe("computeMobileSheet", () => {
       compact: true,
     });
 
-    expect(sheet.top).toBe(MOBILE_SHEET_GUTTERS.compact);
+    expect(sheet.top).toBe(DEFAULT_MOBILE_SHEET_GUTTERS.compact);
     expect(sheet.height).toBe(800 - 300 - 12 - 12);
   });
 
@@ -162,13 +162,13 @@ describe("computeMobileSheet", () => {
         });
         expect(sheet.height).toBeGreaterThanOrEqual(0);
         expect(sheet.top + sheet.height).toBeLessThanOrEqual(
-          800 - bottomInset - (bottomInset > 0 ? MOBILE_SHEET_GUTTERS.compact : MOBILE_SHEET_GUTTERS.bottom) + 0.001,
+          800 - bottomInset - (bottomInset > 0 ? DEFAULT_MOBILE_SHEET_GUTTERS.compact : DEFAULT_MOBILE_SHEET_GUTTERS.bottom) + 0.001,
         );
       }
     }
   });
 
-  it("视口极矮时高度归零而不是变成负数", () => {
+  it("视口极矮时高度被压到很小但绝不为负、不溢出", () => {
     const sheet = computeMobileSheet({
       viewportHeight: 60,
       visualOffsetTop: 0,
@@ -176,6 +176,36 @@ describe("computeMobileSheet", () => {
       compact: false,
     });
 
-    expect(sheet.height).toBe(0);
+    expect(sheet.height).toBeGreaterThanOrEqual(0);
+    expect(sheet.top + sheet.height).toBeLessThanOrEqual(60);
+  });
+});
+
+describe("readMobileSheetGutters 的兜底", () => {
+  it("没有样式表（测试环境）时回落到默认值，且不为负", () => {
+    expect(DEFAULT_MOBILE_SHEET_GUTTERS.side).toBeGreaterThan(0);
+    expect(DEFAULT_MOBILE_SHEET_GUTTERS.top).toBeGreaterThan(0);
+    expect(DEFAULT_MOBILE_SHEET_GUTTERS.bottom).toBeGreaterThan(0);
+    expect(DEFAULT_MOBILE_SHEET_GUTTERS.compact).toBeGreaterThan(0);
+  });
+
+  it("矮视口自动收紧上下留白，不针对机型写死", () => {
+    const tall = computeMobileSheet({
+      viewportHeight: 800,
+      visualOffsetTop: 0,
+      bottomInset: 0,
+      compact: false,
+    });
+    const short = computeMobileSheet({
+      viewportHeight: 400,
+      visualOffsetTop: 0,
+      bottomInset: 0,
+      compact: false,
+    });
+
+    // 800 高时用变量里的 40；400 高时收到 16，把空间让给内容
+    expect(tall.top).toBe(40);
+    expect(short.top).toBe(16);
+    expect(short.height).toBe(400 - 16 - 16);
   });
 });

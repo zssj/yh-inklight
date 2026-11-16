@@ -6,7 +6,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { computePopoverPlacement, PopoverRect } from "../../src/views/popoverPlacement";
+import {
+  computeMobileSheet,
+  computePopoverPlacement,
+  MOBILE_SHEET_GUTTERS,
+  PopoverRect,
+} from "../../src/views/popoverPlacement";
 
 const BOUNDS: PopoverRect = { left: 0, top: 0, right: 1000, bottom: 800 };
 
@@ -106,5 +111,71 @@ describe("computePopoverPlacement", () => {
 
     expect(placement.left).toBeGreaterThanOrEqual(8);
     expect(placement.top).toBeGreaterThanOrEqual(8);
+  });
+});
+
+describe("computeMobileSheet", () => {
+  it("常规视口占满四边留白之间的区域（左右 20 / 上下 40）", () => {
+    const sheet = computeMobileSheet({
+      viewportHeight: 800,
+      visualOffsetTop: 0,
+      bottomInset: 0,
+      compact: false,
+    });
+
+    expect(sheet.top).toBe(MOBILE_SHEET_GUTTERS.top);
+    expect(sheet.height).toBe(800 - 40 - 40);
+  });
+
+  it("键盘弹起时边距收紧到 compact，并扣掉键盘与底部栏占用", () => {
+    const sheet = computeMobileSheet({
+      viewportHeight: 800,
+      visualOffsetTop: 0,
+      bottomInset: 300,
+      compact: true,
+    });
+
+    expect(sheet.top).toBe(MOBILE_SHEET_GUTTERS.compact);
+    expect(sheet.height).toBe(800 - 300 - 12 - 12);
+  });
+
+  it("页面被键盘顶起（offsetTop）时顶部跟着下移，不跑到可视区上方", () => {
+    const sheet = computeMobileSheet({
+      viewportHeight: 800,
+      visualOffsetTop: 60,
+      bottomInset: 300,
+      compact: true,
+    });
+
+    expect(sheet.top).toBe(72);
+    expect(sheet.height).toBe(800 - 300 - 12 - 72);
+  });
+
+  it("任何情况下都不溢出可视区底部", () => {
+    for (const bottomInset of [0, 120, 300, 600]) {
+      for (const offsetTop of [0, 40]) {
+        const sheet = computeMobileSheet({
+          viewportHeight: 800,
+          visualOffsetTop: offsetTop,
+          bottomInset,
+          compact: bottomInset > 0,
+        });
+        expect(sheet.height).toBeGreaterThanOrEqual(0);
+        expect(sheet.top + sheet.height).toBeLessThanOrEqual(
+          800 - bottomInset - (bottomInset > 0 ? MOBILE_SHEET_GUTTERS.compact : MOBILE_SHEET_GUTTERS.bottom) + 0.001,
+        );
+      }
+    }
+  });
+
+  it("视口极矮时高度归零而不是变成负数", () => {
+    const sheet = computeMobileSheet({
+      viewportHeight: 60,
+      visualOffsetTop: 0,
+      bottomInset: 0,
+      compact: false,
+    });
+
+    expect(sheet.height).toBe(0);
   });
 });

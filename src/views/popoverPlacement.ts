@@ -36,6 +36,51 @@ const EDGE = 8;
 const MIN_WIDTH = 200;
 const MIN_HEIGHT = 120;
 
+/**
+ * 移动端浮层的四边留白。手机屏小，卡片要尽量占满屏幕：
+ * 左右各 20、上下各 40（上下留得多是因为顶部有标题栏、底部有手势条/导航栏）。
+ * 键盘弹起时可视区已经很矮，边距收紧到 12，把空间让给内容。
+ */
+export const MOBILE_SHEET_GUTTERS = {
+  side: 20,
+  top: 40,
+  bottom: 40,
+  /** 键盘弹起（可视区被压矮）时的紧凑边距 */
+  compact: 12,
+} as const;
+
+export interface MobileSheetInput {
+  viewportHeight: number;
+  /** visualViewport.offsetTop：键盘顶起时页面被平移的距离 */
+  visualOffsetTop: number;
+  /** 键盘 + 底部固定栏在视口底部占用的高度 */
+  bottomInset: number;
+  /** 键盘是否弹起（弹起时用紧凑边距） */
+  compact: boolean;
+}
+
+/**
+ * 移动端浮层的落位：**固定占满「四边留白」之间的区域**，不再按内容高度测量。
+ *
+ * 为什么要改成固定高度（v0.19.10）：按 `min(自然高度, 可用高度)` 依赖一次 DOM 测量，
+ * 而卡片里的想法是 Markdown 异步渲染的——show() 里立刻测量时内容还没落地，量出来的
+ * 高度偏小，maxHeight 跟着偏小，卡片就只剩一小条，看起来「弹出来太小」。
+ * 现在高度只由视口决定：内容少时卡片仍然大（像一张 sheet），内容多时内部滚动，
+ * 既不会因为测量时序变小，也不会溢出屏幕。
+ */
+export function computeMobileSheet(input: MobileSheetInput): { top: number; height: number } {
+  const { viewportHeight, visualOffsetTop, bottomInset, compact } = input;
+  const gutter = MOBILE_SHEET_GUTTERS;
+  const topGutter = compact ? gutter.compact : gutter.top;
+  const bottomGutter = compact ? gutter.compact : gutter.bottom;
+
+  const top = Math.max(0, visualOffsetTop) + topGutter;
+  const bottomLimit = viewportHeight - Math.max(0, bottomInset) - bottomGutter;
+  // 可用高度优先：宁可矮到极限，也不让浮层底部溢出屏幕
+  const height = Math.max(0, bottomLimit - top);
+  return { top, height };
+}
+
 function clamp(value: number, min: number, max: number): number {
   const hi = Math.max(min, max);
   return Math.max(min, Math.min(value, hi));

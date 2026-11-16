@@ -2,7 +2,7 @@
  * [INPUT]: cardModel 的 SidebarCard、views/cardBody 的唯一卡片渲染器、
  *          views/popoverPlacement 的定位算法、调用方传入的划线矩形与动作回调
  * [OUTPUT]: AnnotationCard —— Markdown / PDF / EPUB 三端「点击高亮 → 标注详情」浮层；
- *           本文件只负责浮层外壳（定位、点外关闭、Esc、移动端底部弹出），
+ *           本文件只负责浮层外壳（定位、点外关闭、Esc、移动端整屏留白居中），
  *           卡片内容与动作行一律由 views/cardBody 产出，与侧栏列表保持同一套 DOM
  * [POS]: views 模块唯一的标注详情浮层。三端只负责用 buildCards 取到卡片数据并给回调，
  *        不再各自映射字段——历史教训是两处映射会漂移（noteType 曾在浮层里丢过）
@@ -15,7 +15,7 @@ import { SidebarCard } from "./cardModel";
 import { CardExtraAction, renderCardBody } from "./cardBody";
 import { RelatedBlockHost } from "./relatedBlock";
 import { TagSuggestion } from "./tagInput";
-import { computePopoverPlacement, PopoverRect, viewportRect } from "./popoverPlacement";
+import { computeMobileSheet, computePopoverPlacement, PopoverRect, viewportRect } from "./popoverPlacement";
 
 export interface AnnotationCardOptions {
   /** 来源行左侧的文件名；宿主已解析过 TFile，传入 basename 即可 */
@@ -39,20 +39,11 @@ export interface AnnotationCardOptions {
   onDismiss?: () => void;
 }
 
-/**
- * 移动端浮层与屏幕边缘的间距。
- * 底部必须留够：手机底部有手势条/导航栏，贴底时最后一行动作会落在不可点区域。
- * 左右由 CSS 的 --yh-sheet-gutter 控制，数值与这里保持一致。
- */
-const SHEET_BOTTOM_GUTTER = 40;
-/** 距屏幕顶部的最小间距（状态栏之外） */
-const SHEET_TOP_GUTTER = 12;
-
 export interface AnnotationCardAnchor {
   /**
    * 划线/选区在视口坐标下的外接矩形（多行取并集）。
-   * 只用来判断「从哪一侧展开」（重心在上半屏则顶对齐，否则底对齐），
-   * 移动端允许浮层压住它——见 placeMobile 的说明。
+   * 移动端只在「浮动卡片」不一致时作参考；当前 v0.19.10 的移动端定位与它无关，
+   * 桌面端仍用它做四侧择优与覆盖判定。
    */
   avoid: PopoverRect;
   /** 可用区域：视口 ∩ 阅读区 − 安全区；不传时退化为视口 */
@@ -190,17 +181,17 @@ export class AnnotationCard {
   }
 
   /**
-   * 移动端定位：**不再避开高亮**，改为「从高亮所在的一侧展开，用满可用高度」。
+   * 移动端定位：**固定占满屏幕，四边留白，不再按内容高度测量**。
    *
-   * 演进：v0.19.8 之前一律贴屏幕底（只留 10px），最后一行落在手势区点不中；
-   * v0.19.8 改成贴着高亮上/下方且坚持不遮挡，结果单侧空间很小，卡片被压成一条缝，
-   * 内容全塞进内部滚动，等于看不到。v0.19.9 起允许压住高亮，换取完整高度：
+   * 演进：v0.19.8 之前贴屏幕底（留 10px），最后一行落在手势区点不中；
+   * v0.19.8 贴着高亮且坚持不遮挡，单侧空间只有一小条，卡片被压成一条缝；
+   * v0.19.9 允许压住高亮，但高度仍取 `min(自然高度, 可用高度)`——依赖一次 DOM 测量，
+   * 而卡片里的想法是 Markdown 异步渲染的，show() 当场测量时内容还没落地，
+   * 量出来的高度偏小，卡片就只剩一小块（v0.19.10 修的就是这个）。
    *
-   * - 高亮在屏幕上半部 → 浮层**顶对齐**（top=12），从高亮处向下展开，头部紧挨高亮；
-   * - 高亮在下半部 → 浮层**底对齐**（底距 40px + 安全区），从下方升起，拇指够得到动作行；
-   * - 两种都只受「顶 12 / 底 40」限制，高度 = min(自然高度, 可用高度)，
-   *   放得下就完整展示，放不下才在卡片内部滚动——不会被压扁、不会出界、不会截断内容。
-   * - 键盘弹起时一律贴键盘上方：编辑输入框必须可见，此时不做就近判断。
+   * 现在：高度只由视口决定——左右各 20px、上下各 40px，中间全部给卡片。
+   * 内容少时是一张大卡片，内容多时内部滚动；键盘弹起时边距收紧到 12px 贴住键盘上方。
+   * 位置与高亮无关，固定可预期，不会「点不同高亮弹到不同地方」。
    */
   private placeMobile(): void {
     const el = this.el;
@@ -214,35 +205,18 @@ export class AnnotationCard {
       keyboardInset + this.measureMobileBarInset(visualBottom),
     );
 
-    // 可用区：顶部与底部都留白，底部余量要给手势区让位
-    const limitTop = SHEET_TOP_GUTTER;
-    const bottomEdge = viewportH - bottomInset - SHEET_BOTTOM_GUTTER;
-    const fullHeight = Math.max(160, bottomEdge - limitTop);
+    const sheet = computeMobileSheet({
+      viewportHeight: viewportH,
+      visualOffsetTop: vv?.offsetTop ?? 0,
+      bottomInset,
+      compact: keyboardInset > 0,
+    });
 
-    // 先量自然高度：清掉三边定位后再读，避免上一次的 maxHeight 把结果压扁
-    el.style.top = "";
-    el.style.bottom = "";
-    el.style.maxHeight = "none";
-    el.style.visibility = "hidden";
-    const natural = el.getBoundingClientRect().height;
-
-    // 内容放得下就按自然高度（矮卡片自然贴着高亮），放不下才占满可用区并内部滚动
-    const maxHeight = Math.min(fullHeight, Math.max(160, natural));
-
-    const avoid = this.anchor?.avoid;
-    const hasAnchor = !!avoid && avoid.bottom > avoid.top;
-    // 高亮重心在上半屏 → 顶对齐；否则底对齐。键盘弹起时强制底对齐（跟键盘走）
-    const alignTop = hasAnchor && keyboardInset === 0 && (avoid!.top + avoid!.bottom) / 2 < viewportH / 2;
-
-    if (alignTop) {
-      el.style.top = `${limitTop}px`;
-      el.style.bottom = "auto";
-    } else {
-      el.style.top = "";
-      el.style.bottom = `${bottomInset + SHEET_BOTTOM_GUTTER}px`;
-    }
-    el.style.maxHeight = `${maxHeight}px`;
-    el.style.visibility = "";
+    el.style.top = `${sheet.top}px`;
+    el.style.bottom = "auto";
+    // 高度写死：卡片不会因内容异步渲染而忽大忽小，也不会溢出屏幕
+    el.style.height = `${sheet.height}px`;
+    el.style.maxHeight = `${sheet.height}px`;
   }
 
   /**

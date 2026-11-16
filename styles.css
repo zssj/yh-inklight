@@ -1581,6 +1581,8 @@ body.yh-epub-nav-hidden .mobile-navbar {
   position: fixed;
   z-index: var(--layer-popover, 100000);
   display: flex;
+  /* 高度由 JS 按视口写死，边框必须算在高度内，否则底部会多溢出 2px */
+  box-sizing: border-box;
   width: 320px;
   max-width: calc(100vw - 16px);
   border: 1px solid var(--yh-border);
@@ -1648,17 +1650,16 @@ body.yh-epub-nav-hidden .mobile-navbar {
    bottom 由卡片按 visualViewport 计算（键盘 + 底部安全区 + 间距），这里只管左右与圆角；
    margin-bottom 吃掉 iOS 底部安全区，避免圆角被 home indicator 压住。 */
 .yh-epub-annotation-popover.is-mobile {
-  /* 左右各留 12px（与 annotationCard 的 SHEET 常量同口径），四边都不贴屏幕 */
-  left: 12px;
-  right: 12px;
-  /* 不能加 !important：就近放置时 JS 会写内联 top，贴在高亮的上/下方 */
+  /* 左右各留 20px（与 popoverPlacement.MOBILE_SHEET_GUTTERS 同口径），
+     上下 40px 与高度由 JS 按视口写内联样式；四边都留白，卡片居中占满可用区 */
+  left: 20px;
+  right: 20px;
+  /* 不能加 !important：JS 会写内联 top / height */
   top: auto;
   bottom: 0;
   width: auto;
   max-width: none;
   border-radius: var(--yh-radius);
-  /* 底部间距由 JS 保证（保底 40px）；这里再吃一次安全区，防圆角被手势条压住 */
-  margin-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 /* ============================================================

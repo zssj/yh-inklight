@@ -9694,6 +9694,23 @@ var GAP = 10;
 var EDGE = 8;
 var MIN_WIDTH = 200;
 var MIN_HEIGHT = 120;
+var MOBILE_SHEET_GUTTERS = {
+  side: 20,
+  top: 40,
+  bottom: 40,
+  /** 键盘弹起（可视区被压矮）时的紧凑边距 */
+  compact: 12
+};
+function computeMobileSheet(input) {
+  const { viewportHeight, visualOffsetTop, bottomInset, compact } = input;
+  const gutter = MOBILE_SHEET_GUTTERS;
+  const topGutter = compact ? gutter.compact : gutter.top;
+  const bottomGutter = compact ? gutter.compact : gutter.bottom;
+  const top = Math.max(0, visualOffsetTop) + topGutter;
+  const bottomLimit = viewportHeight - Math.max(0, bottomInset) - bottomGutter;
+  const height = Math.max(0, bottomLimit - top);
+  return { top, height };
+}
 function clamp(value, min, max) {
   const hi = Math.max(min, max);
   return Math.max(min, Math.min(value, hi));
@@ -9761,8 +9778,6 @@ function computePopoverPlacement(avoid, size, bounds) {
 }
 
 // src/views/annotationCard.ts
-var SHEET_BOTTOM_GUTTER = 40;
-var SHEET_TOP_GUTTER = 12;
 var AnnotationCard = class {
   constructor(card, options) {
     // 视图状态一律存类字段，任何重绘都不丢编辑态
@@ -9867,17 +9882,17 @@ var AnnotationCard = class {
     this.el.style.visibility = "";
   }
   /**
-   * 移动端定位：**不再避开高亮**，改为「从高亮所在的一侧展开，用满可用高度」。
+   * 移动端定位：**固定占满屏幕，四边留白，不再按内容高度测量**。
    *
-   * 演进：v0.19.8 之前一律贴屏幕底（只留 10px），最后一行落在手势区点不中；
-   * v0.19.8 改成贴着高亮上/下方且坚持不遮挡，结果单侧空间很小，卡片被压成一条缝，
-   * 内容全塞进内部滚动，等于看不到。v0.19.9 起允许压住高亮，换取完整高度：
+   * 演进：v0.19.8 之前贴屏幕底（留 10px），最后一行落在手势区点不中；
+   * v0.19.8 贴着高亮且坚持不遮挡，单侧空间只有一小条，卡片被压成一条缝；
+   * v0.19.9 允许压住高亮，但高度仍取 `min(自然高度, 可用高度)`——依赖一次 DOM 测量，
+   * 而卡片里的想法是 Markdown 异步渲染的，show() 当场测量时内容还没落地，
+   * 量出来的高度偏小，卡片就只剩一小块（v0.19.10 修的就是这个）。
    *
-   * - 高亮在屏幕上半部 → 浮层**顶对齐**（top=12），从高亮处向下展开，头部紧挨高亮；
-   * - 高亮在下半部 → 浮层**底对齐**（底距 40px + 安全区），从下方升起，拇指够得到动作行；
-   * - 两种都只受「顶 12 / 底 40」限制，高度 = min(自然高度, 可用高度)，
-   *   放得下就完整展示，放不下才在卡片内部滚动——不会被压扁、不会出界、不会截断内容。
-   * - 键盘弹起时一律贴键盘上方：编辑输入框必须可见，此时不做就近判断。
+   * 现在：高度只由视口决定——左右各 20px、上下各 40px，中间全部给卡片。
+   * 内容少时是一张大卡片，内容多时内部滚动；键盘弹起时边距收紧到 12px 贴住键盘上方。
+   * 位置与高亮无关，固定可预期，不会「点不同高亮弹到不同地方」。
    */
   placeMobile() {
     const el = this.el;
@@ -9889,27 +9904,16 @@ var AnnotationCard = class {
       viewportH,
       keyboardInset + this.measureMobileBarInset(visualBottom)
     );
-    const limitTop = SHEET_TOP_GUTTER;
-    const bottomEdge = viewportH - bottomInset - SHEET_BOTTOM_GUTTER;
-    const fullHeight = Math.max(160, bottomEdge - limitTop);
-    el.style.top = "";
-    el.style.bottom = "";
-    el.style.maxHeight = "none";
-    el.style.visibility = "hidden";
-    const natural = el.getBoundingClientRect().height;
-    const maxHeight = Math.min(fullHeight, Math.max(160, natural));
-    const avoid = this.anchor?.avoid;
-    const hasAnchor = !!avoid && avoid.bottom > avoid.top;
-    const alignTop = hasAnchor && keyboardInset === 0 && (avoid.top + avoid.bottom) / 2 < viewportH / 2;
-    if (alignTop) {
-      el.style.top = `${limitTop}px`;
-      el.style.bottom = "auto";
-    } else {
-      el.style.top = "";
-      el.style.bottom = `${bottomInset + SHEET_BOTTOM_GUTTER}px`;
-    }
-    el.style.maxHeight = `${maxHeight}px`;
-    el.style.visibility = "";
+    const sheet = computeMobileSheet({
+      viewportHeight: viewportH,
+      visualOffsetTop: vv?.offsetTop ?? 0,
+      bottomInset,
+      compact: keyboardInset > 0
+    });
+    el.style.top = `${sheet.top}px`;
+    el.style.bottom = "auto";
+    el.style.height = `${sheet.height}px`;
+    el.style.maxHeight = `${sheet.height}px`;
   }
   /**
    * 移动端底部固定栏（Obsidian 导航栏/工具栏）在可视区内实际占用的高度。

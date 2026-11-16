@@ -1786,7 +1786,9 @@ export default class OverlayAnnotationsPlugin extends Plugin {
         await this.app.workspace.getLeaf("tab").openFile(target);
       }
       new Notice(
-        result.status === "created" ? `已提炼成卡片：${result.path}` : `这张卡片已存在：${result.path}`,
+        result.status === "created"
+          ? `已提炼成卡片：${result.path}（此后卡片独立生长，不再与批注同步）`
+          : `这张卡片已存在：${result.path}（已与批注分叉，不会自动同步）`,
       );
     } catch (error) {
       console.warn("yh-inklight: 生成原子卡失败", error);

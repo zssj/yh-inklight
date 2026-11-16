@@ -278,7 +278,10 @@ export interface AnnotationPluginSettings {
   // --- 与 Obsidian 标签互通 ---
   /** 开启后：标签补全候选并入 OB 标签；导出的笔记写入 OB 可索引的 frontmatter / 正文标签 */
   obTagBridge: boolean;
-  /** 原子卡存放目录（相对 vault 根）；卡片是派生文件，可随时删除重建 */
+  /**
+   * 原子卡存放目录（相对 vault 根）。卡片是独立资产，不是批注的缓存：
+   * 提炼后与批注分叉，互不同步；清理逻辑不得删除此目录下的文件。
+   */
   atomCardFolder: string;
   // --- 字面内容关联（不上 AI、不联网、纯内存） ---
   /** 开启后：打标签时按划线内容推荐用过的标签；卡片底部列出字面相关的其他批注 */

@@ -146,6 +146,8 @@ export class AnnotationStore {
   private readonly documents = new Map<string, FileAnnotationDocument>();
   private index: AnnotationIndex = EMPTY_INDEX;
   private changeVersion = 0;
+  /** 卡片目录扫描缓存（目录 → inklightId → 路径）。卡片被改名/搬走时靠「路径还在不在」自校验重扫 */
+  private atomCardScan: { dir: string; paths: Map<string, string> } | null = null;
 
   constructor(private readonly app: App) {}
 
@@ -920,8 +922,12 @@ export class AnnotationStore {
 
   /**
    * 把一条批注提炼成原子卡：一个想法一个文件，正文是用户自己写的那句。
-   * 只生成派生文件、不碰 sidecar；靠索引里的 atomCards 去重，重复点只会打开已有卡片。
-   * 卡片删掉后索引指针仍在，下次点会重新生成——派生文件本来就该可丢弃。
+   * 只新建文件、不碰 sidecar；靠索引里的 atomCards 去重，重复点只会打开已有卡片。
+   *
+   * 卡片是独立资产，不是批注的缓存：抽卡是一次性分叉，之后与批注互不同步——
+   * 批注改了不会回流到卡片，卡片里的内容也不会被再次提炼覆盖。因此这里只新建、
+   * 绝不修改或删除已存在的卡片；索引指针失效时靠 frontmatter 的 inklightId 认回同一张卡。
+   * 卡片被用户删掉后指针仍在，下次点会重新生成——这是找回入口，不是「卡片可丢弃」的许可。
    *
    * 正文为空（content 只有空白）时直接返回 empty、不落盘：卡片正文只放用户自己的话，
    * 划线原文在 source 链接里，空正文的卡片没有任何信息量。
@@ -937,36 +943,93 @@ export class AnnotationStore {
     }
 
     const normalizedPath = this.normalizeVaultPath(file.path);
-    const existing = this.getAtomCard(normalizedPath, input.annotationId);
-    if (existing && this.app.vault.getAbstractFileByPath(existing) instanceof TFile) {
-      return { status: "exists", path: existing };
+    const dir = normalizePath(folder.trim() || DEFAULT_ATOM_CARD_FOLDER);
+
+    // 一级：索引快路径
+    const indexed = this.getAtomCard(normalizedPath, input.annotationId);
+    if (indexed && this.app.vault.getAbstractFileByPath(indexed) instanceof TFile) {
+      return { status: "exists", path: indexed };
     }
 
-    const dir = normalizePath(folder.trim() || DEFAULT_ATOM_CARD_FOLDER);
+    // 二级：扫目录兜底。改名、搬目录、索引丢失、同步冲突后指针都会失效，
+    // 但卡片 frontmatter 里的 inklightId 不会变——认出它就等于认出同一张卡，顺手修回指针。
+    const key = atomCardId(input);
+    const scanned = await this.findAtomCardByScan(dir, key);
+    if (scanned) {
+      await this.rememberAtomCard(normalizedPath, input.annotationId, scanned);
+      return { status: "exists", path: scanned };
+    }
+
+    // 三级：新建。只新建、绝不覆盖已有文件
     if (!(await this.app.vault.adapter.exists(dir))) {
       await this.app.vault.createFolder(dir);
     }
 
     const path = await this.uniqueAtomCardPath(dir, atomCardBaseName(input));
     await this.app.vault.create(path, renderAtomCard(this.index.files[normalizedPath], input, normalizedPath));
-
-    const entry = this.index.files[normalizedPath];
-    if (entry) {
-      this.index = {
-        ...this.index,
-        version: 3,
-        files: {
-          ...this.index.files,
-          [normalizedPath]: {
-            ...entry,
-            atomCards: { ...(entry.atomCards ?? {}), [input.annotationId]: path },
-          },
-        },
-      };
-      await this.writeIndex();
+    if (this.atomCardScan?.dir === dir) {
+      this.atomCardScan.paths.set(key, path);
     }
+    await this.rememberAtomCard(normalizedPath, input.annotationId, path);
 
     return { status: "created", path };
+  }
+
+  /**
+   * 把「批注 → 卡片」指针写回索引。索引只是缓存、不是真相：
+   * 指针没变就不写盘，避免每次点提炼都产生一次无意义的 IO。
+   */
+  private async rememberAtomCard(filePath: string, annotationId: string, cardPath: string): Promise<void> {
+    const entry = this.index.files[filePath];
+    if (!entry || entry.atomCards?.[annotationId] === cardPath) {
+      return;
+    }
+    this.index = {
+      ...this.index,
+      version: 3,
+      files: {
+        ...this.index.files,
+        [filePath]: {
+          ...entry,
+          atomCards: { ...(entry.atomCards ?? {}), [annotationId]: cardPath },
+        },
+      },
+    };
+    await this.writeIndex();
+  }
+
+  /**
+   * 在卡片目录里按 inklightId 找卡片。只在索引失效时走这条慢路径。
+   * 命中结果缓存；缓存复用前先确认文件还在——卡片改名后旧路径必然失效，
+   * 一次自校验就能发现并重扫，不必监听 rename 事件。只缓存命中，空结果不缓存：
+   * 「现在没有」随时会变成「刚被人放进来一张」。
+   */
+  private async findAtomCardByScan(dir: string, key: string): Promise<string | null> {
+    const cached = this.atomCardScan?.dir === dir ? this.atomCardScan.paths.get(key) : undefined;
+    if (cached) {
+      if (this.app.vault.getAbstractFileByPath(cached) instanceof TFile) {
+        return cached;
+      }
+      this.atomCardScan = null;
+    }
+
+    const paths = new Map<string, string>();
+    const prefix = `${dir}/`;
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      if (!file.path.startsWith(prefix)) {
+        continue;
+      }
+      try {
+        const id = readAtomCardId(await this.app.vault.cachedRead(file));
+        if (id && !paths.has(id)) {
+          paths.set(id, file.path);
+        }
+      } catch {
+        // 单张卡读不出来不该挡住抽卡：扫描只是兜底，跳过继续
+      }
+    }
+    this.atomCardScan = paths.size > 0 ? { dir, paths } : null;
+    return paths.get(key) ?? null;
   }
 
   private async uniqueAtomCardPath(dir: string, baseName: string): Promise<string> {
@@ -1478,6 +1541,31 @@ function atomCardBaseName(input: AtomCardInput): string {
 }
 
 /**
+ * 卡片的永久身份：与导出块 id 同一套编号（`${mode}-${annotationId}`）。
+ * 批注 id 是 crypto.randomUUID()，全局唯一，所以不需要再拼源文件路径。
+ * 它写在 frontmatter 里而不是文件名上——文件名是标题，想法变了就该改，
+ * 而 inklightId 一旦写下就永不变化，改名/搬家/索引丢失都不影响认卡。
+ */
+function atomCardId(input: Pick<AtomCardInput, "mode" | "annotationId">): string {
+  return `${input.mode}-${input.annotationId}`;
+}
+
+/** 从卡片 frontmatter 读回 inklightId；老卡片没有这一行，返回 null */
+function readAtomCardId(text: string): string | null {
+  const split = splitFrontmatter(text);
+  if (!split) {
+    return null;
+  }
+  for (const line of split.lines) {
+    const match = /^inklightId:\s*(.+?)\s*$/.exec(line.trim());
+    if (match) {
+      return match[1].replace(/^["']|["']$/g, "");
+    }
+  }
+  return null;
+}
+
+/**
  * 卡片正文只有用户自己的话；原文与出处放 frontmatter。
  * source 优先指向「导出笔记里这一块」（反查指针已知时），否则退回源文件。
  */
@@ -1495,6 +1583,7 @@ function renderAtomCard(
 
   return [
     "---",
+    `inklightId: ${atomCardId(input)}`,
     ...(input.noteType ? [`noteType: ${input.noteType}`] : []),
     `source: ${source}`,
     `tags: [${tags.join(", ")}]`,

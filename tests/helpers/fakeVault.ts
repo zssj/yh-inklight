@@ -53,6 +53,13 @@ export class FakeVault {
     return null;
   }
 
+  /** 真实 Vault 会递归返回全部 md 文件；这里按路径排序，够扫描卡片目录用 */
+  getMarkdownFiles(): TFile[] {
+    return this.listFiles()
+      .filter((path) => path.endsWith(".md"))
+      .map((path) => this.fileAt(path));
+  }
+
   async cachedRead(file: TFile): Promise<string> {
     const content = this.contents.get(normalizePath(file.path));
     if (content === undefined) {

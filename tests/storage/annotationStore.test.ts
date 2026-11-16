@@ -681,12 +681,119 @@ describe("EPUB 回链", () => {
     }
 
     const text = vault.readText(first.path);
+    expect(text).toContain("inklightId: md-h1");
     expect(text).toContain("[[读书笔记/复利-notes#^md-h1]]");
     expect(text).toContain("重读的成本，是复利公式里的分母。");
     expect(text).toContain("noteType: insight");
 
     const again = await store.createAtomCard(file, input, "卡片");
     expect(again).toEqual({ status: "exists", path: first.path });
+  });
+
+  it("提炼原子卡：卡片改名后仍认回同一张，不重复生成", async () => {
+    const { store, vault, file } = await setup();
+    await store.addHighlight(file, { ...highlightOf("h1", "复利效应", 2), noteType: "insight" });
+    const input = {
+      annotationId: "h1",
+      mode: "md" as const,
+      quote: "复利效应",
+      content: "重读的成本，是复利公式里的分母。",
+      noteType: "insight" as const,
+      tags: [],
+    };
+
+    const first = await store.createAtomCard(file, input, "卡片");
+    if (first.status !== "created") {
+      throw new Error("expected created");
+    }
+
+    // 用户在 Obsidian 里给卡片改了名：索引里记的旧路径随之失效
+    await vault.adapter.rename(first.path, "卡片/换个标题.md");
+
+    const again = await store.createAtomCard(file, input, "卡片");
+    expect(again).toEqual({ status: "exists", path: "卡片/换个标题.md" });
+    // 只该有一张卡：改名不该长出双胞胎
+    expect(vault.listFiles().filter((path) => path.startsWith("卡片/"))).toEqual(["卡片/换个标题.md"]);
+  });
+
+  it("提炼原子卡：索引丢失后靠 frontmatter 的 inklightId 认回卡片并修回指针", async () => {
+    const { store, vault, file } = await setup();
+    await store.addHighlight(file, { ...highlightOf("h1", "复利效应", 2), noteType: "insight" });
+    const input = {
+      annotationId: "h1",
+      mode: "md" as const,
+      quote: "复利效应",
+      content: "重读的成本，是复利公式里的分母。",
+      noteType: "insight" as const,
+      tags: [],
+    };
+
+    const first = await store.createAtomCard(file, input, "卡片");
+    if (first.status !== "created") {
+      throw new Error("expected created");
+    }
+
+    // 模拟索引被删掉后重建：指针全丢，卡片还在
+    vault.removeFile(".obsidian-annotations/index.json");
+    await store.initialize();
+    expect(store.getAtomCard(file.path, "h1")).toBeNull();
+
+    // 索引重建后继续在这本书上批注：文件条目回来了，但 atomCards 指针仍是空的
+    await store.addHighlight(file, highlightOf("h2", "长期投资", 8));
+
+    const again = await store.createAtomCard(file, input, "卡片");
+    expect(again).toEqual({ status: "exists", path: first.path });
+    // 扫描结果把指针修回去，下次直接走快路径
+    expect(store.getAtomCard(file.path, "h1")).toBe(first.path);
+  });
+
+  it("提炼原子卡：两条内容相同的批注各自独立成卡，不因撞名合并", async () => {
+    const { store, vault, file } = await setup();
+    await store.addHighlight(file, highlightOf("h1", "复利效应", 2));
+    await store.addHighlight(file, highlightOf("h2", "长期投资", 8));
+
+    const make = (annotationId: string) => ({
+      annotationId,
+      mode: "md" as const,
+      quote: "复利效应",
+      content: "同一个想法",
+      tags: [],
+    });
+
+    const a = await store.createAtomCard(file, make("h1"), "卡片");
+    const b = await store.createAtomCard(file, make("h2"), "卡片");
+    if (a.status !== "created" || b.status !== "created") {
+      throw new Error("expected created");
+    }
+
+    // 文件名撞了只能靠 inklightId 区分，不能把两条不同的想法并成一张
+    expect(a.path).not.toBe(b.path);
+    expect(vault.readText(a.path)).toContain("inklightId: md-h1");
+    expect(vault.readText(b.path)).toContain("inklightId: md-h2");
+  });
+
+  it("提炼原子卡：老卡片没有 inklightId 时不误认，也不覆盖原文件", async () => {
+    const { store, vault, file } = await setup();
+    await store.addHighlight(file, { ...highlightOf("h1", "复利效应", 2), noteType: "insight" });
+    const legacy = '---\nsource: "[[读书笔记/复利]]"\n---\n\n重读的成本，是复利公式里的分母。\n';
+    vault.writeText("卡片/重读的成本.md", legacy);
+
+    const result = await store.createAtomCard(
+      file,
+      {
+        annotationId: "h1",
+        mode: "md",
+        quote: "复利效应",
+        content: "重读的成本，是复利公式里的分母。",
+        noteType: "insight",
+        tags: [],
+      },
+      "卡片",
+    );
+
+    expect(result.status).toBe("created");
+    // 用户自己的卡片原样保留：插件只新建，绝不改写已有文件
+    expect(vault.readText("卡片/重读的成本.md")).toBe(legacy);
   });
 
   it("提炼原子卡：正文只有空白时拒绝生成，不落盘也不写索引指针", async () => {

@@ -145,7 +145,9 @@ export class AnnotationSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("原子卡存放目录")
-      .setDesc("把批注里自己写的想法提炼成独立卡片时写到这个目录（相对 vault 根，留空用「卡片」）。卡片是派生文件，可随时删除重建，批注数据仍在 sidecar。")
+      .setDesc(
+        "把批注里自己写的想法提炼成独立卡片时写到这个目录（相对 vault 根，留空用「卡片」）。卡片是独立资产：提炼后与批注分叉，卡上写的内容不会被再次提炼或导出覆盖，删掉批注也不影响已生成的卡片；反过来说，插件的清理逻辑永远不会动这个目录，不需要时请手动删除。",
+      )
       .addText((text) => {
         text
           .setPlaceholder("卡片")

@@ -11409,7 +11409,9 @@ var AnnotationSettingsTab = class extends import_obsidian8.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian8.Setting(containerEl).setName("\u539F\u5B50\u5361\u5B58\u653E\u76EE\u5F55").setDesc("\u628A\u6279\u6CE8\u91CC\u81EA\u5DF1\u5199\u7684\u60F3\u6CD5\u63D0\u70BC\u6210\u72EC\u7ACB\u5361\u7247\u65F6\u5199\u5230\u8FD9\u4E2A\u76EE\u5F55\uFF08\u76F8\u5BF9 vault \u6839\uFF0C\u7559\u7A7A\u7528\u300C\u5361\u7247\u300D\uFF09\u3002\u5361\u7247\u662F\u6D3E\u751F\u6587\u4EF6\uFF0C\u53EF\u968F\u65F6\u5220\u9664\u91CD\u5EFA\uFF0C\u6279\u6CE8\u6570\u636E\u4ECD\u5728 sidecar\u3002").addText((text) => {
+    new import_obsidian8.Setting(containerEl).setName("\u539F\u5B50\u5361\u5B58\u653E\u76EE\u5F55").setDesc(
+      "\u628A\u6279\u6CE8\u91CC\u81EA\u5DF1\u5199\u7684\u60F3\u6CD5\u63D0\u70BC\u6210\u72EC\u7ACB\u5361\u7247\u65F6\u5199\u5230\u8FD9\u4E2A\u76EE\u5F55\uFF08\u76F8\u5BF9 vault \u6839\uFF0C\u7559\u7A7A\u7528\u300C\u5361\u7247\u300D\uFF09\u3002\u5361\u7247\u662F\u72EC\u7ACB\u8D44\u4EA7\uFF1A\u63D0\u70BC\u540E\u4E0E\u6279\u6CE8\u5206\u53C9\uFF0C\u5361\u4E0A\u5199\u7684\u5185\u5BB9\u4E0D\u4F1A\u88AB\u518D\u6B21\u63D0\u70BC\u6216\u5BFC\u51FA\u8986\u76D6\uFF0C\u5220\u6389\u6279\u6CE8\u4E5F\u4E0D\u5F71\u54CD\u5DF2\u751F\u6210\u7684\u5361\u7247\uFF1B\u53CD\u8FC7\u6765\u8BF4\uFF0C\u63D2\u4EF6\u7684\u6E05\u7406\u903B\u8F91\u6C38\u8FDC\u4E0D\u4F1A\u52A8\u8FD9\u4E2A\u76EE\u5F55\uFF0C\u4E0D\u9700\u8981\u65F6\u8BF7\u624B\u52A8\u5220\u9664\u3002"
+    ).addText((text) => {
       text.setPlaceholder("\u5361\u7247").setValue(this.plugin.settings.atomCardFolder).onChange(async (value) => {
         this.plugin.settings.atomCardFolder = value.trim();
         await this.plugin.saveSettings();
@@ -11827,6 +11829,8 @@ var AnnotationStore = class {
     this.documents = /* @__PURE__ */ new Map();
     this.index = EMPTY_INDEX;
     this.changeVersion = 0;
+    /** 卡片目录扫描缓存（目录 → inklightId → 路径）。卡片被改名/搬走时靠「路径还在不在」自校验重扫 */
+    this.atomCardScan = null;
     /** 关系渲染用：目标源文件 → 它的导出笔记路径；没有导出过就返回 null（走协议链接兜底） */
     this.resolveTargetNote = (sourcePath) => this.index.files[this.normalizeVaultPath(sourcePath)]?.derivedNotePath ?? null;
   }
@@ -12478,8 +12482,12 @@ var AnnotationStore = class {
   }
   /**
    * 把一条批注提炼成原子卡：一个想法一个文件，正文是用户自己写的那句。
-   * 只生成派生文件、不碰 sidecar；靠索引里的 atomCards 去重，重复点只会打开已有卡片。
-   * 卡片删掉后索引指针仍在，下次点会重新生成——派生文件本来就该可丢弃。
+   * 只新建文件、不碰 sidecar；靠索引里的 atomCards 去重，重复点只会打开已有卡片。
+   *
+   * 卡片是独立资产，不是批注的缓存：抽卡是一次性分叉，之后与批注互不同步——
+   * 批注改了不会回流到卡片，卡片里的内容也不会被再次提炼覆盖。因此这里只新建、
+   * 绝不修改或删除已存在的卡片；索引指针失效时靠 frontmatter 的 inklightId 认回同一张卡。
+   * 卡片被用户删掉后指针仍在，下次点会重新生成——这是找回入口，不是「卡片可丢弃」的许可。
    *
    * 正文为空（content 只有空白）时直接返回 empty、不落盘：卡片正文只放用户自己的话，
    * 划线原文在 source 链接里，空正文的卡片没有任何信息量。
@@ -12490,32 +12498,80 @@ var AnnotationStore = class {
       return { status: "empty" };
     }
     const normalizedPath = this.normalizeVaultPath(file.path);
-    const existing = this.getAtomCard(normalizedPath, input.annotationId);
-    if (existing && this.app.vault.getAbstractFileByPath(existing) instanceof import_obsidian9.TFile) {
-      return { status: "exists", path: existing };
-    }
     const dir = (0, import_obsidian9.normalizePath)(folder.trim() || DEFAULT_ATOM_CARD_FOLDER);
+    const indexed = this.getAtomCard(normalizedPath, input.annotationId);
+    if (indexed && this.app.vault.getAbstractFileByPath(indexed) instanceof import_obsidian9.TFile) {
+      return { status: "exists", path: indexed };
+    }
+    const key = atomCardId(input);
+    const scanned = await this.findAtomCardByScan(dir, key);
+    if (scanned) {
+      await this.rememberAtomCard(normalizedPath, input.annotationId, scanned);
+      return { status: "exists", path: scanned };
+    }
     if (!await this.app.vault.adapter.exists(dir)) {
       await this.app.vault.createFolder(dir);
     }
     const path = await this.uniqueAtomCardPath(dir, atomCardBaseName(input));
     await this.app.vault.create(path, renderAtomCard(this.index.files[normalizedPath], input, normalizedPath));
-    const entry = this.index.files[normalizedPath];
-    if (entry) {
-      this.index = {
-        ...this.index,
-        version: 3,
-        files: {
-          ...this.index.files,
-          [normalizedPath]: {
-            ...entry,
-            atomCards: { ...entry.atomCards ?? {}, [input.annotationId]: path }
-          }
-        }
-      };
-      await this.writeIndex();
+    if (this.atomCardScan?.dir === dir) {
+      this.atomCardScan.paths.set(key, path);
     }
+    await this.rememberAtomCard(normalizedPath, input.annotationId, path);
     return { status: "created", path };
+  }
+  /**
+   * 把「批注 → 卡片」指针写回索引。索引只是缓存、不是真相：
+   * 指针没变就不写盘，避免每次点提炼都产生一次无意义的 IO。
+   */
+  async rememberAtomCard(filePath, annotationId, cardPath) {
+    const entry = this.index.files[filePath];
+    if (!entry || entry.atomCards?.[annotationId] === cardPath) {
+      return;
+    }
+    this.index = {
+      ...this.index,
+      version: 3,
+      files: {
+        ...this.index.files,
+        [filePath]: {
+          ...entry,
+          atomCards: { ...entry.atomCards ?? {}, [annotationId]: cardPath }
+        }
+      }
+    };
+    await this.writeIndex();
+  }
+  /**
+   * 在卡片目录里按 inklightId 找卡片。只在索引失效时走这条慢路径。
+   * 命中结果缓存；缓存复用前先确认文件还在——卡片改名后旧路径必然失效，
+   * 一次自校验就能发现并重扫，不必监听 rename 事件。只缓存命中，空结果不缓存：
+   * 「现在没有」随时会变成「刚被人放进来一张」。
+   */
+  async findAtomCardByScan(dir, key) {
+    const cached = this.atomCardScan?.dir === dir ? this.atomCardScan.paths.get(key) : void 0;
+    if (cached) {
+      if (this.app.vault.getAbstractFileByPath(cached) instanceof import_obsidian9.TFile) {
+        return cached;
+      }
+      this.atomCardScan = null;
+    }
+    const paths = /* @__PURE__ */ new Map();
+    const prefix = `${dir}/`;
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      if (!file.path.startsWith(prefix)) {
+        continue;
+      }
+      try {
+        const id = readAtomCardId(await this.app.vault.cachedRead(file));
+        if (id && !paths.has(id)) {
+          paths.set(id, file.path);
+        }
+      } catch {
+      }
+    }
+    this.atomCardScan = paths.size > 0 ? { dir, paths } : null;
+    return paths.get(key) ?? null;
   }
   async uniqueAtomCardPath(dir, baseName) {
     for (let index = 1; index <= 50; index += 1) {
@@ -12906,6 +12962,22 @@ function atomCardBaseName(input) {
   const cleaned = raw.replace(/[\\/:*?"<>|#^[\]]/g, "").replace(/\s+/g, " ").trim();
   return cleaned.slice(0, 24).trim() || "\u60F3\u6CD5";
 }
+function atomCardId(input) {
+  return `${input.mode}-${input.annotationId}`;
+}
+function readAtomCardId(text) {
+  const split = splitFrontmatter(text);
+  if (!split) {
+    return null;
+  }
+  for (const line of split.lines) {
+    const match = /^inklightId:\s*(.+?)\s*$/.exec(line.trim());
+    if (match) {
+      return match[1].replace(/^["']|["']$/g, "");
+    }
+  }
+  return null;
+}
 function renderAtomCard(entry, input, sourcePath) {
   const blockId = entry?.blockIds?.[input.annotationId];
   const notePath = entry?.derivedNotePath?.replace(/\.md$/i, "");
@@ -12913,6 +12985,7 @@ function renderAtomCard(entry, input, sourcePath) {
   const tags = input.tags.map((tag) => toObsidianTag(tag) ?? tag).filter(Boolean);
   return [
     "---",
+    `inklightId: ${atomCardId(input)}`,
     ...input.noteType ? [`noteType: ${input.noteType}`] : [],
     `source: ${source}`,
     `tags: [${tags.join(", ")}]`,
@@ -22191,7 +22264,7 @@ ${lines.slice(0, 8).join("\n")}`);
         await this.app.workspace.getLeaf("tab").openFile(target);
       }
       new import_obsidian22.Notice(
-        result.status === "created" ? `\u5DF2\u63D0\u70BC\u6210\u5361\u7247\uFF1A${result.path}` : `\u8FD9\u5F20\u5361\u7247\u5DF2\u5B58\u5728\uFF1A${result.path}`
+        result.status === "created" ? `\u5DF2\u63D0\u70BC\u6210\u5361\u7247\uFF1A${result.path}\uFF08\u6B64\u540E\u5361\u7247\u72EC\u7ACB\u751F\u957F\uFF0C\u4E0D\u518D\u4E0E\u6279\u6CE8\u540C\u6B65\uFF09` : `\u8FD9\u5F20\u5361\u7247\u5DF2\u5B58\u5728\uFF1A${result.path}\uFF08\u5DF2\u4E0E\u6279\u6CE8\u5206\u53C9\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u540C\u6B65\uFF09`
       );
     } catch (error) {
       console.warn("yh-inklight: \u751F\u6210\u539F\u5B50\u5361\u5931\u8D25", error);

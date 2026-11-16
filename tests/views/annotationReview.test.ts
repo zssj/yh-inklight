@@ -68,4 +68,25 @@ describe("buildAnnotationBuckets", () => {
     );
     expect(buckets).toEqual([]);
   });
+
+  it("今天已回看过的条目不再出现，昨天回看过的仍出现", () => {
+    const reviewedToday = NOW.getTime() - 60_000;
+    const reviewedYesterday = NOW.getTime() - DAY_MS;
+    const buckets = buildAnnotationBuckets(
+      [
+        { ...entry("done", 1), reviewedAt: reviewedToday },
+        { ...entry("again", 1), reviewedAt: reviewedYesterday },
+      ],
+      NOW,
+    );
+    expect(buckets[0].entries.map((item) => item.id)).toEqual(["again"]);
+  });
+
+  it("全部条目今天都回看过 → 空卡消失（不留空壳标题）", () => {
+    const buckets = buildAnnotationBuckets(
+      [{ ...entry("only", 1), reviewedAt: NOW.getTime() - 1_000 }],
+      NOW,
+    );
+    expect(buckets).toEqual([]);
+  });
 });

@@ -26,12 +26,13 @@ export interface AnnotationTarget {
 
 /**
  * 打开批注所在位置。三类载体走各自的定位方式：
- * - EPUB：复用已打开的阅读器 leaf，交给插件的 CFI 跳转（见 main.navigateEpubToCfi）
+ * - EPUB：打开与定位整体交给插件（openEpubAtCfi：先复用已打开的阅读器，没有才新建），
+ *   本层不碰 openFile
  * - PDF：派发自定义事件，由 PDF 层翻页
  * - Markdown：编辑器偏移 → 光标 + 滚动 + 短暂高亮闪烁
  *
- * EPUB 必须先复用已有 leaf：重复 openFile 会二次触发 onLoadFile，
- * 进度恢复的 goTo 与批注跳转互相覆盖，还会同时留下两个同文件视图。
+ * EPUB 不能在这里先 openFile：openEpubAtCfi 内部会自己建 tab，
+ * 两边各建一个就会留下两个同书标签页——一个只恢复进度、一个定位到 CFI，进度互不相同。
  */
 export interface OpenAnnotationTargetOptions {
   /** 协议回链（外部点击）用新标签页打开，避免把正在读的导出笔记顶掉 */
@@ -45,12 +46,14 @@ export async function openAnnotationTarget(
   options?: OpenAnnotationTargetOptions,
 ): Promise<void> {
   if (target.mode === "epub") {
+    // 有 CFI：打开 + 定位一律交给插件，避免本层与 openEpubAtCfi 各开一个标签页
+    if (target.cfiRange) {
+      navigateEpub(target.file, target.cfiRange);
+      return;
+    }
     const existing = findOpenEpubLeaf(app, target.file);
     if (existing) {
       app.workspace.revealLeaf(existing);
-      if (target.cfiRange) {
-        navigateEpub(target.file, target.cfiRange);
-      }
       return;
     }
   }
@@ -58,8 +61,8 @@ export async function openAnnotationTarget(
   const leaf = app.workspace.getLeaf(options?.newTab ? "tab" : false);
   await leaf.openFile(target.file);
 
-  if (target.mode === "epub" && target.cfiRange) {
-    navigateEpub(target.file, target.cfiRange);
+  // 无 CFI 的 EPUB：打开即可，不能继续走下面的 Markdown 定位（会白等 2s 拿不到 MarkdownView）
+  if (target.mode === "epub") {
     return;
   }
 
@@ -132,7 +135,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** 找到已打开目标 EPUB 的 leaf；viewState 兜底覆盖尚未加载的 deferred leaf。 */
-function findOpenEpubLeaf(app: App, file: TFile): WorkspaceLeaf | null {
+export function findOpenEpubLeaf(app: App, file: TFile): WorkspaceLeaf | null {
   const matches = app.workspace.getLeavesOfType(EPUB_READER_VIEW_TYPE).filter((leaf) => {
     const viewFile = (leaf.view as { file?: TFile } | undefined)?.file?.path;
     if (viewFile === file.path) {

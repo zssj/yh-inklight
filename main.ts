@@ -33,7 +33,7 @@ import { AnnotationCard } from "./src/views/annotationCard";
 import { buildCards, canExtractAtomCard, findAnnotationById, relationAnchorOf, SidebarCard } from "./src/views/cardModel";
 import { toPopoverRect } from "./src/views/popoverPlacement";
 import { ANNOTATION_SIDEBAR_VIEW, AnnotationSidebarView } from "./src/views/sidebarView";
-import { openAnnotationTarget } from "./src/views/navigation";
+import { findOpenEpubLeaf, openAnnotationTarget } from "./src/views/navigation";
 import { RelationModel } from "./src/views/relationModel";
 import { filterSharedCandidates, RelatedBlockHost, RelatedHitView } from "./src/views/relatedBlock";
 import type { TagRef } from "./src/storage/annotationStore";
@@ -63,6 +63,15 @@ const NOTE_TITLE_OPTIONS = [
 
 /** Markdown 打开次数统计的独立 sidecar 文件（与批注同目录，卸载插件不丢失） */
 const MD_OPEN_STATS_PATH = ".obsidian-annotations/md-open-stats.json";
+
+/** 批注回看记录的独立 sidecar：annotationId → 最近一次回看时间（ISO） */
+const ANNOTATION_REVIEW_STATE_PATH = ".obsidian-annotations/annotation-review.json";
+
+/**
+ * 回看记录保留天数。批注 id 是 UUID，全局唯一，但删除批注不会回调清理记录，
+ * 靠时间窗口兜底避免 sidecar 无限膨胀。
+ */
+const REVIEW_STATE_TTL_DAYS = 90;
 
 /** 源文件连续写入的合并窗口：同步盘与外部程序常连续触发 modify，逐次迁移性价比极低 */
 const MD_MODIFY_DEBOUNCE_MS = 300;
@@ -130,6 +139,8 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   private lastCountedAt = 0;
   /** Markdown 打开次数统计（存于独立 sidecar，插件重装不丢失） */
   mdOpenStats: Record<string, MdOpenStat> = {};
+  /** 批注回看记录：annotationId → 最近一次回看 ISO 时间；当天已回看的条目不再进复习卡 */
+  private reviewedAnnotations: Record<string, string> = {};
 
   async onload(): Promise<void> {
     addIcon("yh-inklight-icon", YH_INKLIGHT_ICON);
@@ -138,6 +149,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     this.store = new AnnotationStore(this.app);
     await this.store.initialize();
     await this.loadMdOpenStats();
+    await this.loadReviewedAnnotations();
 
     this.registerView(ANNOTATION_SIDEBAR_VIEW, (leaf) => new AnnotationSidebarView(leaf, this));
     this.registerView(TAG_BOARD_VIEW_TYPE, (leaf) => new TagBoardView(leaf, this));
@@ -794,6 +806,64 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     }
   }
 
+  /**
+   * 加载批注回看记录（独立 sidecar）。损坏或缺失都当空记录，不影响插件启动。
+   * 过期条目在加载时就丢掉，避免手工改坏的数据一直留在内存里。
+   */
+  private async loadReviewedAnnotations(): Promise<void> {
+    let loaded: Record<string, string> = {};
+    try {
+      const raw = await this.app.vault.adapter.read(ANNOTATION_REVIEW_STATE_PATH);
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const cutoff = Date.now() - REVIEW_STATE_TTL_DAYS * 86_400_000;
+        for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
+          if (typeof value === "string" && (Date.parse(value) || 0) > cutoff) {
+            loaded[id] = value;
+          }
+        }
+      }
+    } catch {
+      /* 文件不存在或损坏 → 空记录 */
+    }
+    this.reviewedAnnotations = loaded;
+  }
+
+  private async saveReviewedAnnotations(): Promise<void> {
+    try {
+      await this.app.vault.adapter.write(
+        ANNOTATION_REVIEW_STATE_PATH,
+        JSON.stringify(this.reviewedAnnotations, null, 2),
+      );
+    } catch (error) {
+      console.warn("yh-inklight: 写入批注回看记录失败", error);
+    }
+  }
+
+  /** 回看记录查询：无记录返回 0，供 buildAnnotationBuckets 判「今天已回看过」 */
+  private reviewedAtOf(annotationId: string): number {
+    return Date.parse(this.reviewedAnnotations[annotationId] ?? "") || 0;
+  }
+
+  /**
+   * 标记一条批注已回看。每张复习卡只对应一个自然日（日差 1/7 或同号日历日），
+   * 当天隐藏即可保证它不会在同一个窗口里再次冒出来。
+   */
+  private markAnnotationReviewed(annotationId: string): void {
+    if (!annotationId) {
+      return;
+    }
+    const now = Date.now();
+    this.reviewedAnnotations[annotationId] = new Date(now).toISOString();
+    const cutoff = now - REVIEW_STATE_TTL_DAYS * 86_400_000;
+    for (const [id, value] of Object.entries(this.reviewedAnnotations)) {
+      if ((Date.parse(value) || 0) <= cutoff) {
+        delete this.reviewedAnnotations[id];
+      }
+    }
+    void this.saveReviewedAnnotations();
+  }
+
   /** 防抖保存打开次数统计。 */
   private debouncedSaveMdOpenStats(): void {
     if (this.statsSaveTimer !== null) {
@@ -1375,6 +1445,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       .map((entry) => ({
         ...entry,
         linkCount: entry.linkCount + (inbound.get(`${entry.filePath}#${entry.id}`) ?? 0),
+        reviewedAt: this.reviewedAtOf(entry.id),
       }));
   }
 
@@ -1396,6 +1467,9 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       (targetFile, cfi) => this.openEpubAtCfi(targetFile.path, cfi),
       { newTab: true },
     );
+    // 回看已处理：记下时间戳并重绘列表，条目当天不再出现（次日窗口自然不匹配）
+    this.markAnnotationReviewed(entry.id);
+    this.refreshMarkdownStatsViews();
   }
 
   // ------------------------------------------------------------------ 卡片「相关」区
@@ -1830,9 +1904,16 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       return;
     }
 
-    const leaf = this.app.workspace.getLeaf("tab");
-    await leaf.openFile(file);
-    this.app.workspace.revealLeaf(leaf);
+    // 同一本书已经在读就复用那个 leaf：再 getLeaf("tab") 会开出第二个同书标签页，
+    // 一个停在进度恢复点、一个停在 CFI，用户看到两本「同一本书不同进度」。
+    const existing = findOpenEpubLeaf(this.app, file);
+    if (existing) {
+      await this.app.workspace.revealLeaf(existing);
+    } else {
+      const leaf = this.app.workspace.getLeaf("tab");
+      await leaf.openFile(file);
+      await this.app.workspace.revealLeaf(leaf);
+    }
     this.navigateEpubToCfi(file, cfi);
   }
 

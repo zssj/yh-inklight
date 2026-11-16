@@ -13426,19 +13426,19 @@ var EPUB_READER_VIEW_TYPE = "inklight-epub-reader";
 var MARKDOWN_VIEW_TYPE = "markdown";
 async function openAnnotationTarget(app, target, navigateEpub, options) {
   if (target.mode === "epub") {
+    if (target.cfiRange) {
+      navigateEpub(target.file, target.cfiRange);
+      return;
+    }
     const existing = findOpenEpubLeaf(app, target.file);
     if (existing) {
       app.workspace.revealLeaf(existing);
-      if (target.cfiRange) {
-        navigateEpub(target.file, target.cfiRange);
-      }
       return;
     }
   }
   const leaf = app.workspace.getLeaf(options?.newTab ? "tab" : false);
   await leaf.openFile(target.file);
-  if (target.mode === "epub" && target.cfiRange) {
-    navigateEpub(target.file, target.cfiRange);
+  if (target.mode === "epub") {
     return;
   }
   if (target.file.extension.toLowerCase() === "pdf") {
@@ -20039,6 +20039,12 @@ function buildAnnotationBuckets(entries, now) {
     if (!Number.isFinite(daysAgo) || daysAgo < 0) {
       continue;
     }
+    if (entry.reviewedAt) {
+      const reviewedDaysAgo = diffCalendarDays(now.getTime(), entry.reviewedAt);
+      if (Number.isFinite(reviewedDaysAgo) && reviewedDaysAgo <= 0) {
+        continue;
+      }
+    }
     let kind = null;
     if (daysAgo === 1) {
       kind = "day1";
@@ -20680,6 +20686,8 @@ var NOTE_TITLE_OPTIONS = [
   { value: "Reminder", label: "\u{1F514} \u63D0\u9192" }
 ];
 var MD_OPEN_STATS_PATH = ".obsidian-annotations/md-open-stats.json";
+var ANNOTATION_REVIEW_STATE_PATH = ".obsidian-annotations/annotation-review.json";
+var REVIEW_STATE_TTL_DAYS = 90;
 var MD_MODIFY_DEBOUNCE_MS = 300;
 function anchorsUnchanged(before, after) {
   const same = (left, right) => left.anchor.startOffset === right.anchor.startOffset && left.anchor.endOffset === right.anchor.endOffset && left.anchor.selectedText === right.anchor.selectedText && Boolean(left.orphaned) === Boolean(right.orphaned);
@@ -20721,6 +20729,8 @@ var OverlayAnnotationsPlugin = class extends import_obsidian22.Plugin {
     this.lastCountedAt = 0;
     /** Markdown 打开次数统计（存于独立 sidecar，插件重装不丢失） */
     this.mdOpenStats = {};
+    /** 批注回看记录：annotationId → 最近一次回看 ISO 时间；当天已回看的条目不再进复习卡 */
+    this.reviewedAnnotations = {};
     // ------------------------------------------------------------------ 卡片「相关」区
     this.relationModelInstance = null;
   }
@@ -20731,6 +20741,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian22.Plugin {
     this.store = new AnnotationStore(this.app);
     await this.store.initialize();
     await this.loadMdOpenStats();
+    await this.loadReviewedAnnotations();
     this.registerView(ANNOTATION_SIDEBAR_VIEW, (leaf) => new AnnotationSidebarView(leaf, this));
     this.registerView(TAG_BOARD_VIEW_TYPE, (leaf) => new TagBoardView(leaf, this));
     this.registerView(EPUB_READER_VIEW_TYPE2, (leaf) => new EpubReaderView({
@@ -21313,6 +21324,59 @@ ${lines.slice(0, 8).join("\n")}`);
       console.warn("yh-inklight: \u5199\u5165\u6253\u5F00\u6B21\u6570\u7EDF\u8BA1\u5931\u8D25", error);
     }
   }
+  /**
+   * 加载批注回看记录（独立 sidecar）。损坏或缺失都当空记录，不影响插件启动。
+   * 过期条目在加载时就丢掉，避免手工改坏的数据一直留在内存里。
+   */
+  async loadReviewedAnnotations() {
+    let loaded = {};
+    try {
+      const raw = await this.app.vault.adapter.read(ANNOTATION_REVIEW_STATE_PATH);
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const cutoff = Date.now() - REVIEW_STATE_TTL_DAYS * 864e5;
+        for (const [id, value] of Object.entries(parsed)) {
+          if (typeof value === "string" && (Date.parse(value) || 0) > cutoff) {
+            loaded[id] = value;
+          }
+        }
+      }
+    } catch {
+    }
+    this.reviewedAnnotations = loaded;
+  }
+  async saveReviewedAnnotations() {
+    try {
+      await this.app.vault.adapter.write(
+        ANNOTATION_REVIEW_STATE_PATH,
+        JSON.stringify(this.reviewedAnnotations, null, 2)
+      );
+    } catch (error) {
+      console.warn("yh-inklight: \u5199\u5165\u6279\u6CE8\u56DE\u770B\u8BB0\u5F55\u5931\u8D25", error);
+    }
+  }
+  /** 回看记录查询：无记录返回 0，供 buildAnnotationBuckets 判「今天已回看过」 */
+  reviewedAtOf(annotationId) {
+    return Date.parse(this.reviewedAnnotations[annotationId] ?? "") || 0;
+  }
+  /**
+   * 标记一条批注已回看。每张复习卡只对应一个自然日（日差 1/7 或同号日历日），
+   * 当天隐藏即可保证它不会在同一个窗口里再次冒出来。
+   */
+  markAnnotationReviewed(annotationId) {
+    if (!annotationId) {
+      return;
+    }
+    const now = Date.now();
+    this.reviewedAnnotations[annotationId] = new Date(now).toISOString();
+    const cutoff = now - REVIEW_STATE_TTL_DAYS * 864e5;
+    for (const [id, value] of Object.entries(this.reviewedAnnotations)) {
+      if ((Date.parse(value) || 0) <= cutoff) {
+        delete this.reviewedAnnotations[id];
+      }
+    }
+    void this.saveReviewedAnnotations();
+  }
   /** 防抖保存打开次数统计。 */
   debouncedSaveMdOpenStats() {
     if (this.statsSaveTimer !== null) {
@@ -21823,7 +21887,8 @@ ${lines.slice(0, 8).join("\n")}`);
     }
     return entries.filter((entry) => entry.content.trim().length > 0).map((entry) => ({
       ...entry,
-      linkCount: entry.linkCount + (inbound.get(`${entry.filePath}#${entry.id}`) ?? 0)
+      linkCount: entry.linkCount + (inbound.get(`${entry.filePath}#${entry.id}`) ?? 0),
+      reviewedAt: this.reviewedAtOf(entry.id)
     }));
   }
   async openAnnotationReviewEntry(entry) {
@@ -21844,6 +21909,8 @@ ${lines.slice(0, 8).join("\n")}`);
       (targetFile, cfi) => this.openEpubAtCfi(targetFile.path, cfi),
       { newTab: true }
     );
+    this.markAnnotationReviewed(entry.id);
+    this.refreshMarkdownStatsViews();
   }
   /**
    * 关系模型单点：侧栏与三端浮层共用同一个快照。
@@ -22228,9 +22295,14 @@ ${lines.slice(0, 8).join("\n")}`);
       new import_obsidian22.Notice("\u65E0\u6CD5\u627E\u5230\u5BF9\u5E94\u7684\u7535\u5B50\u4E66\u6587\u4EF6");
       return;
     }
-    const leaf = this.app.workspace.getLeaf("tab");
-    await leaf.openFile(file);
-    this.app.workspace.revealLeaf(leaf);
+    const existing = findOpenEpubLeaf(this.app, file);
+    if (existing) {
+      await this.app.workspace.revealLeaf(existing);
+    } else {
+      const leaf = this.app.workspace.getLeaf("tab");
+      await leaf.openFile(file);
+      await this.app.workspace.revealLeaf(leaf);
+    }
     this.navigateEpubToCfi(file, cfi);
   }
   /**

@@ -102,6 +102,8 @@ export interface AnnotationReviewEntry {
   quote: string;
   content: string;
   createdAt: number;
+  /** 最近一次被点开回看的时间；0/未传 = 从未回看 */
+  reviewedAt?: number;
   /** 关系入度 + 出度；0 表示孤岛，优先推到用户面前 */
   linkCount: number;
   offset?: number;
@@ -127,6 +129,8 @@ const ANNOTATION_REVIEW_RULES: Record<ReviewKind, { title: string; hint: string 
  * 同一套日历窗口，换成「你自己的话」当数据源。
  * 与笔记四卡的关键差异：批注没有 openCount，所以只按创建时间判窗口，不套次数条件；
  * 排序把关联最少的排在最前——孤岛才是最容易永久沉底的东西。
+ * 「今天已回看过」的条目直接跳过：每张卡只对应一个自然日，
+ * 当天隐藏即可，次日窗口不会再匹配，不必永久拉黑（上月今日 / 去年今日还会再到期）。
  */
 export function buildAnnotationBuckets(
   entries: readonly AnnotationReviewEntry[],
@@ -144,6 +148,13 @@ export function buildAnnotationBuckets(
     const daysAgo = diffCalendarDays(now.getTime(), entry.createdAt);
     if (!Number.isFinite(daysAgo) || daysAgo < 0) {
       continue;
+    }
+    if (entry.reviewedAt) {
+      const reviewedDaysAgo = diffCalendarDays(now.getTime(), entry.reviewedAt);
+      // <=0：今天（或时钟偏差导致的未来）已回看过，本次窗口不再出现
+      if (Number.isFinite(reviewedDaysAgo) && reviewedDaysAgo <= 0) {
+        continue;
+      }
     }
 
     let kind: ReviewKind | null = null;

@@ -101,6 +101,12 @@ export interface AtomCardInput {
   tags: string[];
 }
 
+/** 提炼原子卡的结果：empty 表示没有可写进正文的内容，拒绝生成空卡 */
+export type AtomCardResult =
+  | { status: "created"; path: string }
+  | { status: "exists"; path: string }
+  | { status: "empty" };
+
 /** 标签字典项：key 用于比较，name 用于展示 */
 export interface TagDictionaryEntry {
   key: string;
@@ -916,16 +922,24 @@ export class AnnotationStore {
    * 把一条批注提炼成原子卡：一个想法一个文件，正文是用户自己写的那句。
    * 只生成派生文件、不碰 sidecar；靠索引里的 atomCards 去重，重复点只会打开已有卡片。
    * 卡片删掉后索引指针仍在，下次点会重新生成——派生文件本来就该可丢弃。
+   *
+   * 正文为空（content 只有空白）时直接返回 empty、不落盘：卡片正文只放用户自己的话，
+   * 划线原文在 source 链接里，空正文的卡片没有任何信息量。
+   * 视图层已按 canExtractAtomCard 拦住按钮，这里是最后一道兜底，防止任何新入口漏过。
    */
   async createAtomCard(
     file: TFile,
     input: AtomCardInput,
     folder: string,
-  ): Promise<{ path: string; created: boolean }> {
+  ): Promise<AtomCardResult> {
+    if (!input.content.trim()) {
+      return { status: "empty" };
+    }
+
     const normalizedPath = this.normalizeVaultPath(file.path);
     const existing = this.getAtomCard(normalizedPath, input.annotationId);
     if (existing && this.app.vault.getAbstractFileByPath(existing) instanceof TFile) {
-      return { path: existing, created: false };
+      return { status: "exists", path: existing };
     }
 
     const dir = normalizePath(folder.trim() || DEFAULT_ATOM_CARD_FOLDER);
@@ -952,7 +966,7 @@ export class AnnotationStore {
       await this.writeIndex();
     }
 
-    return { path, created: true };
+    return { status: "created", path };
   }
 
   private async uniqueAtomCardPath(dir: string, baseName: string): Promise<string> {

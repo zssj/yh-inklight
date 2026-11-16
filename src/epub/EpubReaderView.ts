@@ -49,7 +49,7 @@ import type { TagSuggestion } from "../views/tagInput";
 import { EpubAiModal } from "./EpubAiModal";
 import { AnnotationCard, AnnotationCardAnchor } from "../views/annotationCard";
 import { CardExternalActions } from "../views/cardBody";
-import { buildCards } from "../views/cardModel";
+import { buildCards, canExtractAtomCard } from "../views/cardModel";
 import { PopoverRect } from "../views/popoverPlacement";
 import { EpubImageViewer } from "./EpubImageViewer";
 
@@ -2519,7 +2519,9 @@ export class EpubReaderView extends FileView {
 			...(actions.openDerivedNote
 				? { onOpenExport: () => void actions.openDerivedNote?.(cardData.sourcePath) }
 				: {}),
-			...(actions.createAtomCard ? { onAtomCard: () => void actions.createAtomCard?.(cardData) } : {}),
+			...(actions.createAtomCard && canExtractAtomCard(cardData)
+				? { onAtomCard: () => void actions.createAtomCard?.(cardData) }
+				: {}),
 			...(actions.jumpToRelation ? { onJumpRelation: actions.jumpToRelation } : {}),
 			...(actions.relatedHost ? { related: actions.relatedHost(cardData) } : {}),
 			...(actions.removeRelation

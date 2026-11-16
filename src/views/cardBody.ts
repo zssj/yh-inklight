@@ -395,7 +395,7 @@ function actionTitle(spec: CardActionSpec, card: SidebarCard): string {
     case "open-export":
       return "打开这条批注所在的导出笔记";
     case "atom-card":
-      return "把这条洞见提炼成一张独立的原子卡";
+      return "把这条批注的想法提炼成一张独立的原子卡";
     case "edit-note":
       return "编辑笔记";
     case "delete":

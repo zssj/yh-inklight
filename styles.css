@@ -3279,6 +3279,24 @@ a.yh-epub-goto-link:hover {
   cursor: pointer;
 }
 
+/* 多条相关之间加一条浅色细线：只在行与行之间出现（首条不加），
+   起点跳过 padding-left 对齐文字左沿，终点到内容右沿——
+   既不横穿左侧那条 2px 竖线，也不超出文字区域。
+   左偏移 8px 必须与上面 .yh-ov-related-row 的 padding-left 保持一致。 */
+.yh-ov-related-row + .yh-ov-related-row {
+  position: relative;
+  padding-top: 8px;
+}
+
+.yh-ov-related-row + .yh-ov-related-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 8px;
+  right: 0;
+  border-top: 0.5px solid var(--yh-border);
+}
+
 .yh-ov-related-text {
   font-size: var(--yh-font-sm);
   line-height: 1.45;

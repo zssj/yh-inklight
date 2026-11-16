@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 storage/types 的批注文档结构、storage/tags 的标签并集
- * [OUTPUT]: 对外提供 SidebarCard 类型与 buildCards 纯函数，把一份 sidecar 文档拍平成可渲染的卡片数组
+ * [OUTPUT]: 对外提供 SidebarCard 类型、buildCards 纯函数与 canExtractAtomCard 门槛判定，把一份 sidecar 文档拍平成可渲染的卡片数组
  * [POS]: views 模块的卡片模型层，被 sidebarView（侧栏）与 tagBoardView（标签总览）共享，避免配对逻辑重复
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
@@ -315,6 +315,16 @@ export function findAnnotationById(
     ...document.epubComments,
   ];
   return all.find((item) => item.id === annotationId) ?? null;
+}
+
+/**
+ * 「提炼成卡片」是否可用：唯一的判定点。
+ * 侧栏列表与三端浮层都必须走这里，否则浮层会绕过门槛给纯划线长出空卡。
+ * 只看一条：自己写的内容非空白。类型（洞见/疑问/提醒）不设限——待解决的问题
+ * 和待验证的提醒同样是想法，都值得单独成卡；空正文才是唯一没有信息量的情况。
+ */
+export function canExtractAtomCard(card: SidebarCard): boolean {
+  return card.content.trim().length > 0;
 }
 
 export function isCodeAnchor(anchor: HighlightAnnotation["anchor"] | PdfHighlightAnnotation["anchor"]): boolean {

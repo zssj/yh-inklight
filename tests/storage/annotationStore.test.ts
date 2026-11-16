@@ -675,7 +675,10 @@ describe("EPUB 回链", () => {
     };
 
     const first = await store.createAtomCard(file, input, "卡片");
-    expect(first.created).toBe(true);
+    expect(first.status).toBe("created");
+    if (first.status !== "created") {
+      throw new Error("expected created");
+    }
 
     const text = vault.readText(first.path);
     expect(text).toContain("[[读书笔记/复利-notes#^md-h1]]");
@@ -683,7 +686,30 @@ describe("EPUB 回链", () => {
     expect(text).toContain("noteType: insight");
 
     const again = await store.createAtomCard(file, input, "卡片");
-    expect(again).toEqual({ path: first.path, created: false });
+    expect(again).toEqual({ status: "exists", path: first.path });
+  });
+
+  it("提炼原子卡：正文只有空白时拒绝生成，不落盘也不写索引指针", async () => {
+    const { store, vault, file } = await setup();
+    await store.addHighlight(file, { ...highlightOf("h1", "复利效应", 2), noteType: "insight" });
+
+    const result = await store.createAtomCard(
+      file,
+      {
+        annotationId: "h1",
+        mode: "md",
+        quote: "复利效应",
+        content: "   \n\t ",
+        noteType: "insight",
+        tags: [],
+      },
+      "卡片",
+    );
+
+    expect(result).toEqual({ status: "empty" });
+    // 目录都不该被创建出来，更不该有空白卡片文件
+    expect(vault.rawExists("卡片")).toBe(false);
+    expect(store.getAtomCard(file.path, "h1")).toBeNull();
   });
 });
 

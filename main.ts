@@ -30,7 +30,7 @@ import {
   SUPPORTED_BOOK_EXTENSIONS,
 } from "./src/storage/types";
 import { AnnotationCard } from "./src/views/annotationCard";
-import { buildCards, findAnnotationById, relationAnchorOf, SidebarCard } from "./src/views/cardModel";
+import { buildCards, canExtractAtomCard, findAnnotationById, relationAnchorOf, SidebarCard } from "./src/views/cardModel";
 import { toPopoverRect } from "./src/views/popoverPlacement";
 import { ANNOTATION_SIDEBAR_VIEW, AnnotationSidebarView } from "./src/views/sidebarView";
 import { openAnnotationTarget } from "./src/views/navigation";
@@ -1703,11 +1703,17 @@ export default class OverlayAnnotationsPlugin extends Plugin {
         },
         this.settings.atomCardFolder,
       );
+      if (result.status === "empty") {
+        new Notice("这条批注还没写下自己的想法，提炼不出卡片");
+        return;
+      }
       const target = this.app.vault.getAbstractFileByPath(result.path);
       if (target instanceof TFile) {
         await this.app.workspace.getLeaf("tab").openFile(target);
       }
-      new Notice(result.created ? `已提炼成卡片：${result.path}` : `这张卡片已存在：${result.path}`);
+      new Notice(
+        result.status === "created" ? `已提炼成卡片：${result.path}` : `这张卡片已存在：${result.path}`,
+      );
     } catch (error) {
       console.warn("yh-inklight: 生成原子卡失败", error);
       new Notice("生成卡片失败，请检查写入权限或同步状态");
@@ -1943,7 +1949,10 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       onTagsChange: (next) => this.saveMarkdownAnnotationTags(file, annotation.id, next),
       tagSuggestions: () => this.getTagSuggestions(),
       onOpenExport: () => void this.openDerivedNote(cardData.sourcePath),
-      onAtomCard: () => void this.createAtomCardFor(cardData),
+      // 与侧栏同一门槛：只要自己写了内容（不限类型），否则不渲染按钮（浮层不给空卡开口子）
+      ...(canExtractAtomCard(cardData)
+        ? { onAtomCard: () => void this.createAtomCardFor(cardData) }
+        : {}),
       onJumpRelation: (relation) => void this.jumpToRelationTarget(relation),
       onRemoveRelation: (relation) => void this.removeRelationFor(cardData.sourcePath, cardData.id, relation),
       related: this.createRelatedHost(cardData, this.popoverRelatedState()),

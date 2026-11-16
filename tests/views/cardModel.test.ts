@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { buildCards, isCodeAnchor } from "../../src/views/cardModel";
+import { buildCards, canExtractAtomCard, isCodeAnchor } from "../../src/views/cardModel";
 import {
   CommentAnnotation,
   EpubCommentAnnotation,
@@ -259,5 +259,21 @@ describe("卡片关系", () => {
     const cards = buildCards(document);
     expect(cards[0].relations).toEqual([relation]);
     expect(cards[0].noteType).toBe("insight");
+  });
+});
+
+describe("canExtractAtomCard - 提炼成卡片的唯一门槛", () => {
+  const cardWith = (noteType: "insight" | "question" | "reminder" | undefined, content: string) =>
+    ({ noteType, content } as unknown as Parameters<typeof canExtractAtomCard>[0]);
+
+  it("有自己写的内容就允许，类型不限", () => {
+    expect(canExtractAtomCard(cardWith("insight", "复利的敌人是中断"))).toBe(true);
+    expect(canExtractAtomCard(cardWith("question", "这里说的复利是指什么"))).toBe(true);
+    expect(canExtractAtomCard(cardWith("reminder", "回头查一下复利公式"))).toBe(true);
+  });
+
+  it("纯划线（无内容）不给按钮，这是空卡的源头", () => {
+    expect(canExtractAtomCard(cardWith("insight", ""))).toBe(false);
+    expect(canExtractAtomCard(cardWith(undefined, "  \n\t "))).toBe(false);
   });
 });

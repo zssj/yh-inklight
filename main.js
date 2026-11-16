@@ -9628,7 +9628,7 @@ function actionTitle(spec, card) {
     case "open-export":
       return "\u6253\u5F00\u8FD9\u6761\u6279\u6CE8\u6240\u5728\u7684\u5BFC\u51FA\u7B14\u8BB0";
     case "atom-card":
-      return "\u628A\u8FD9\u6761\u6D1E\u89C1\u63D0\u70BC\u6210\u4E00\u5F20\u72EC\u7ACB\u7684\u539F\u5B50\u5361";
+      return "\u628A\u8FD9\u6761\u6279\u6CE8\u7684\u60F3\u6CD5\u63D0\u70BC\u6210\u4E00\u5F20\u72EC\u7ACB\u7684\u539F\u5B50\u5361";
     case "edit-note":
       return "\u7F16\u8F91\u7B14\u8BB0";
     case "delete":
@@ -10245,6 +10245,9 @@ function findAnnotationById(document2, annotationId) {
   ];
   return all.find((item) => item.id === annotationId) ?? null;
 }
+function canExtractAtomCard(card) {
+  return card.content.trim().length > 0;
+}
 function isCodeAnchor(anchor) {
   return "isCode" in anchor && Boolean(anchor.isCode);
 }
@@ -10638,7 +10641,7 @@ var PdfAnnotationLayer = class {
       onTagsChange: this.options.setTags ? (next) => this.options.setTags?.(file, annotation.id, next) : void 0,
       tagSuggestions: () => this.options.getTagSuggestions?.() ?? [],
       ...actions.openDerivedNote ? { onOpenExport: () => void actions.openDerivedNote?.(cardData.sourcePath) } : {},
-      ...actions.createAtomCard ? { onAtomCard: () => void actions.createAtomCard?.(cardData) } : {},
+      ...actions.createAtomCard && canExtractAtomCard(cardData) ? { onAtomCard: () => void actions.createAtomCard?.(cardData) } : {},
       ...actions.jumpToRelation ? { onJumpRelation: actions.jumpToRelation } : {},
       ...actions.relatedHost ? { related: actions.relatedHost(cardData) } : {},
       ...actions.removeRelation ? {
@@ -11406,7 +11409,7 @@ var AnnotationSettingsTab = class extends import_obsidian8.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian8.Setting(containerEl).setName("\u539F\u5B50\u5361\u5B58\u653E\u76EE\u5F55").setDesc("\u628A\u300C\u6D1E\u89C1\u300D\u63D0\u70BC\u6210\u72EC\u7ACB\u5361\u7247\u65F6\u5199\u5230\u8FD9\u4E2A\u76EE\u5F55\uFF08\u76F8\u5BF9 vault \u6839\uFF0C\u7559\u7A7A\u7528\u300C\u5361\u7247\u300D\uFF09\u3002\u5361\u7247\u662F\u6D3E\u751F\u6587\u4EF6\uFF0C\u53EF\u968F\u65F6\u5220\u9664\u91CD\u5EFA\uFF0C\u6279\u6CE8\u6570\u636E\u4ECD\u5728 sidecar\u3002").addText((text) => {
+    new import_obsidian8.Setting(containerEl).setName("\u539F\u5B50\u5361\u5B58\u653E\u76EE\u5F55").setDesc("\u628A\u6279\u6CE8\u91CC\u81EA\u5DF1\u5199\u7684\u60F3\u6CD5\u63D0\u70BC\u6210\u72EC\u7ACB\u5361\u7247\u65F6\u5199\u5230\u8FD9\u4E2A\u76EE\u5F55\uFF08\u76F8\u5BF9 vault \u6839\uFF0C\u7559\u7A7A\u7528\u300C\u5361\u7247\u300D\uFF09\u3002\u5361\u7247\u662F\u6D3E\u751F\u6587\u4EF6\uFF0C\u53EF\u968F\u65F6\u5220\u9664\u91CD\u5EFA\uFF0C\u6279\u6CE8\u6570\u636E\u4ECD\u5728 sidecar\u3002").addText((text) => {
       text.setPlaceholder("\u5361\u7247").setValue(this.plugin.settings.atomCardFolder).onChange(async (value) => {
         this.plugin.settings.atomCardFolder = value.trim();
         await this.plugin.saveSettings();
@@ -12477,12 +12480,19 @@ var AnnotationStore = class {
    * 把一条批注提炼成原子卡：一个想法一个文件，正文是用户自己写的那句。
    * 只生成派生文件、不碰 sidecar；靠索引里的 atomCards 去重，重复点只会打开已有卡片。
    * 卡片删掉后索引指针仍在，下次点会重新生成——派生文件本来就该可丢弃。
+   *
+   * 正文为空（content 只有空白）时直接返回 empty、不落盘：卡片正文只放用户自己的话，
+   * 划线原文在 source 链接里，空正文的卡片没有任何信息量。
+   * 视图层已按 canExtractAtomCard 拦住按钮，这里是最后一道兜底，防止任何新入口漏过。
    */
   async createAtomCard(file, input, folder) {
+    if (!input.content.trim()) {
+      return { status: "empty" };
+    }
     const normalizedPath = this.normalizeVaultPath(file.path);
     const existing = this.getAtomCard(normalizedPath, input.annotationId);
     if (existing && this.app.vault.getAbstractFileByPath(existing) instanceof import_obsidian9.TFile) {
-      return { path: existing, created: false };
+      return { status: "exists", path: existing };
     }
     const dir = (0, import_obsidian9.normalizePath)(folder.trim() || DEFAULT_ATOM_CARD_FOLDER);
     if (!await this.app.vault.adapter.exists(dir)) {
@@ -12505,7 +12515,7 @@ var AnnotationStore = class {
       };
       await this.writeIndex();
     }
-    return { path, created: true };
+    return { status: "created", path };
   }
   async uniqueAtomCardPath(dir, baseName) {
     for (let index = 1; index <= 50; index += 1) {
@@ -13921,8 +13931,9 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       },
       actions: {
         "open-export": exportedFile instanceof import_obsidian11.TFile ? () => void this.app.workspace.getLeaf("tab").openFile(exportedFile) : void 0,
-        // 提炼成卡片：只在「洞见 + 有自己写的内容」时出现，避免给纯划线也长出空卡片
-        "atom-card": file && cardData.noteType === "insight" && cardData.content.trim() ? () => void this.plugin.createAtomCardFor(cardData) : void 0,
+        // 提炼成卡片：门槛统一由 canExtractAtomCard 判定（只要自己写了内容，不限类型），
+        // 三端浮层共用同一函数，避免这里拦了、浮层又漏出空卡
+        "atom-card": file && canExtractAtomCard(cardData) ? () => void this.plugin.createAtomCardFor(cardData) : void 0,
         "edit-note": file && cardData.note ? () => this.openInlineEditor(root, file, cardData, cardData.content) : void 0,
         "add-note": file && !cardData.note ? () => {
           root.querySelector('[data-action="add-note"]')?.addClass("hidden");
@@ -18640,7 +18651,7 @@ var EpubReaderView = class extends import_obsidian17.FileView {
         onTagsChange: (tags) => this.saveAnnotationTags(highlight.id, tags),
         tagSuggestions: this.tagSuggestions,
         ...actions.openDerivedNote ? { onOpenExport: () => void actions.openDerivedNote?.(cardData.sourcePath) } : {},
-        ...actions.createAtomCard ? { onAtomCard: () => void actions.createAtomCard?.(cardData) } : {},
+        ...actions.createAtomCard && canExtractAtomCard(cardData) ? { onAtomCard: () => void actions.createAtomCard?.(cardData) } : {},
         ...actions.jumpToRelation ? { onJumpRelation: actions.jumpToRelation } : {},
         ...actions.relatedHost ? { related: actions.relatedHost(cardData) } : {},
         ...actions.removeRelation ? {
@@ -22104,11 +22115,17 @@ ${lines.slice(0, 8).join("\n")}`);
         },
         this.settings.atomCardFolder
       );
+      if (result.status === "empty") {
+        new import_obsidian22.Notice("\u8FD9\u6761\u6279\u6CE8\u8FD8\u6CA1\u5199\u4E0B\u81EA\u5DF1\u7684\u60F3\u6CD5\uFF0C\u63D0\u70BC\u4E0D\u51FA\u5361\u7247");
+        return;
+      }
       const target = this.app.vault.getAbstractFileByPath(result.path);
       if (target instanceof import_obsidian22.TFile) {
         await this.app.workspace.getLeaf("tab").openFile(target);
       }
-      new import_obsidian22.Notice(result.created ? `\u5DF2\u63D0\u70BC\u6210\u5361\u7247\uFF1A${result.path}` : `\u8FD9\u5F20\u5361\u7247\u5DF2\u5B58\u5728\uFF1A${result.path}`);
+      new import_obsidian22.Notice(
+        result.status === "created" ? `\u5DF2\u63D0\u70BC\u6210\u5361\u7247\uFF1A${result.path}` : `\u8FD9\u5F20\u5361\u7247\u5DF2\u5B58\u5728\uFF1A${result.path}`
+      );
     } catch (error) {
       console.warn("yh-inklight: \u751F\u6210\u539F\u5B50\u5361\u5931\u8D25", error);
       new import_obsidian22.Notice("\u751F\u6210\u5361\u7247\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u5199\u5165\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001");
@@ -22298,7 +22315,8 @@ ${lines.slice(0, 8).join("\n")}`);
       onTagsChange: (next) => this.saveMarkdownAnnotationTags(file, annotation.id, next),
       tagSuggestions: () => this.getTagSuggestions(),
       onOpenExport: () => void this.openDerivedNote(cardData.sourcePath),
-      onAtomCard: () => void this.createAtomCardFor(cardData),
+      // 与侧栏同一门槛：只要自己写了内容（不限类型），否则不渲染按钮（浮层不给空卡开口子）
+      ...canExtractAtomCard(cardData) ? { onAtomCard: () => void this.createAtomCardFor(cardData) } : {},
       onJumpRelation: (relation) => void this.jumpToRelationTarget(relation),
       onRemoveRelation: (relation) => void this.removeRelationFor(cardData.sourcePath, cardData.id, relation),
       related: this.createRelatedHost(cardData, this.popoverRelatedState()),

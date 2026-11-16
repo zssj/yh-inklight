@@ -21,7 +21,7 @@ import {
 import { normalizeTags } from "../storage/tags";
 import { AnnotationCard } from "../views/annotationCard";
 import { CardExternalActions } from "../views/cardBody";
-import { buildCards, SidebarCard } from "../views/cardModel";
+import { buildCards, canExtractAtomCard, SidebarCard } from "../views/cardModel";
 import { toPopoverRect } from "../views/popoverPlacement";
 import { TagSuggestion } from "../views/tagInput";
 import { PdfViewerAdapter } from "./pdfViewerAdapter";
@@ -511,7 +511,9 @@ export class PdfAnnotationLayer {
       ...(actions.openDerivedNote
         ? { onOpenExport: () => void actions.openDerivedNote?.(cardData.sourcePath) }
         : {}),
-      ...(actions.createAtomCard ? { onAtomCard: () => void actions.createAtomCard?.(cardData) } : {}),
+      ...(actions.createAtomCard && canExtractAtomCard(cardData)
+        ? { onAtomCard: () => void actions.createAtomCard?.(cardData) }
+        : {}),
       ...(actions.jumpToRelation ? { onJumpRelation: actions.jumpToRelation } : {}),
       ...(actions.relatedHost ? { related: actions.relatedHost(cardData) } : {}),
       ...(actions.removeRelation

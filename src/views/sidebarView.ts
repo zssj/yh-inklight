@@ -31,7 +31,7 @@ import {
   PdfCommentAnnotation,
   PdfHighlightAnnotation,
 } from "../storage/types";
-import { AnnotationKind, AnnotationMode, buildCards, SidebarCard } from "./cardModel";
+import { AnnotationKind, AnnotationMode, buildCards, canExtractAtomCard, SidebarCard } from "./cardModel";
 import { CardBodyHost, renderCardBody } from "./cardBody";
 import { renderRelatedBlock } from "./relatedBlock";
 import { openAnnotationTarget } from "./navigation";
@@ -545,9 +545,10 @@ export class AnnotationSidebarView extends ItemView {
           exportedFile instanceof TFile
             ? () => void this.app.workspace.getLeaf("tab").openFile(exportedFile)
             : undefined,
-        // 提炼成卡片：只在「洞见 + 有自己写的内容」时出现，避免给纯划线也长出空卡片
+        // 提炼成卡片：门槛统一由 canExtractAtomCard 判定（只要自己写了内容，不限类型），
+        // 三端浮层共用同一函数，避免这里拦了、浮层又漏出空卡
         "atom-card":
-          file && cardData.noteType === "insight" && cardData.content.trim()
+          file && canExtractAtomCard(cardData)
             ? () => void this.plugin.createAtomCardFor(cardData)
             : undefined,
         "edit-note": file && cardData.note

@@ -21,7 +21,7 @@ views/navigation.ts: 三端跳转单点（md 偏移 / pdf 页码 / epub CFI）�
 views/sidebarView.ts: 右侧总览面板，使用彩色卡片合并 highlight 与关联 note，并承载搜索、标签筛选、过滤、排序、导出、跳转与内联编辑；相关行可确认关联（行内选择条挑标签，把共享标签经 setTags 并集写入两侧，可断开，绝不静默写入）；移动端标签编辑态处理软键盘遮挡，不改阅读区；编辑期间延后重绘、重绘不抢焦点，避免输入法自弹。
 views/tagBoardView.ts: 标签总览视图，按「标签 → 文档 → 批注」三栏主从跨文档聚合批注，窄屏降级为单栏 + 面包屑。
 views/tagInput.ts: 标签 UI 组件（只读 chip 行 + chip 编辑器与补全下拉），侧栏、标签总览与两个弹窗共用；候选为 TagSuggestion[]（可含 OB 标签与按内容推荐项，推荐独立配额最多 3 个），支持 quickApply 一键沿用当前文档标签、showSuggestionsOnOpen（侧栏空内容即显示候选）、initialQuery / onQueryChange（重绘后回填未提交输入）；空内容折叠为「推荐 3 + 常用 5」并可展开其余；处理中文输入法组合态，拼音选词不会误建标签。
-views/relationModel.ts: 字面关联派生层（与 cardModel 同层），按需内存快照随 store.version 失效；相关批注改走短语级匹配（utils/textPhrases）：4 字种子倒排找候选对 → 扩展出最长公共短语 → 文档级稀有度过滤（出现在超过 3 个源文档的短语视为通用说法丢弃）→ 同文档只要求短语够长够罕见，跨文档另加术语特征门槛（5 字以上直接放行，4 字短语须含罕见字或术语后缀且非数量词/否定词开头）；提供 getRelated（短语级判定 + 命中理由 + 近邻排除含 EPUB、同文档只降序不设门槛）与 getRecommendedTags（标签→词频、冷启动静默、只推荐用过的标签）；不落盘、不写 sidecar、不升 index 版本。
+views/relationModel.ts: 字面关联派生层（与 cardModel 同层），按需内存快照随 store.version 失效；相关批注改走短语级匹配（utils/textPhrases）：4 字种子倒排找候选对 → 扩展出最长公共短语 → 文档级稀有度过滤（出现在超过 3 个源文档的短语视为通用说法丢弃）→ 同文档只要求短语够长够罕见，跨文档另加术语特征门槛（5 字以上直接放行，4 字短语须含罕见字或术语后缀且非数量词/否定词开头）；提供 getRelated（短语级判定 + 命中理由 + 近邻排除含 EPUB、同文档只降序不设门槛）与 getRecommendedTags（标签→词频、冷启动静默、只推荐用过的标签）；不落盘、不写 sidecar、不升 index 版本；并发 prepare 共享同一次构建，每张卡的 4 字种子表预建后供所有候选对复用。
 views/stickyNoteLane.ts: 编辑/阅读模式的便签泳道，基于 positioning 布局算法渲染可编辑便签条，支持窄屏自适应。
 views/stickyNoteView.ts: 兼容型便利贴卡片组件，保留 Markdown 渲染、折叠与编辑。
 settings/settingsTab.ts: 插件设置页，管理默认颜色、便签栏、窄屏折叠、连接线、作者、迁移策略、Markdown 统计与「与 Obsidian 标签互通」开关（默认关）。

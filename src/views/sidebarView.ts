@@ -8,7 +8,9 @@
  * [POS]: views 模块的右侧 Leaf 总览面板，承载搜索、颜色/类型/标签筛选、排序、行内编辑、标签编辑、跳转、删除、导出模板、字面关联与确认关联；
  *        顶部搜索/范围/筛选/排序/导出统一收进单一折叠菜单（默认收起，展开态记在视图字段上），列表区域常驻不被菜单挤压；
  *        移动端标签编辑态额外处理软键盘遮挡（列表补底部留白 + 输入框滚入可视区），不触碰阅读区；
- *        标签编辑期间 requestRender / refreshList 只登记不重绘，退出编辑后才补，且重绘重建不抢焦点
+ *        标签编辑期间 requestRender / refreshList 只登记不重绘，退出编辑后才补，且重绘重建不抢焦点；
+ *        全库列表分批渲染（首屏 60 张，之后每批 80 张走空闲时段），listToken 作废旧批次；
+ *        渲染前已预热关联快照时，卡片相关区直接同步取命中，不再逐卡 await prepare
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
@@ -40,6 +42,12 @@ import type { TagRef } from "../storage/annotationStore";
 
 export const ANNOTATION_SIDEBAR_VIEW = "yh-inklight-sidebar";
 
+/** 首屏同步渲染的卡片数：切全库时先把可见区域铺出来，剩余分帧追加 */
+const INITIAL_CARD_BATCH = 60;
+/** 后续每批追加的卡片数：单批越小，主线程被占用的时间越短 */
+const CARD_BATCH_SIZE = 80;
+/** 空闲回调的兜底等待：即使一直不空闲，也要在 120ms 内继续追加 */
+const CARD_BATCH_TIMEOUT_MS = 120;
 
 type AnnotationScope = "current" | "all";
 type TypeFilter = "all" | AnnotationKind;
@@ -62,6 +70,8 @@ export class AnnotationSidebarView extends ItemView {
   private menuPanel: HTMLElement | null = null;
   private menuButton: HTMLElement | null = null;
   private renderToken = 0;
+  /** 列表追加代次：新一次 render / refreshList 会作废上一轮未跑完的分批任务 */
+  private listToken = 0;
   private renderTimer: number | null = null;
   /**
    * 当前处于标签编辑态的卡片 id。
@@ -105,6 +115,7 @@ export class AnnotationSidebarView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    this.listToken += 1;
     this.menuPanel = null;
     this.menuButton = null;
     this.keyboardCleanup?.();
@@ -137,6 +148,7 @@ export class AnnotationSidebarView extends ItemView {
 
   async render(): Promise<void> {
     const token = ++this.renderToken;
+    const listToken = ++this.listToken;
     const container = this.containerEl.children[1] ?? this.containerEl;
     container.empty();
     container.addClass("yh-overview");
@@ -169,13 +181,7 @@ export class AnnotationSidebarView extends ItemView {
     container.createDiv({ cls: "yh-ov-count", text: `${scopeLabel} · ${highlightCount} highlights · ${noteCount} notes` });
 
     const list = container.createDiv({ cls: "yh-ov-list" });
-    if (!cards.length) {
-      list.createDiv({ cls: "yh-empty", text: "No matching annotations." });
-    } else {
-      for (const card of cards) {
-        this.renderCard(list, card);
-      }
-    }
+    this.renderCardList(list, cards, listToken);
   }
 
   /**
@@ -187,6 +193,7 @@ export class AnnotationSidebarView extends ItemView {
       this.pendingRender = true;
       return;
     }
+    const listToken = ++this.listToken;
     const root = this.containerEl.children[1] ?? this.containerEl;
     const list = root.querySelector<HTMLElement>(".yh-ov-list");
     if (!list) {
@@ -205,17 +212,15 @@ export class AnnotationSidebarView extends ItemView {
     if (this.plugin.settings.contentRelations) {
       await this.plugin.prepareRelations(documents);
     }
+    // 等待期间可能有更新的搜索/重绘：旧结果直接丢弃，避免覆盖新列表
+    if (listToken !== this.listToken) {
+      return;
+    }
     const rawCards = documents.flatMap((document) => buildCards(document));
     const cards = this.filterCards(rawCards);
 
     list.empty();
-    if (!cards.length) {
-      list.createDiv({ cls: "yh-empty", text: "No matching annotations." });
-    } else {
-      for (const card of cards) {
-        this.renderCard(list, card);
-      }
-    }
+    this.renderCardList(list, cards, listToken);
 
     const countEl = root.querySelector<HTMLElement>(".yh-ov-count");
     if (countEl) {
@@ -224,6 +229,54 @@ export class AnnotationSidebarView extends ItemView {
       const scopeLabel = this.annotationScope === "all" ? `${documents.length} files` : "current file";
       countEl.textContent = `${scopeLabel} · ${highlightCount} highlights · ${noteCount} notes`;
     }
+  }
+
+  /**
+   * 列表分批渲染：先同步铺首屏，剩余用空闲时段追加。
+   * 全库几千张卡一次性建 DOM 会形成单个长任务；分批后首屏立刻可交互，
+   * 内容、顺序与筛选结果都与一次性渲染完全一致，只是到达时间不同。
+   */
+  private renderCardList(list: Element, cards: SidebarCard[], token: number): void {
+    if (!cards.length) {
+      list.createDiv({ cls: "yh-empty", text: "No matching annotations." });
+      return;
+    }
+
+    const firstEnd = Math.min(INITIAL_CARD_BATCH, cards.length);
+    for (let index = 0; index < firstEnd; index += 1) {
+      this.renderCard(list, cards[index]);
+    }
+    if (firstEnd >= cards.length) {
+      return;
+    }
+
+    let cursor = firstEnd;
+    const append = (): void => {
+      // 新一轮 render / refreshList 已开始：旧批次作废，避免往已清空的列表里补卡
+      if (token !== this.listToken) {
+        return;
+      }
+      const end = Math.min(cursor + CARD_BATCH_SIZE, cards.length);
+      for (; cursor < end; cursor += 1) {
+        this.renderCard(list, cards[cursor]);
+      }
+      if (cursor < cards.length) {
+        this.scheduleCardBatch(append);
+      }
+    };
+    this.scheduleCardBatch(append);
+  }
+
+  private scheduleCardBatch(run: () => void): void {
+    type IdleWindow = Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+    };
+    const idle = (window as IdleWindow).requestIdleCallback;
+    if (idle) {
+      idle(run, { timeout: CARD_BATCH_TIMEOUT_MS });
+      return;
+    }
+    window.setTimeout(run, 16);
   }
 
   private renderHeader(container: Element): void {
@@ -474,16 +527,20 @@ export class AnnotationSidebarView extends ItemView {
       renderRelatedBlock(
         card,
         cardData,
-        this.plugin.createRelatedHost(cardData, {
-          isOpen: (cardId) => this.openRelated.has(cardId),
-          setOpen: (cardId, open) => {
-            if (open) {
-              this.openRelated.add(cardId);
-            } else {
-              this.openRelated.delete(cardId);
-            }
+        this.plugin.createRelatedHost(
+          cardData,
+          {
+            isOpen: (cardId) => this.openRelated.has(cardId),
+            setOpen: (cardId, open) => {
+              if (open) {
+                this.openRelated.add(cardId);
+              } else {
+                this.openRelated.delete(cardId);
+              }
+            },
           },
-        }),
+          { prepared: true },
+        ),
       );
     }
 

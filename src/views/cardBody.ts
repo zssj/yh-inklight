@@ -6,6 +6,8 @@
  * [POS]: views 模块卡片 DOM 的唯一出口。两个宿主只提供数据与回调，
  *        字段顺序、排版、动作行都在这里产出——两处各写一遍必然漂移（noteType 就丢过一次）。
  *        宿主各自保留自己的状态与生命周期：侧栏是常驻列表 + 整表重绘，浮层是游离节点 + 点外关闭。
+ *        展开按钮的尺寸测量按帧批量执行：先统一读 scrollHeight / lineHeight，再统一插入按钮，
+ *        避免全库列表逐卡读写交替造成成百上千次强制布局。
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
@@ -436,40 +438,71 @@ function getTitleLabel(title: string): string {
   return labels[title] ?? title;
 }
 
+/** 待测量的内容元素：同一帧内的所有卡片合并成一批，避免读写交替触发反复布局 */
+const pendingExpandChecks = new Set<HTMLElement>();
+/** 已测量过的元素不再重复排队（Markdown 渲染回调可能重入） */
+const expandChecked = new WeakSet<HTMLElement>();
+let expandCheckScheduled = false;
+
 /**
  * 三行以上才给「展开」：按钮插在内容元素之后，样式靠 `.yh-ov-quote + .yh-ov-expand-btn` 相邻选择器，
  * 因此不能用 appendChild 挂到别处，否则按钮会掉到卡片末尾。
+ * 全库列表一次渲染很多卡时，逐卡测量会造成成百上千次强制布局；
+ * 这里先收集、统一读尺寸，再统一写按钮，判定条件与按钮行为保持不变。
  */
 function addExpandToggle(contentEl: HTMLElement): void {
+  if (expandChecked.has(contentEl)) {
+    return;
+  }
+  pendingExpandChecks.add(contentEl);
+  if (expandCheckScheduled) {
+    return;
+  }
+  expandCheckScheduled = true;
+
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      if (!contentEl.isConnected) {
-        return;
-      }
-      const lineHeight = parseFloat(getComputedStyle(contentEl).lineHeight);
-      const threshold = lineHeight * 3 + 10;
-      if (contentEl.scrollHeight <= threshold + 2) {
-        return;
+      expandCheckScheduled = false;
+      const elements = Array.from(pendingExpandChecks);
+      pendingExpandChecks.clear();
+
+      // 先读：所有尺寸一次性量完
+      const needing: HTMLElement[] = [];
+      for (const element of elements) {
+        if (!element.isConnected) {
+          continue;
+        }
+        const lineHeight = parseFloat(getComputedStyle(element).lineHeight);
+        const threshold = lineHeight * 3 + 10;
+        if (element.scrollHeight > threshold + 2) {
+          needing.push(element);
+        } else {
+          expandChecked.add(element);
+        }
       }
 
-      const button = document.createElement("span");
-      button.className = "yh-ov-expand-btn";
-      button.textContent = "展开";
-      button.tabIndex = 0;
-      button.setAttribute("role", "button");
-      contentEl.insertAdjacentElement("afterend", button);
-      const toggle = (): void => {
-        const expanded = contentEl.hasClass("expanded");
-        contentEl.toggleClass("expanded", !expanded);
-        button.setText(expanded ? "展开" : "收起");
-      };
-      button.addEventListener("click", toggle);
-      button.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          toggle();
-        }
-      });
+      // 再写：统一插入按钮，不穿插读取
+      for (const element of needing) {
+        expandChecked.add(element);
+        const button = document.createElement("span");
+        button.className = "yh-ov-expand-btn";
+        button.textContent = "展开";
+        button.tabIndex = 0;
+        button.setAttribute("role", "button");
+        element.insertAdjacentElement("afterend", button);
+        const toggle = (): void => {
+          const expanded = element.hasClass("expanded");
+          element.toggleClass("expanded", !expanded);
+          button.setText(expanded ? "展开" : "收起");
+        };
+        button.addEventListener("click", toggle);
+        button.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            toggle();
+          }
+        });
+      }
     });
   });
 }

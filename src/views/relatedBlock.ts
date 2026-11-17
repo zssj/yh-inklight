@@ -5,6 +5,7 @@
  * [POS]: views 模块相关区的 DOM 单点，侧栏列表与点击高亮浮层共用。
  *        命中计算来自 RelationModel（宿主负责 prepare），落库（共享标签 + 有向关系）也由宿主回调，
  *        本文件不做任何 IO，也不自己发明标签。
+ *        明细行按需生成：收起态只留「相关的 N 条」摘要，首次展开才铺行，避免全库列表预先建满相关 DOM。
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
@@ -75,14 +76,33 @@ export function shouldCollapseRelatedText(text: string): boolean {
  */
 function paint(root: HTMLElement, self: SidebarCard, hits: RelatedHitView[], host: RelatedBlockHost): void {
   const box = root.createEl("details", { cls: "yh-ov-related" });
-  box.open = host.isOpen(self.id);
-  box.addEventListener("toggle", () => host.setOpen(self.id, box.open));
   box.createEl("summary", { text: `相关的 ${hits.length} 条` });
   const list = box.createDiv({ cls: "yh-ov-related-list" });
 
-  for (const hit of hits) {
-    list.appendChild(renderHitRow(list, self, hit, host));
+  // 明细行按需生成：全库列表里绝大多数相关区是收起的，
+  // 为每张卡预先铺最多 5 行 DOM 纯属浪费。条数摘要始终保留，展开后内容与原来一致。
+  let painted = false;
+  const paintRows = (): void => {
+    if (painted) {
+      return;
+    }
+    painted = true;
+    for (const hit of hits) {
+      list.appendChild(renderHitRow(list, self, hit, host));
+    }
+  };
+
+  // 先写初始展开态，再挂 toggle，避免把程序化赋值当成用户操作
+  box.open = host.isOpen(self.id);
+  if (box.open) {
+    paintRows();
   }
+  box.addEventListener("toggle", () => {
+    host.setOpen(self.id, box.open);
+    if (box.open) {
+      paintRows();
+    }
+  });
 }
 
 /** 单条相关行：摘录 + 命中短语 + 文件名 + 已关联 chip + 「关联」入口 */

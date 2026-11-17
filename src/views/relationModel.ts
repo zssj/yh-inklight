@@ -5,6 +5,8 @@
  *           getRecommendedTags（按内容推荐历史标签）、invalidate
  * [POS]: views 模块的派生数据层，与 cardModel 同层；纯内存、不落盘、不写 sidecar、不升 index 版本。
  *        删批注 / 改名 / 删源文件全部由 store.version 自动失效，无需单独迁移索引。
+ *        全库渲染时并发 prepare 共享同一次构建，builtAt 取构建完成时间；每张卡的 4 字种子表
+ *        在 buildEntry 时建好供所有候选对复用——否则逐对重建种子表会把全库配对放大成主线程长任务。
  *        匹配单位是「跨书罕见的具体短语」，不是词袋：2-gram 碎片共现不再算相关，
  *        避免整屏都是「都提到『的渴望』」这种没有信息量的推荐。
  *        同文档与跨文档用不同门槛：同文档只要求短语够长够罕见，
@@ -37,8 +39,11 @@ const RECOMMEND_LIMIT = 3;
 /** 标签少于 3 个或卡片少于 10 条时不出推荐：冷启动没有可依据的分布 */
 const COLD_START_MIN_TAGS = 3;
 const COLD_START_MIN_CARDS = 10;
-/** 同一 version 内的短缓存，避免搜索输入连续重绘时反复拍平全库 */
-const CACHE_TTL_MS = 3000;
+/**
+ * 同一 version 内的缓存窗口。写批注会自增 store.version 立即失效，
+ * 这里只防「同一版本内反复切范围/搜索」把全库重算一遍；3 秒太短，切回全库就重建。
+ */
+const CACHE_TTL_MS = 30_000;
 /** 超大库保护：参与关联的卡片上限，超出部分按文档顺序截断 */
 const MAX_ENTRIES = 4000;
 /**
@@ -62,12 +67,25 @@ const MAX_SEED_POSTINGS = 60;
 const SAME_DOCUMENT_ORDER_FACTOR = 0.9;
 /** 短语向两侧扩展的最大长度：够显示完整术语，又不至于无限回溯 */
 const MAX_EXTENSION = 40;
+/** 每处理这么多候选对 / 短语就让出一次主线程：全库构建不再是一个长时间不可打断的任务 */
+const YIELD_EVERY_PAIRS = 800;
+const YIELD_EVERY_PHRASES = 300;
+
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 interface RelationEntry {
   card: SidebarCard;
   key: string;
   /** 该卡切出的词段，公共短语只在词段之间匹配（词段内不含功能字） */
   segments: string[];
+  /**
+   * 4 字种子 → [词段下标, 段内偏移, ...]。
+   * 预先算一次，所有候选对复用：旧实现每比对一对就重建一次右侧种子表，
+   * 全库配对时是主要的重复开销；种子内容与位置完全一致，结果不变。
+   */
+  seeds: Map<string, number[]>;
   /** 全库拍平顺序，用于排除 EPUB 同章紧挨着的划线 */
   order: number;
 }
@@ -129,7 +147,24 @@ function buildEntry(card: SidebarCard, order: number): RelationEntry | null {
   if (segments.length === 0) {
     return null;
   }
-  return { card, key: cardKey(card), segments, order };
+  return { card, key: cardKey(card), segments, seeds: buildSeedIndex(segments), order };
+}
+
+/** 4 字种子倒排索引：同一张卡的词段只扫一次，供 postings 与逐对扩短语共用 */
+function buildSeedIndex(segments: readonly string[]): Map<string, number[]> {
+  const seeds = new Map<string, number[]>();
+  segments.forEach((segment, segmentIndex) => {
+    for (let i = 0; i + SEED_LENGTH <= segment.length; i += 1) {
+      const seed = segment.slice(i, i + SEED_LENGTH);
+      const list = seeds.get(seed);
+      if (list) {
+        list.push(segmentIndex, i);
+      } else {
+        seeds.set(seed, [segmentIndex, i]);
+      }
+    }
+  });
+  return seeds;
 }
 
 /**
@@ -160,27 +195,69 @@ export class RelationModel {
   /** 标签推荐用的全库词频（与 tagTerms 同步懒建） */
   private tagFrequency = new Map<string, number>();
   private version = -1;
+  /** 构建完成时间；必须取「算完」而不是「开始算」，否则慢构建一完成就被判过期 */
   private builtAt = 0;
+  /** 同一时刻只允许一次构建：全库渲染时每张卡都会调 prepare，重复构建会成倍放大开销 */
+  private building: Promise<void> | null = null;
+  /** 失效代次：构建期间被 invalidate 的结果直接丢弃，避免旧快照写回 */
+  private generation = 0;
 
   constructor(private readonly store: AnnotationStore) {}
 
   invalidate(): void {
+    this.generation += 1;
     this.version = -1;
     this.tagTerms = null;
+  }
+
+  /** 快照是否与当前 store 同版本：同一轮列表渲染内可安全同步读取，不受 TTL 限制 */
+  isCurrent(): boolean {
+    return this.version === this.store.version && this.builtAt > 0;
+  }
+
+  /** 快照是否可直接复用：同版本、已构建且未过期 */
+  isReady(): boolean {
+    return this.isCurrent() && Date.now() - this.builtAt < CACHE_TTL_MS;
   }
 
   /**
    * 构建（或复用）快照。documents 是全库时直接复用，当前文件模式则补拉全库——
    * getIndexedDocuments 走 store 的文档缓存，冷启动后只付一次读盘代价。
    * 四步：切词段 → 4 字种子倒排找候选对 → 逐对扩展出最长公共短语 → 按跨文档稀有度筛选。
+   * 并发调用共享同一次构建；构建期间被失效则丢弃结果并重试一次。
    */
   async prepare(documents: readonly FileAnnotationDocument[]): Promise<void> {
-    const now = Date.now();
-    if (this.version === this.store.version && now - this.builtAt < CACHE_TTL_MS) {
-      return;
-    }
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (this.isReady()) {
+        return;
+      }
 
+      let pending = this.building;
+      if (!pending) {
+        pending = this.build(documents, this.generation);
+        this.building = pending;
+        try {
+          await pending;
+        } finally {
+          if (this.building === pending) {
+            this.building = null;
+          }
+        }
+      } else {
+        await pending;
+      }
+
+      if (this.isReady()) {
+        return;
+      }
+    }
+  }
+
+  /** 真正构建快照；只有代次未变时才发布结果 */
+  private async build(documents: readonly FileAnnotationDocument[], generation: number): Promise<void> {
     const all = documents.length > 1 ? documents : await this.store.getIndexedDocuments();
+    // 文档取完之后再记版本：getIndexedDocuments 冷启动时可能因哈希迁移而自增版本
+    const storeVersion = this.store.version;
     const entries: RelationEntry[] = [];
     for (const document of all) {
       for (const card of buildCards(document)) {
@@ -198,12 +275,22 @@ export class RelationModel {
       }
     }
 
+    if (generation !== this.generation) {
+      return;
+    }
+
+    const related = await this.buildRelations(entries, generation);
+    // 构建期间有写入（store.version 变化）也不发布：这一份可能是旧数据，交给 prepare 重试
+    if (generation !== this.generation || this.store.version !== storeVersion) {
+      return;
+    }
+
     this.entries = entries;
     this.charDocuments = this.buildCharDocuments(entries);
-    this.related = this.buildRelations(entries);
+    this.related = related;
     this.tagTerms = null;
-    this.version = this.store.version;
-    this.builtAt = now;
+    this.version = storeVersion;
+    this.builtAt = Date.now();
   }
 
   /** 汉字 → 源文档集合：同一本书里的几十张卡不会把本稀有的字刷成常见字 */
@@ -250,22 +337,19 @@ export class RelationModel {
    * 最后按短语出现的源文档数过滤：出现在很多书里的说法（『一般来说』『一般情况下』）
    * 不构成共同话题，直接丢弃。
    */
-  private buildRelations(entries: RelationEntry[]): Map<string, RelatedHit[]> {
+  private async buildRelations(
+    entries: RelationEntry[],
+    generation: number,
+  ): Promise<Map<string, RelatedHit[]>> {
     const related = new Map<string, RelatedHit[]>();
     if (entries.length < 2) {
       return related;
     }
 
-    // 种子倒排：4 字连续片段 → 出现在哪些卡片里
+    // 种子倒排：4 字连续片段 → 出现在哪些卡片里（种子表已在 buildEntry 里建好）
     const postings = new Map<string, number[]>();
     entries.forEach((entry, cardIndex) => {
-      const seeds = new Set<string>();
-      for (const segment of entry.segments) {
-        for (let i = 0; i + SEED_LENGTH <= segment.length; i += 1) {
-          seeds.add(segment.slice(i, i + SEED_LENGTH));
-        }
-      }
-      for (const seed of seeds) {
+      for (const seed of entry.seeds.keys()) {
         const list = postings.get(seed);
         if (list) {
           list.push(cardIndex);
@@ -294,10 +378,16 @@ export class RelationModel {
     // 逐对扩展出最长公共短语
     const pairPhrases = new Map<string, string[]>();
     const allPhrases = new Set<string>();
+    let processedPairs = 0;
     for (const [pair, [low, high]] of pairs) {
-      const shared = selectDistinctPhrases(
-        this.expandCommonPhrases(entries[low].segments, entries[high].segments),
-      );
+      if (generation !== this.generation) {
+        return related;
+      }
+      processedPairs += 1;
+      if (processedPairs % YIELD_EVERY_PAIRS === 0) {
+        await yieldToMain();
+      }
+      const shared = selectDistinctPhrases(this.expandCommonPhrases(entries[low], entries[high]));
       if (shared.length === 0) {
         continue;
       }
@@ -311,7 +401,11 @@ export class RelationModel {
     // 再确认是否真的包含整条短语——这样得到的才是「文档级」频次，
     // 同一本书里的几十张卡不会把本稀有的词刷成常见词。
     const phraseDocuments = new Map<string, Set<string>>();
+    let processedPhrases = 0;
     for (const phrase of allPhrases) {
+      if (generation !== this.generation) {
+        return related;
+      }
       const candidates = new Set<number>();
       for (let i = 0; i + SEED_LENGTH <= phrase.length; i += 1) {
         for (const item of postings.get(phrase.slice(i, i + SEED_LENGTH)) ?? []) {
@@ -325,6 +419,10 @@ export class RelationModel {
         }
       }
       phraseDocuments.set(phrase, sources);
+      processedPhrases += 1;
+      if (processedPhrases % YIELD_EVERY_PHRASES === 0) {
+        await yieldToMain();
+      }
     }
 
     for (const [pair, phrases] of pairPhrases) {
@@ -377,23 +475,12 @@ export class RelationModel {
     return this.hasRareCharacter(phrase) || hasTermSuffix(phrase);
   }
 
-  /** 两组词段之间的公共短语：在共同种子上向两侧扩展，取最长的那些 */
-  private expandCommonPhrases(left: readonly string[], right: readonly string[]): string[] {
+  /** 两张卡的公共短语：在共同种子上向两侧扩展，取最长的那些 */
+  private expandCommonPhrases(left: RelationEntry, right: RelationEntry): string[] {
     const found = new Set<string>();
-    const seeds = new Map<string, number[]>();
-    right.forEach((segment, segmentIndex) => {
-      for (let i = 0; i + SEED_LENGTH <= segment.length; i += 1) {
-        const seed = segment.slice(i, i + SEED_LENGTH);
-        const list = seeds.get(seed);
-        if (list) {
-          list.push(segmentIndex, i);
-        } else {
-          seeds.set(seed, [segmentIndex, i]);
-        }
-      }
-    });
+    const seeds = right.seeds;
 
-    for (const segment of left) {
+    for (const segment of left.segments) {
       if (segment.length < MIN_PHRASE_LENGTH) {
         continue;
       }
@@ -403,7 +490,7 @@ export class RelationModel {
           continue;
         }
         for (let p = 0; p < positions.length; p += 2) {
-          const other = right[positions[p]];
+          const other = right.segments[positions[p]];
           const expanded = expandPhrase(segment, i, other, positions[p + 1], MAX_EXTENSION);
           const phrase = trimPhrase(expanded);
           if (phrase.length >= MIN_PHRASE_LENGTH && !isNoisePhrase(phrase)) {

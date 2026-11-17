@@ -1590,9 +1590,17 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   createRelatedHost(
     self: SidebarCard,
     openState?: { isOpen: (cardId: string) => boolean; setOpen: (cardId: string, open: boolean) => void },
+    options?: { prepared?: boolean },
   ): RelatedBlockHost {
     return {
-      load: () => this.relatedHitsFor(self),
+      // 侧栏在渲染前已经 await 过 prepareRelations：直接同步取命中，
+      // 避免每张卡再走一次 prepare（并发时会被去重，但仍有 N 次 Promise 往返）。
+      // 长列表分批追加可能超过缓存 TTL，因此只认版本号（isCurrent）；
+      // 只有中途被写入失效时才回退到异步准备，保证结果不空。
+      load: () =>
+        options?.prepared && this.relationModel().isCurrent()
+          ? Promise.resolve(this.getRelatedCards(self))
+          : this.relatedHitsFor(self),
       isOpen: (cardId) => openState?.isOpen(cardId) ?? false,
       setOpen: (cardId, open) => openState?.setOpen(cardId, open),
       fileName: (card) => this.fileOf(card.sourcePath)?.name ?? card.sourcePath,

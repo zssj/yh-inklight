@@ -9158,13 +9158,28 @@ function shouldCollapseRelatedText(text) {
 }
 function paint(root, self, hits, host) {
   const box = root.createEl("details", { cls: "yh-ov-related" });
-  box.open = host.isOpen(self.id);
-  box.addEventListener("toggle", () => host.setOpen(self.id, box.open));
   box.createEl("summary", { text: `\u76F8\u5173\u7684 ${hits.length} \u6761` });
   const list = box.createDiv({ cls: "yh-ov-related-list" });
-  for (const hit of hits) {
-    list.appendChild(renderHitRow(list, self, hit, host));
+  let painted = false;
+  const paintRows = () => {
+    if (painted) {
+      return;
+    }
+    painted = true;
+    for (const hit of hits) {
+      list.appendChild(renderHitRow(list, self, hit, host));
+    }
+  };
+  box.open = host.isOpen(self.id);
+  if (box.open) {
+    paintRows();
   }
+  box.addEventListener("toggle", () => {
+    host.setOpen(self.id, box.open);
+    if (box.open) {
+      paintRows();
+    }
+  });
 }
 function renderHitRow(parent, self, hit, host) {
   const row = parent.createDiv({ cls: "yh-ov-related-row" });
@@ -9664,35 +9679,57 @@ function getTitleLabel(title) {
   };
   return labels[title] ?? title;
 }
+var pendingExpandChecks = /* @__PURE__ */ new Set();
+var expandChecked = /* @__PURE__ */ new WeakSet();
+var expandCheckScheduled = false;
 function addExpandToggle(contentEl) {
+  if (expandChecked.has(contentEl)) {
+    return;
+  }
+  pendingExpandChecks.add(contentEl);
+  if (expandCheckScheduled) {
+    return;
+  }
+  expandCheckScheduled = true;
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      if (!contentEl.isConnected) {
-        return;
-      }
-      const lineHeight = parseFloat(getComputedStyle(contentEl).lineHeight);
-      const threshold = lineHeight * 3 + 10;
-      if (contentEl.scrollHeight <= threshold + 2) {
-        return;
-      }
-      const button = document.createElement("span");
-      button.className = "yh-ov-expand-btn";
-      button.textContent = "\u5C55\u5F00";
-      button.tabIndex = 0;
-      button.setAttribute("role", "button");
-      contentEl.insertAdjacentElement("afterend", button);
-      const toggle = () => {
-        const expanded = contentEl.hasClass("expanded");
-        contentEl.toggleClass("expanded", !expanded);
-        button.setText(expanded ? "\u5C55\u5F00" : "\u6536\u8D77");
-      };
-      button.addEventListener("click", toggle);
-      button.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          toggle();
+      expandCheckScheduled = false;
+      const elements = Array.from(pendingExpandChecks);
+      pendingExpandChecks.clear();
+      const needing = [];
+      for (const element of elements) {
+        if (!element.isConnected) {
+          continue;
         }
-      });
+        const lineHeight = parseFloat(getComputedStyle(element).lineHeight);
+        const threshold = lineHeight * 3 + 10;
+        if (element.scrollHeight > threshold + 2) {
+          needing.push(element);
+        } else {
+          expandChecked.add(element);
+        }
+      }
+      for (const element of needing) {
+        expandChecked.add(element);
+        const button = document.createElement("span");
+        button.className = "yh-ov-expand-btn";
+        button.textContent = "\u5C55\u5F00";
+        button.tabIndex = 0;
+        button.setAttribute("role", "button");
+        element.insertAdjacentElement("afterend", button);
+        const toggle = () => {
+          const expanded = element.hasClass("expanded");
+          element.toggleClass("expanded", !expanded);
+          button.setText(expanded ? "\u5C55\u5F00" : "\u6536\u8D77");
+        };
+        button.addEventListener("click", toggle);
+        button.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            toggle();
+          }
+        });
+      }
     });
   });
 }
@@ -13576,6 +13613,9 @@ function findOpenEpubLeaf(app, file) {
 
 // src/views/sidebarView.ts
 var ANNOTATION_SIDEBAR_VIEW = "yh-inklight-sidebar";
+var INITIAL_CARD_BATCH = 60;
+var CARD_BATCH_SIZE = 80;
+var CARD_BATCH_TIMEOUT_MS = 120;
 var AnnotationSidebarView = class extends import_obsidian11.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -13597,6 +13637,8 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.menuPanel = null;
     this.menuButton = null;
     this.renderToken = 0;
+    /** 列表追加代次：新一次 render / refreshList 会作废上一轮未跑完的分批任务 */
+    this.listToken = 0;
     this.renderTimer = null;
     /**
      * 当前处于标签编辑态的卡片 id。
@@ -13630,6 +13672,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     await this.render();
   }
   async onClose() {
+    this.listToken += 1;
     this.menuPanel = null;
     this.menuButton = null;
     this.keyboardCleanup?.();
@@ -13658,6 +13701,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
   }
   async render() {
     const token = ++this.renderToken;
+    const listToken = ++this.listToken;
     const container = this.containerEl.children[1] ?? this.containerEl;
     container.empty();
     container.addClass("yh-overview");
@@ -13685,13 +13729,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     const scopeLabel = this.annotationScope === "all" ? `${documents.length} files` : "current file";
     container.createDiv({ cls: "yh-ov-count", text: `${scopeLabel} \xB7 ${highlightCount} highlights \xB7 ${noteCount} notes` });
     const list = container.createDiv({ cls: "yh-ov-list" });
-    if (!cards.length) {
-      list.createDiv({ cls: "yh-empty", text: "No matching annotations." });
-    } else {
-      for (const card of cards) {
-        this.renderCard(list, card);
-      }
-    }
+    this.renderCardList(list, cards, listToken);
   }
   /**
    * 只刷新卡片列表（不重建搜索框等控件），用于搜索输入时保持焦点。
@@ -13701,6 +13739,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       this.pendingRender = true;
       return;
     }
+    const listToken = ++this.listToken;
     const root = this.containerEl.children[1] ?? this.containerEl;
     const list = root.querySelector(".yh-ov-list");
     if (!list) {
@@ -13716,16 +13755,13 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     if (this.plugin.settings.contentRelations) {
       await this.plugin.prepareRelations(documents);
     }
+    if (listToken !== this.listToken) {
+      return;
+    }
     const rawCards = documents.flatMap((document2) => buildCards(document2));
     const cards = this.filterCards(rawCards);
     list.empty();
-    if (!cards.length) {
-      list.createDiv({ cls: "yh-empty", text: "No matching annotations." });
-    } else {
-      for (const card of cards) {
-        this.renderCard(list, card);
-      }
-    }
+    this.renderCardList(list, cards, listToken);
     const countEl = root.querySelector(".yh-ov-count");
     if (countEl) {
       const highlightCount = rawCards.filter((card) => card.kind === "highlight" && !card.orphaned).length;
@@ -13733,6 +13769,46 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       const scopeLabel = this.annotationScope === "all" ? `${documents.length} files` : "current file";
       countEl.textContent = `${scopeLabel} \xB7 ${highlightCount} highlights \xB7 ${noteCount} notes`;
     }
+  }
+  /**
+   * 列表分批渲染：先同步铺首屏，剩余用空闲时段追加。
+   * 全库几千张卡一次性建 DOM 会形成单个长任务；分批后首屏立刻可交互，
+   * 内容、顺序与筛选结果都与一次性渲染完全一致，只是到达时间不同。
+   */
+  renderCardList(list, cards, token) {
+    if (!cards.length) {
+      list.createDiv({ cls: "yh-empty", text: "No matching annotations." });
+      return;
+    }
+    const firstEnd = Math.min(INITIAL_CARD_BATCH, cards.length);
+    for (let index = 0; index < firstEnd; index += 1) {
+      this.renderCard(list, cards[index]);
+    }
+    if (firstEnd >= cards.length) {
+      return;
+    }
+    let cursor = firstEnd;
+    const append = () => {
+      if (token !== this.listToken) {
+        return;
+      }
+      const end = Math.min(cursor + CARD_BATCH_SIZE, cards.length);
+      for (; cursor < end; cursor += 1) {
+        this.renderCard(list, cards[cursor]);
+      }
+      if (cursor < cards.length) {
+        this.scheduleCardBatch(append);
+      }
+    };
+    this.scheduleCardBatch(append);
+  }
+  scheduleCardBatch(run) {
+    const idle = window.requestIdleCallback;
+    if (idle) {
+      idle(run, { timeout: CARD_BATCH_TIMEOUT_MS });
+      return;
+    }
+    window.setTimeout(run, 16);
   }
   renderHeader(container) {
     const header = container.createDiv({ cls: "yh-ov-head" });
@@ -13942,16 +14018,20 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       renderRelatedBlock(
         card,
         cardData,
-        this.plugin.createRelatedHost(cardData, {
-          isOpen: (cardId) => this.openRelated.has(cardId),
-          setOpen: (cardId, open) => {
-            if (open) {
-              this.openRelated.add(cardId);
-            } else {
-              this.openRelated.delete(cardId);
+        this.plugin.createRelatedHost(
+          cardData,
+          {
+            isOpen: (cardId) => this.openRelated.has(cardId),
+            setOpen: (cardId, open) => {
+              if (open) {
+                this.openRelated.add(cardId);
+              } else {
+                this.openRelated.delete(cardId);
+              }
             }
-          }
-        })
+          },
+          { prepared: true }
+        )
       );
     }
     const edit = card.createDiv({ cls: "yh-ov-edit hidden" });
@@ -14770,7 +14850,7 @@ var RELATED_LIMIT = 5;
 var RECOMMEND_LIMIT = 3;
 var COLD_START_MIN_TAGS = 3;
 var COLD_START_MIN_CARDS = 10;
-var CACHE_TTL_MS = 3e3;
+var CACHE_TTL_MS = 3e4;
 var MAX_ENTRIES = 4e3;
 var MAX_PHRASE_DOCUMENTS = 3;
 var CROSS_MIN_PHRASE_LENGTH = 5;
@@ -14778,6 +14858,11 @@ var RARE_CHAR_DOCUMENTS = 5;
 var MAX_SEED_POSTINGS = 60;
 var SAME_DOCUMENT_ORDER_FACTOR = 0.9;
 var MAX_EXTENSION = 40;
+var YIELD_EVERY_PAIRS = 800;
+var YIELD_EVERY_PHRASES = 300;
+function yieldToMain() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 function cardKey(card) {
   return `${card.sourcePath}#${card.id}`;
 }
@@ -14814,7 +14899,22 @@ function buildEntry(card, order) {
   if (segments.length === 0) {
     return null;
   }
-  return { card, key: cardKey(card), segments, order };
+  return { card, key: cardKey(card), segments, seeds: buildSeedIndex(segments), order };
+}
+function buildSeedIndex(segments) {
+  const seeds = /* @__PURE__ */ new Map();
+  segments.forEach((segment, segmentIndex) => {
+    for (let i3 = 0; i3 + SEED_LENGTH <= segment.length; i3 += 1) {
+      const seed = segment.slice(i3, i3 + SEED_LENGTH);
+      const list = seeds.get(seed);
+      if (list) {
+        list.push(segmentIndex, i3);
+      } else {
+        seeds.set(seed, [segmentIndex, i3]);
+      }
+    }
+  });
+  return seeds;
 }
 function selectDistinctPhrases(phrases) {
   const sorted = [...new Set(phrases)].sort((left, right) => right.length - left.length || left.localeCompare(right));
@@ -14840,23 +14940,60 @@ var RelationModel = class {
     /** 标签推荐用的全库词频（与 tagTerms 同步懒建） */
     this.tagFrequency = /* @__PURE__ */ new Map();
     this.version = -1;
+    /** 构建完成时间；必须取「算完」而不是「开始算」，否则慢构建一完成就被判过期 */
     this.builtAt = 0;
+    /** 同一时刻只允许一次构建：全库渲染时每张卡都会调 prepare，重复构建会成倍放大开销 */
+    this.building = null;
+    /** 失效代次：构建期间被 invalidate 的结果直接丢弃，避免旧快照写回 */
+    this.generation = 0;
   }
   invalidate() {
+    this.generation += 1;
     this.version = -1;
     this.tagTerms = null;
+  }
+  /** 快照是否与当前 store 同版本：同一轮列表渲染内可安全同步读取，不受 TTL 限制 */
+  isCurrent() {
+    return this.version === this.store.version && this.builtAt > 0;
+  }
+  /** 快照是否可直接复用：同版本、已构建且未过期 */
+  isReady() {
+    return this.isCurrent() && Date.now() - this.builtAt < CACHE_TTL_MS;
   }
   /**
    * 构建（或复用）快照。documents 是全库时直接复用，当前文件模式则补拉全库——
    * getIndexedDocuments 走 store 的文档缓存，冷启动后只付一次读盘代价。
    * 四步：切词段 → 4 字种子倒排找候选对 → 逐对扩展出最长公共短语 → 按跨文档稀有度筛选。
+   * 并发调用共享同一次构建；构建期间被失效则丢弃结果并重试一次。
    */
   async prepare(documents) {
-    const now = Date.now();
-    if (this.version === this.store.version && now - this.builtAt < CACHE_TTL_MS) {
-      return;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (this.isReady()) {
+        return;
+      }
+      let pending = this.building;
+      if (!pending) {
+        pending = this.build(documents, this.generation);
+        this.building = pending;
+        try {
+          await pending;
+        } finally {
+          if (this.building === pending) {
+            this.building = null;
+          }
+        }
+      } else {
+        await pending;
+      }
+      if (this.isReady()) {
+        return;
+      }
     }
+  }
+  /** 真正构建快照；只有代次未变时才发布结果 */
+  async build(documents, generation) {
     const all = documents.length > 1 ? documents : await this.store.getIndexedDocuments();
+    const storeVersion = this.store.version;
     const entries = [];
     for (const document2 of all) {
       for (const card of buildCards(document2)) {
@@ -14873,12 +15010,19 @@ var RelationModel = class {
         break;
       }
     }
+    if (generation !== this.generation) {
+      return;
+    }
+    const related = await this.buildRelations(entries, generation);
+    if (generation !== this.generation || this.store.version !== storeVersion) {
+      return;
+    }
     this.entries = entries;
     this.charDocuments = this.buildCharDocuments(entries);
-    this.related = this.buildRelations(entries);
+    this.related = related;
     this.tagTerms = null;
-    this.version = this.store.version;
-    this.builtAt = now;
+    this.version = storeVersion;
+    this.builtAt = Date.now();
   }
   /** 汉字 → 源文档集合：同一本书里的几十张卡不会把本稀有的字刷成常见字 */
   buildCharDocuments(entries) {
@@ -14922,20 +15066,14 @@ var RelationModel = class {
    * 最后按短语出现的源文档数过滤：出现在很多书里的说法（『一般来说』『一般情况下』）
    * 不构成共同话题，直接丢弃。
    */
-  buildRelations(entries) {
+  async buildRelations(entries, generation) {
     const related = /* @__PURE__ */ new Map();
     if (entries.length < 2) {
       return related;
     }
     const postings = /* @__PURE__ */ new Map();
     entries.forEach((entry, cardIndex) => {
-      const seeds = /* @__PURE__ */ new Set();
-      for (const segment of entry.segments) {
-        for (let i3 = 0; i3 + SEED_LENGTH <= segment.length; i3 += 1) {
-          seeds.add(segment.slice(i3, i3 + SEED_LENGTH));
-        }
-      }
-      for (const seed of seeds) {
+      for (const seed of entry.seeds.keys()) {
         const list = postings.get(seed);
         if (list) {
           list.push(cardIndex);
@@ -14960,10 +15098,16 @@ var RelationModel = class {
     }
     const pairPhrases = /* @__PURE__ */ new Map();
     const allPhrases = /* @__PURE__ */ new Set();
+    let processedPairs = 0;
     for (const [pair, [low, high]] of pairs) {
-      const shared = selectDistinctPhrases(
-        this.expandCommonPhrases(entries[low].segments, entries[high].segments)
-      );
+      if (generation !== this.generation) {
+        return related;
+      }
+      processedPairs += 1;
+      if (processedPairs % YIELD_EVERY_PAIRS === 0) {
+        await yieldToMain();
+      }
+      const shared = selectDistinctPhrases(this.expandCommonPhrases(entries[low], entries[high]));
       if (shared.length === 0) {
         continue;
       }
@@ -14973,7 +15117,11 @@ var RelationModel = class {
       }
     }
     const phraseDocuments = /* @__PURE__ */ new Map();
+    let processedPhrases = 0;
     for (const phrase of allPhrases) {
+      if (generation !== this.generation) {
+        return related;
+      }
       const candidates = /* @__PURE__ */ new Set();
       for (let i3 = 0; i3 + SEED_LENGTH <= phrase.length; i3 += 1) {
         for (const item of postings.get(phrase.slice(i3, i3 + SEED_LENGTH)) ?? []) {
@@ -14987,6 +15135,10 @@ var RelationModel = class {
         }
       }
       phraseDocuments.set(phrase, sources);
+      processedPhrases += 1;
+      if (processedPhrases % YIELD_EVERY_PHRASES === 0) {
+        await yieldToMain();
+      }
     }
     for (const [pair, phrases] of pairPhrases) {
       const [low, high] = pairs.get(pair) ?? [0, 0];
@@ -15032,22 +15184,11 @@ var RelationModel = class {
     }
     return this.hasRareCharacter(phrase) || hasTermSuffix(phrase);
   }
-  /** 两组词段之间的公共短语：在共同种子上向两侧扩展，取最长的那些 */
+  /** 两张卡的公共短语：在共同种子上向两侧扩展，取最长的那些 */
   expandCommonPhrases(left, right) {
     const found = /* @__PURE__ */ new Set();
-    const seeds = /* @__PURE__ */ new Map();
-    right.forEach((segment, segmentIndex) => {
-      for (let i3 = 0; i3 + SEED_LENGTH <= segment.length; i3 += 1) {
-        const seed = segment.slice(i3, i3 + SEED_LENGTH);
-        const list = seeds.get(seed);
-        if (list) {
-          list.push(segmentIndex, i3);
-        } else {
-          seeds.set(seed, [segmentIndex, i3]);
-        }
-      }
-    });
-    for (const segment of left) {
+    const seeds = right.seeds;
+    for (const segment of left.segments) {
       if (segment.length < MIN_PHRASE_LENGTH) {
         continue;
       }
@@ -15057,7 +15198,7 @@ var RelationModel = class {
           continue;
         }
         for (let p3 = 0; p3 < positions.length; p3 += 2) {
-          const other = right[positions[p3]];
+          const other = right.segments[positions[p3]];
           const expanded = expandPhrase(segment, i3, other, positions[p3 + 1], MAX_EXTENSION);
           const phrase = trimPhrase(expanded);
           if (phrase.length >= MIN_PHRASE_LENGTH && !isNoisePhrase(phrase)) {
@@ -22083,9 +22224,13 @@ ${lines.slice(0, 8).join("\n")}`);
    * 相关区的宿主：命中、跳转、确认关联、断开全部走插件单点。
    * 侧栏与浮层只提供展开态，DOM 在 views/relatedBlock。
    */
-  createRelatedHost(self, openState) {
+  createRelatedHost(self, openState, options) {
     return {
-      load: () => this.relatedHitsFor(self),
+      // 侧栏在渲染前已经 await 过 prepareRelations：直接同步取命中，
+      // 避免每张卡再走一次 prepare（并发时会被去重，但仍有 N 次 Promise 往返）。
+      // 长列表分批追加可能超过缓存 TTL，因此只认版本号（isCurrent）；
+      // 只有中途被写入失效时才回退到异步准备，保证结果不空。
+      load: () => options?.prepared && this.relationModel().isCurrent() ? Promise.resolve(this.getRelatedCards(self)) : this.relatedHitsFor(self),
       isOpen: (cardId) => openState?.isOpen(cardId) ?? false,
       setOpen: (cardId, open) => openState?.setOpen(cardId, open),
       fileName: (card) => this.fileOf(card.sourcePath)?.name ?? card.sourcePath,

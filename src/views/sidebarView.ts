@@ -45,10 +45,10 @@ import type { TagRef } from "../storage/annotationStore";
 
 export const ANNOTATION_SIDEBAR_VIEW = "yh-inklight-sidebar";
 
-/** 首屏同步渲染的卡片数：切全库时先把可见区域铺出来，剩余按需追加 */
-const INITIAL_CARD_BATCH = 60;
+/** 首屏同步渲染的卡片数：切全库时先把一屏铺出来，剩余按需追加 */
+const INITIAL_CARD_BATCH = 24;
 /** 后续每批追加的卡片数：单批越小，主线程被占用的时间越短 */
-const CARD_BATCH_SIZE = 80;
+const CARD_BATCH_SIZE = 40;
 /** 空闲回调的兜底等待：即使一直不空闲，也要在 120ms 内继续追加 */
 const CARD_BATCH_TIMEOUT_MS = 120;
 /**
@@ -56,6 +56,10 @@ const CARD_BATCH_TIMEOUT_MS = 120;
  * 只比一屏略大，保证滚动时不露白；远远不够时会一直追加，等于回到「全库铺满」。
  */
 const SENTINEL_MARGIN_PX = 600;
+/** 正文 Markdown 的预渲染范围：卡片进入列表可视区前这么多像素就解析，滚动时不露白 */
+const CONTENT_PRERENDER_MARGIN_PX = 400;
+/** 路径/时间排序共用的校对器：localeCompare 每次调用都会重建默认实例，排序时开销可观 */
+const PATH_COLLATOR = new Intl.Collator();
 
 type AnnotationScope = "current" | "all";
 type TypeFilter = "all" | AnnotationKind;
@@ -82,6 +86,14 @@ export class AnnotationSidebarView extends ItemView {
   private listToken = 0;
   /** 列表底部哨兵的观察器：滚到附近才继续追加卡片，离开面板时不白白铺 DOM */
   private listObserver: IntersectionObserver | null = null;
+  /**
+   * 正文 Markdown 的延迟渲染队列：key 是卡片里的 .yh-ov-content 元素，
+   * 进入列表可视区才调用 paint。随列表重建一起清空（元素已不在 DOM，不能留着观察）。
+   */
+  private pendingContent = new Map<Element, () => void>();
+  private contentObserver: IntersectionObserver | null = null;
+  /** 首屏那批卡片正常立即渲染（避免闪一下原始 Markdown），之后追加的才延迟 */
+  private deferMarkdown = false;
   private renderTimer: number | null = null;
   /**
    * 上一次成功渲染的内容指纹。内容没变（同一批批注、同一组筛选、同一个活动文件）时
@@ -148,6 +160,7 @@ export class AnnotationSidebarView extends ItemView {
     this.listToken += 1;
     this.listObserver?.disconnect();
     this.listObserver = null;
+    this.resetDeferredContent();
     this.renderedKey = "";
     this.scopeCache = null;
     this.menuPanel = null;
@@ -246,6 +259,7 @@ export class AnnotationSidebarView extends ItemView {
     }
     this.listObserver?.disconnect();
     this.listObserver = null;
+    this.resetDeferredContent();
 
     container.empty();
     container.addClass("yh-overview");
@@ -320,6 +334,7 @@ export class AnnotationSidebarView extends ItemView {
 
     this.listObserver?.disconnect();
     this.listObserver = null;
+    this.resetDeferredContent();
     list.empty();
     this.renderCardList(list, cards, listToken);
 
@@ -362,10 +377,13 @@ export class AnnotationSidebarView extends ItemView {
       return cursor >= cards.length;
     };
 
+    // 首屏这批立即渲染正文（它们就在眼前）；之后的批次等滚到再解析 Markdown
+    this.deferMarkdown = false;
     if (append(INITIAL_CARD_BATCH)) {
       sentinel.remove();
       return;
     }
+    this.deferMarkdown = true;
 
     const scheduleNext = (): void => {
       if (typeof IntersectionObserver === "undefined") {
@@ -412,6 +430,46 @@ export class AnnotationSidebarView extends ItemView {
     };
 
     scheduleNext();
+  }
+
+  /**
+   * 正文 Markdown 的延迟渲染：卡片进入列表可视区（提前 400px）才解析。
+   * 首屏那批不走这里——可见的卡如果先显示原始 Markdown 再换成正稿会闪一下。
+   */
+  private deferCardContent(element: HTMLElement, paint: () => void): void {
+    if (typeof IntersectionObserver === "undefined") {
+      paint();
+      return;
+    }
+    if (!this.contentObserver) {
+      const root = this.containerEl.querySelector<HTMLElement>(".yh-ov-list");
+      this.contentObserver = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) {
+              continue;
+            }
+            this.contentObserver?.unobserve(entry.target);
+            const job = this.pendingContent.get(entry.target);
+            if (!job) {
+              continue;
+            }
+            this.pendingContent.delete(entry.target);
+            job();
+          }
+        },
+        { root, rootMargin: `${CONTENT_PRERENDER_MARGIN_PX}px 0px` },
+      );
+    }
+    this.pendingContent.set(element, paint);
+    this.contentObserver.observe(element);
+  }
+
+  /** 列表重建前必须清空：被移除的节点不能再留在观察器与队列里，否则是 DOM 泄漏 */
+  private resetDeferredContent(): void {
+    this.contentObserver?.disconnect();
+    this.contentObserver = null;
+    this.pendingContent.clear();
   }
 
   private scheduleCardBatch(run: () => void): void {
@@ -779,6 +837,9 @@ export class AnnotationSidebarView extends ItemView {
       },
       onJumpRelation: (relation) => void this.jumpToRelation(relation),
       onRemoveRelation: (relation) => void this.removeRelation(file, cardData, relation),
+      ...(this.deferMarkdown
+        ? { deferContent: (element: HTMLElement, paint: () => void) => this.deferCardContent(element, paint) }
+        : {}),
     };
   }
 
@@ -1149,7 +1210,8 @@ export class AnnotationSidebarView extends ItemView {
   }
 
   private filterCards(cards: SidebarCard[]): SidebarCard[] {
-    return cards
+    const needle = this.query.toLowerCase();
+    const filtered = cards
       .filter((card) => this.color === "all" || card.color === this.color)
       .filter((card) => {
         if (this.type === "all") {
@@ -1161,19 +1223,32 @@ export class AnnotationSidebarView extends ItemView {
         return Boolean(card.note);
       })
       .filter((card) => !this.tagFilter || hasTag(card.tags, this.tagFilter))
-      .filter((card) => {
-        const haystack = `${card.sourcePath} ${card.text} ${card.content} ${card.tags.join(" ")}`.toLowerCase();
-        return haystack.includes(this.query.toLowerCase());
-      })
-      .sort((a, b) => {
-        if (this.sort === "newest") {
-          return this.cardUpdatedAt(b).localeCompare(this.cardUpdatedAt(a));
-        }
-        if (this.sort === "oldest") {
-          return this.cardUpdatedAt(a).localeCompare(this.cardUpdatedAt(b));
-        }
-        return a.sourcePath.localeCompare(b.sourcePath) || (a.pageNumber ?? 0) - (b.pageNumber ?? 0) || a.startOffset - b.startOffset;
-      });
+      // 没输关键词时不必为每张卡拼一条 haystack：全库上千张卡这里是纯浪费
+      .filter((card) =>
+        needle === ""
+          ? true
+          : `${card.sourcePath} ${card.text} ${card.content} ${card.tags.join(" ")}`.toLowerCase().includes(needle),
+      );
+
+    if (this.sort === "document") {
+      // 共用同一个 Collator：String#localeCompare 每次调用都重建默认校对器，
+      // 上千张卡排序是几万次比较，这一项能差出十几毫秒
+      return filtered.sort(
+        (a, b) =>
+          PATH_COLLATOR.compare(a.sourcePath, b.sourcePath) ||
+          (a.pageNumber ?? 0) - (b.pageNumber ?? 0) ||
+          a.startOffset - b.startOffset,
+      );
+    }
+
+    // 时间排序用装饰-排序：ISO 字符串按字符序比较与时间序一致，
+    // 每张卡只取一次时间戳，比较里不再反复解析
+    const keyed = filtered.map((card) => ({ card, key: this.cardUpdatedAt(card) }));
+    keyed.sort((a, b) => (a.key === b.key ? 0 : a.key < b.key ? -1 : 1));
+    if (this.sort === "newest") {
+      keyed.reverse();
+    }
+    return keyed.map((item) => item.card);
   }
 
   private cardUpdatedAt(card: SidebarCard): string {

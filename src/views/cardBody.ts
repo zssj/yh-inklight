@@ -8,6 +8,8 @@
  *        宿主各自保留自己的状态与生命周期：侧栏是常驻列表 + 整表重绘，浮层是游离节点 + 点外关闭。
  *        展开按钮的尺寸测量按帧批量执行：先统一读 scrollHeight / lineHeight，再统一插入按钮，
  *        避免全库列表逐卡读写交替造成成百上千次强制布局。
+ *        正文 Markdown 的渲染时机可由宿主通过 deferContent 接管：侧栏让未滚到的卡先显示原文，
+ *        进入视口才解析（全库首屏因此只需解析真正可见的那几张）。
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
@@ -117,6 +119,11 @@ export interface CardBodyHost {
   onClose?: () => void;
   /** 字面相关区：宿主没给就整块不出现（PDF 之类拿不到全库快照的场景） */
   related?: RelatedBlockHost;
+  /**
+   * 接管正文 Markdown 的渲染时机：给了回调就由宿主决定何时调用 paint，
+   * 没给则立即渲染（浮层只有一张卡，不延迟）。
+   */
+  deferContent?: (element: HTMLElement, paint: () => void) => void;
   app?: App;
   component?: Component;
 }
@@ -180,19 +187,35 @@ function renderQuote(root: HTMLElement, card: SidebarCard): void {
   addExpandToggle(quote);
 }
 
+/**
+ * 卡片正文：纯 Markdown 交由 Obsidian 渲染，三行以上给「展开」。
+ * 宿主可以用 deferContent 接管渲染时机——全库列表里绝大多数卡片还没滚到，
+ * 先把原文当占位文本放进去（高度由 CSS 的三行上限兜住），进入视口才付出解析成本。
+ */
 function renderContent(root: HTMLElement, card: SidebarCard, host: CardBodyHost): void {
   if (!card.content) {
     return;
   }
   const content = root.createDiv({ cls: "yh-ov-content" });
-  if (host.app && host.component) {
+
+  const paint = (): void => {
+    if (!host.app || !host.component) {
+      content.setText(card.content);
+      addExpandToggle(content);
+      return;
+    }
+    content.empty();
     void MarkdownRenderer.render(host.app, card.content, content, card.sourcePath, host.component).then(() => {
       addExpandToggle(content);
     });
+  };
+
+  if (host.deferContent && host.app && host.component) {
+    content.setText(card.content);
+    host.deferContent(content, paint);
     return;
   }
-  content.setText(card.content);
-  addExpandToggle(content);
+  paint();
 }
 
 /** 标签行：只读 chip + 「+」；编辑态原地换成输入组件，两态都由宿主状态驱动 */

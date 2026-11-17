@@ -9467,14 +9467,23 @@ function renderContent(root, card, host) {
     return;
   }
   const content = root.createDiv({ cls: "yh-ov-content" });
-  if (host.app && host.component) {
+  const paint2 = () => {
+    if (!host.app || !host.component) {
+      content.setText(card.content);
+      addExpandToggle(content);
+      return;
+    }
+    content.empty();
     void import_obsidian4.MarkdownRenderer.render(host.app, card.content, content, card.sourcePath, host.component).then(() => {
       addExpandToggle(content);
     });
+  };
+  if (host.deferContent && host.app && host.component) {
+    content.setText(card.content);
+    host.deferContent(content, paint2);
     return;
   }
-  content.setText(card.content);
-  addExpandToggle(content);
+  paint2();
 }
 function renderTagRow(root, card, host) {
   const row = root.createDiv({ cls: "yh-ov-tags" });
@@ -13613,10 +13622,12 @@ function findOpenEpubLeaf(app, file) {
 
 // src/views/sidebarView.ts
 var ANNOTATION_SIDEBAR_VIEW = "yh-inklight-sidebar";
-var INITIAL_CARD_BATCH = 60;
-var CARD_BATCH_SIZE = 80;
+var INITIAL_CARD_BATCH = 24;
+var CARD_BATCH_SIZE = 40;
 var CARD_BATCH_TIMEOUT_MS = 120;
 var SENTINEL_MARGIN_PX = 600;
+var CONTENT_PRERENDER_MARGIN_PX = 400;
+var PATH_COLLATOR = new Intl.Collator();
 var AnnotationSidebarView = class extends import_obsidian11.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -13642,6 +13653,14 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.listToken = 0;
     /** 列表底部哨兵的观察器：滚到附近才继续追加卡片，离开面板时不白白铺 DOM */
     this.listObserver = null;
+    /**
+     * 正文 Markdown 的延迟渲染队列：key 是卡片里的 .yh-ov-content 元素，
+     * 进入列表可视区才调用 paint。随列表重建一起清空（元素已不在 DOM，不能留着观察）。
+     */
+    this.pendingContent = /* @__PURE__ */ new Map();
+    this.contentObserver = null;
+    /** 首屏那批卡片正常立即渲染（避免闪一下原始 Markdown），之后追加的才延迟 */
+    this.deferMarkdown = false;
     this.renderTimer = null;
     /**
      * 上一次成功渲染的内容指纹。内容没变（同一批批注、同一组筛选、同一个活动文件）时
@@ -13691,6 +13710,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.listToken += 1;
     this.listObserver?.disconnect();
     this.listObserver = null;
+    this.resetDeferredContent();
     this.renderedKey = "";
     this.scopeCache = null;
     this.menuPanel = null;
@@ -13776,6 +13796,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     }
     this.listObserver?.disconnect();
     this.listObserver = null;
+    this.resetDeferredContent();
     container.empty();
     container.addClass("yh-overview");
     const file = this.app.workspace.getActiveFile();
@@ -13841,6 +13862,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     const cards = this.filterCards(rawCards);
     this.listObserver?.disconnect();
     this.listObserver = null;
+    this.resetDeferredContent();
     list.empty();
     this.renderCardList(list, cards, listToken);
     const countEl = root.querySelector(".yh-ov-count");
@@ -13877,10 +13899,12 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       }
       return cursor >= cards.length;
     };
+    this.deferMarkdown = false;
     if (append(INITIAL_CARD_BATCH)) {
       sentinel.remove();
       return;
     }
+    this.deferMarkdown = true;
     const scheduleNext = () => {
       if (typeof IntersectionObserver === "undefined") {
         this.scheduleCardBatch(() => {
@@ -13924,6 +13948,44 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       observer.observe(sentinel);
     };
     scheduleNext();
+  }
+  /**
+   * 正文 Markdown 的延迟渲染：卡片进入列表可视区（提前 400px）才解析。
+   * 首屏那批不走这里——可见的卡如果先显示原始 Markdown 再换成正稿会闪一下。
+   */
+  deferCardContent(element, paint2) {
+    if (typeof IntersectionObserver === "undefined") {
+      paint2();
+      return;
+    }
+    if (!this.contentObserver) {
+      const root = this.containerEl.querySelector(".yh-ov-list");
+      this.contentObserver = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) {
+              continue;
+            }
+            this.contentObserver?.unobserve(entry.target);
+            const job = this.pendingContent.get(entry.target);
+            if (!job) {
+              continue;
+            }
+            this.pendingContent.delete(entry.target);
+            job();
+          }
+        },
+        { root, rootMargin: `${CONTENT_PRERENDER_MARGIN_PX}px 0px` }
+      );
+    }
+    this.pendingContent.set(element, paint2);
+    this.contentObserver.observe(element);
+  }
+  /** 列表重建前必须清空：被移除的节点不能再留在观察器与队列里，否则是 DOM 泄漏 */
+  resetDeferredContent() {
+    this.contentObserver?.disconnect();
+    this.contentObserver = null;
+    this.pendingContent.clear();
   }
   scheduleCardBatch(run) {
     const idle = window.requestIdleCallback;
@@ -14224,7 +14286,8 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
         delete: file ? () => void this.deleteCardWithNotice(file, cardData) : void 0
       },
       onJumpRelation: (relation) => void this.jumpToRelation(relation),
-      onRemoveRelation: (relation) => void this.removeRelation(file, cardData, relation)
+      onRemoveRelation: (relation) => void this.removeRelation(file, cardData, relation),
+      ...this.deferMarkdown ? { deferContent: (element, paint2) => this.deferCardContent(element, paint2) } : {}
     };
   }
   async deleteCardWithNotice(file, cardData) {
@@ -14550,7 +14613,8 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     return file instanceof import_obsidian11.TFile ? file : null;
   }
   filterCards(cards) {
-    return cards.filter((card) => this.color === "all" || card.color === this.color).filter((card) => {
+    const needle = this.query.toLowerCase();
+    const filtered = cards.filter((card) => this.color === "all" || card.color === this.color).filter((card) => {
       if (this.type === "all") {
         return true;
       }
@@ -14558,18 +14622,20 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
         return card.kind === "highlight";
       }
       return Boolean(card.note);
-    }).filter((card) => !this.tagFilter || hasTag(card.tags, this.tagFilter)).filter((card) => {
-      const haystack = `${card.sourcePath} ${card.text} ${card.content} ${card.tags.join(" ")}`.toLowerCase();
-      return haystack.includes(this.query.toLowerCase());
-    }).sort((a3, b3) => {
-      if (this.sort === "newest") {
-        return this.cardUpdatedAt(b3).localeCompare(this.cardUpdatedAt(a3));
-      }
-      if (this.sort === "oldest") {
-        return this.cardUpdatedAt(a3).localeCompare(this.cardUpdatedAt(b3));
-      }
-      return a3.sourcePath.localeCompare(b3.sourcePath) || (a3.pageNumber ?? 0) - (b3.pageNumber ?? 0) || a3.startOffset - b3.startOffset;
-    });
+    }).filter((card) => !this.tagFilter || hasTag(card.tags, this.tagFilter)).filter(
+      (card) => needle === "" ? true : `${card.sourcePath} ${card.text} ${card.content} ${card.tags.join(" ")}`.toLowerCase().includes(needle)
+    );
+    if (this.sort === "document") {
+      return filtered.sort(
+        (a3, b3) => PATH_COLLATOR.compare(a3.sourcePath, b3.sourcePath) || (a3.pageNumber ?? 0) - (b3.pageNumber ?? 0) || a3.startOffset - b3.startOffset
+      );
+    }
+    const keyed = filtered.map((card) => ({ card, key: this.cardUpdatedAt(card) }));
+    keyed.sort((a3, b3) => a3.key === b3.key ? 0 : a3.key < b3.key ? -1 : 1);
+    if (this.sort === "newest") {
+      keyed.reverse();
+    }
+    return keyed.map((item) => item.card);
   }
   cardUpdatedAt(card) {
     return card.note?.updatedAt ?? card.createdAt;

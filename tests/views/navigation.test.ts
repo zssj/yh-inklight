@@ -104,14 +104,18 @@ describe("openAnnotationTarget — Markdown", () => {
     expect(applyScroll).toHaveBeenCalledWith(12);
   });
 
-  it("没有已开标签页：用主区域最近 leaf 打开，绝不用 getLeaf(false)", async () => {
+  it("没有已开标签页：用主区域最近 leaf 打开，绝不用 getLeaf(false)，且必须显式激活", async () => {
     const file = new TFile("笔记/复利.md");
     const { leaf, editor } = mdLeaf(file);
-    const { app } = fakeApp([], { mostRecent: leaf });
+    const { app, revealLeaf } = fakeApp([], { mostRecent: leaf });
 
     await openAnnotationTarget(app, { file, offset: 30, pageNumber: null, mode: "md" }, vi.fn());
 
-    expect(leaf.openFile).toHaveBeenCalledTimes(1);
+    // active 显式为 true：默认值取「本 leaf 是否等于活动 leaf」，从侧栏点跳转时是 false，
+    // 文件会被静默装进后台标签页 → 正文区毫无变化、也不报错（就是「点了没反应」）
+    expect(leaf.openFile).toHaveBeenCalledWith(file, { active: true });
+    // getLeaf("tab") 只插入不激活，必须再 revealLeaf 才会切过去
+    expect(revealLeaf).toHaveBeenCalledTimes(1);
     expect(editor.setCursor).toHaveBeenCalledWith({ line: 3, ch: 0 });
   });
 
@@ -123,6 +127,6 @@ describe("openAnnotationTarget — Markdown", () => {
     await openAnnotationTarget(app, { file, offset: 0, pageNumber: null, mode: "md" }, vi.fn());
 
     expect(getLeaf).toHaveBeenCalledWith("tab");
-    expect(leaf.openFile).toHaveBeenCalledTimes(1);
+    expect(leaf.openFile).toHaveBeenCalledWith(file, { active: true });
   });
 });

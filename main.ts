@@ -1828,7 +1828,19 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       new Notice(`找不到导出笔记：${notePath}`);
       return;
     }
-    await this.app.workspace.getLeaf("tab").openFile(file);
+    await this.openFileInNewTab(file);
+  }
+
+  /**
+   * 新建标签页打开并确保真的切过去。
+   * openFile 的 active 默认值是「本 leaf 是否等于当前活动 leaf」——从侧栏/标签总览点按钮时
+   * 活动 leaf 是它们自己，文件会静默装进后台标签页；getLeaf("tab") 也只会插入、不激活。
+   * 所以必须显式 active + revealLeaf，否则表现就是「点了没反应」。
+   */
+  async openFileInNewTab(file: TFile): Promise<void> {
+    const leaf = this.app.workspace.getLeaf("tab");
+    await leaf.openFile(file, { active: true });
+    await this.app.workspace.revealLeaf(leaf);
   }
 
   /**
@@ -1860,7 +1872,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       }
       const target = this.app.vault.getAbstractFileByPath(result.path);
       if (target instanceof TFile) {
-        await this.app.workspace.getLeaf("tab").openFile(target);
+        await this.openFileInNewTab(target);
       }
       new Notice(
         result.status === "created"
@@ -1990,7 +2002,8 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       await this.app.workspace.revealLeaf(existing);
     } else {
       const leaf = this.app.workspace.getLeaf("tab");
-      await leaf.openFile(file);
+      // 显式 active：从侧栏点跳转时当前活动 leaf 是侧栏自己，默认值会让书装进后台标签页
+      await leaf.openFile(file, { active: true });
       await this.app.workspace.revealLeaf(leaf);
     }
     this.navigateEpubToCfi(file, cfi);
@@ -2026,6 +2039,9 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       // 有界重试：视图晚到时等一等，但找不到视图不能无限轮询
       if (++attempts < 40) {
         window.setTimeout(tryNavigate, 200);
+      } else {
+        // 别再静默放弃：用户点完只剩「什么都没发生」最难查
+        new Notice("没能定位到这条批注：阅读视图尚未就绪，请再点一次跳转");
       }
     };
     window.setTimeout(tryNavigate, 200);

@@ -13911,11 +13911,18 @@ async function openAnnotationTarget(app, target, navigateEpub, options) {
   }
   const opened = findLeafShowingFile(app, target.file);
   const leaf = opened ?? pickNavigationLeaf(app, options?.newTab === true);
+  console.debug(`[inklight/jump] ${target.mode} ${target.file.path}`, {
+    offset: target.offset,
+    page: target.pageNumber,
+    cfi: target.cfiRange,
+    leaf: opened ? "reuse" : "open"
+  });
   try {
     if (opened) {
       await app.workspace.revealLeaf(opened);
     } else {
-      await leaf.openFile(target.file);
+      await leaf.openFile(target.file, { active: true });
+      await app.workspace.revealLeaf(leaf);
     }
   } catch (error) {
     new import_obsidian10.Notice(`\u8DF3\u8F6C\u5931\u8D25\uFF1A${error instanceof Error ? error.message : String(error)}`);
@@ -13932,6 +13939,7 @@ async function openAnnotationTarget(app, target, navigateEpub, options) {
   }
   const view = await resolveMarkdownView(app, leaf, target.file);
   if (!view) {
+    new import_obsidian10.Notice("\u5DF2\u6253\u5F00\u6587\u4EF6\uFF0C\u4F46\u6CA1\u80FD\u5B9A\u4F4D\u5230\u6B63\u6587\uFF08\u89C6\u56FE\u672A\u5C31\u7EEA\uFF09\uFF0C\u8BF7\u518D\u70B9\u4E00\u6B21\u8DF3\u8F6C");
     return;
   }
   applyMarkdownTarget(view, target.offset);
@@ -14733,7 +14741,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
         }
       },
       actions: {
-        "open-export": exportedFile instanceof import_obsidian11.TFile ? () => void this.app.workspace.getLeaf("tab").openFile(exportedFile) : void 0,
+        "open-export": exportedFile instanceof import_obsidian11.TFile ? () => void this.plugin.openFileInNewTab(exportedFile) : void 0,
         // 提炼成卡片：门槛统一由 canExtractAtomCard 判定（只要自己写了内容，不限类型），
         // 三端浮层共用同一函数，避免这里拦了、浮层又漏出空卡
         "atom-card": file && canExtractAtomCard(cardData) ? () => void this.plugin.createAtomCardFor(cardData) : void 0,
@@ -23310,7 +23318,18 @@ ${lines.slice(0, 8).join("\n")}`);
       new import_obsidian22.Notice(`\u627E\u4E0D\u5230\u5BFC\u51FA\u7B14\u8BB0\uFF1A${notePath}`);
       return;
     }
-    await this.app.workspace.getLeaf("tab").openFile(file);
+    await this.openFileInNewTab(file);
+  }
+  /**
+   * 新建标签页打开并确保真的切过去。
+   * openFile 的 active 默认值是「本 leaf 是否等于当前活动 leaf」——从侧栏/标签总览点按钮时
+   * 活动 leaf 是它们自己，文件会静默装进后台标签页；getLeaf("tab") 也只会插入、不激活。
+   * 所以必须显式 active + revealLeaf，否则表现就是「点了没反应」。
+   */
+  async openFileInNewTab(file) {
+    const leaf = this.app.workspace.getLeaf("tab");
+    await leaf.openFile(file, { active: true });
+    await this.app.workspace.revealLeaf(leaf);
   }
   /**
    * 卡片动作「提炼成卡片」：正文只放用户自己写的那句，出处与标签进 frontmatter。
@@ -23341,7 +23360,7 @@ ${lines.slice(0, 8).join("\n")}`);
       }
       const target = this.app.vault.getAbstractFileByPath(result.path);
       if (target instanceof import_obsidian22.TFile) {
-        await this.app.workspace.getLeaf("tab").openFile(target);
+        await this.openFileInNewTab(target);
       }
       new import_obsidian22.Notice(
         result.status === "created" ? `\u5DF2\u63D0\u70BC\u6210\u5361\u7247\uFF1A${result.path}\uFF08\u6B64\u540E\u5361\u7247\u72EC\u7ACB\u751F\u957F\uFF0C\u4E0D\u518D\u4E0E\u6279\u6CE8\u540C\u6B65\uFF09` : `\u8FD9\u5F20\u5361\u7247\u5DF2\u5B58\u5728\uFF1A${result.path}\uFF08\u5DF2\u4E0E\u6279\u6CE8\u5206\u53C9\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u540C\u6B65\uFF09`
@@ -23453,7 +23472,7 @@ ${lines.slice(0, 8).join("\n")}`);
       await this.app.workspace.revealLeaf(existing);
     } else {
       const leaf = this.app.workspace.getLeaf("tab");
-      await leaf.openFile(file);
+      await leaf.openFile(file, { active: true });
       await this.app.workspace.revealLeaf(leaf);
     }
     this.navigateEpubToCfi(file, cfi);
@@ -23484,6 +23503,8 @@ ${lines.slice(0, 8).join("\n")}`);
       }
       if (++attempts < 40) {
         window.setTimeout(tryNavigate, 200);
+      } else {
+        new import_obsidian22.Notice("\u6CA1\u80FD\u5B9A\u4F4D\u5230\u8FD9\u6761\u6279\u6CE8\uFF1A\u9605\u8BFB\u89C6\u56FE\u5C1A\u672A\u5C31\u7EEA\uFF0C\u8BF7\u518D\u70B9\u4E00\u6B21\u8DF3\u8F6C");
       }
     };
     window.setTimeout(tryNavigate, 200);

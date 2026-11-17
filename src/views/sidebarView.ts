@@ -911,7 +911,7 @@ export class AnnotationSidebarView extends ItemView {
       actions: {
         "open-export":
           exportedFile instanceof TFile
-            ? () => void this.app.workspace.getLeaf("tab").openFile(exportedFile)
+            ? () => void this.plugin.openFileInNewTab(exportedFile)
             : undefined,
         // 提炼成卡片：门槛统一由 canExtractAtomCard 判定（只要自己写了内容，不限类型），
         // 三端浮层共用同一函数，避免这里拦了、浮层又漏出空卡

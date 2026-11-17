@@ -61,11 +61,24 @@ export async function openAnnotationTarget(
   // 目标文件已经在某个标签页里就直接切过去，不要为同一文件再开一个标签页
   const opened = findLeafShowingFile(app, target.file);
   const leaf = opened ?? pickNavigationLeaf(app, options?.newTab === true);
+  // 跳转失败一直最难查：留一行诊断，出问题时 DevTools 里过滤 inklight/jump 就能看到走到哪一步
+  console.debug(`[inklight/jump] ${target.mode} ${target.file.path}`, {
+    offset: target.offset,
+    page: target.pageNumber,
+    cfi: target.cfiRange,
+    leaf: opened ? "reuse" : "open",
+  });
   try {
     if (opened) {
       await app.workspace.revealLeaf(opened);
     } else {
-      await leaf.openFile(target.file);
+      // 必须显式 active：openFile 的默认值是「本 leaf 是否等于当前活动 leaf」，
+      // 而从侧栏/标签总览点跳转时活动 leaf 就是它们自己，于是文档被静默装进后台标签页
+      // （tab 条可能都不切），正文区毫无变化、也不报错 —— 用户看到的就是「点了没反应」。
+      await leaf.openFile(target.file, { active: true });
+      // 双保险：新建 tab 时 getLeaf("tab") 只是插入、不激活（除非开了 focusNewTab），
+      // 只有 revealLeaf 会 selectTab + 聚焦容器。
+      await app.workspace.revealLeaf(leaf);
     }
   } catch (error) {
     // 静默失败最难查：拿不到文件就打出来，别再让用户面对「点了没反应」
@@ -89,6 +102,8 @@ export async function openAnnotationTarget(
   // 表现就是「文件打开了但停在开头」——协议回链最容易踩这一条。
   const view = await resolveMarkdownView(app, leaf, target.file);
   if (!view) {
+    // 文件已打开但拿不到正文视图：给一次提示，而不是让用户对着「点了没反应」猜
+    new Notice("已打开文件，但没能定位到正文（视图未就绪），请再点一次跳转");
     return;
   }
 

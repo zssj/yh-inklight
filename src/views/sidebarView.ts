@@ -9,8 +9,11 @@
  *        顶部搜索/范围/筛选/排序/导出统一收进单一折叠菜单（默认收起，展开态记在视图字段上），列表区域常驻不被菜单挤压；
  *        移动端标签编辑态额外处理软键盘遮挡（列表补底部留白 + 输入框滚入可视区），不触碰阅读区；
  *        标签编辑期间 requestRender / refreshList 只登记不重绘，退出编辑后才补，且重绘重建不抢焦点；
- *        全库列表分批渲染（首屏 60 张，之后每批 80 张走空闲时段），listToken 作废旧批次；
- *        渲染前已预热关联快照时，卡片相关区直接同步取命中，不再逐卡 await prepare
+ *        全库列表按需渲染：首屏 60 张，之后由列表底部哨兵的 IntersectionObserver 驱动，
+ *        用户滚到附近才追加下一批（不再定时把全库铺完），listToken 作废旧批次；
+ *        渲染前已预热关联快照时，卡片相关区直接同步取命中，不再逐卡 await prepare；
+ *        render/refreshList 各有一次「无变化就跳过」的守卫（store.version + 筛选 + 活动文件），
+ *        避免切走再切回时把上千张卡整表重建
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
@@ -42,12 +45,17 @@ import type { TagRef } from "../storage/annotationStore";
 
 export const ANNOTATION_SIDEBAR_VIEW = "yh-inklight-sidebar";
 
-/** 首屏同步渲染的卡片数：切全库时先把可见区域铺出来，剩余分帧追加 */
+/** 首屏同步渲染的卡片数：切全库时先把可见区域铺出来，剩余按需追加 */
 const INITIAL_CARD_BATCH = 60;
 /** 后续每批追加的卡片数：单批越小，主线程被占用的时间越短 */
 const CARD_BATCH_SIZE = 80;
 /** 空闲回调的兜底等待：即使一直不空闲，也要在 120ms 内继续追加 */
 const CARD_BATCH_TIMEOUT_MS = 120;
+/**
+ * 哨兵提前量：列表底部还有这么多像素时就开始追加下一批。
+ * 只比一屏略大，保证滚动时不露白；远远不够时会一直追加，等于回到「全库铺满」。
+ */
+const SENTINEL_MARGIN_PX = 600;
 
 type AnnotationScope = "current" | "all";
 type TypeFilter = "all" | AnnotationKind;
@@ -72,7 +80,27 @@ export class AnnotationSidebarView extends ItemView {
   private renderToken = 0;
   /** 列表追加代次：新一次 render / refreshList 会作废上一轮未跑完的分批任务 */
   private listToken = 0;
+  /** 列表底部哨兵的观察器：滚到附近才继续追加卡片，离开面板时不白白铺 DOM */
+  private listObserver: IntersectionObserver | null = null;
   private renderTimer: number | null = null;
+  /**
+   * 上一次成功渲染的内容指纹。内容没变（同一批批注、同一组筛选、同一个活动文件）时
+   * requestRender 直接返回：从主界面切回侧栏、或 file-open 触发的刷新都不再重建整表。
+   */
+  private renderedKey = "";
+  /** requestRender(true) 用：刷新按钮与显式重载要绕开指纹守卫 */
+  private forceRender = false;
+  /**
+   * 全库拍平结果缓存：store.version 变化（任何写入）即失效。
+   * 避免每次重绘都 getIndexedDocuments + 对每个文档 buildCards 一遍。
+   */
+  private scopeCache: {
+    version: number;
+    scope: AnnotationScope;
+    activePath: string;
+    documents: FileAnnotationDocument[];
+    cards: SidebarCard[];
+  } | null = null;
   /**
    * 当前处于标签编辑态的卡片 id。
    * 编辑态必须记在视图上而不是只挂在 DOM class 上，否则任何一次重绘都会把输入框冲掉。
@@ -108,6 +136,8 @@ export class AnnotationSidebarView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.containerEl.addClass("yh-sidebar");
+    // 重新打开时容器可能已被清空：指纹必须作废，否则守卫会跳过一次真正需要的渲染
+    this.renderedKey = "";
     // 点击委托挂在视图根节点上：header 每次重绘都会重建按钮，
     // 绑在按钮自身上的监听会随节点一起消失，委托则始终有效。
     this.registerDomEvent(this.containerEl, "click", (event) => this.handleViewClick(event));
@@ -116,6 +146,10 @@ export class AnnotationSidebarView extends ItemView {
 
   async onClose(): Promise<void> {
     this.listToken += 1;
+    this.listObserver?.disconnect();
+    this.listObserver = null;
+    this.renderedKey = "";
+    this.scopeCache = null;
     this.menuPanel = null;
     this.menuButton = null;
     this.keyboardCleanup?.();
@@ -130,12 +164,20 @@ export class AnnotationSidebarView extends ItemView {
     }
   }
 
-  requestRender(): void {
+  /**
+   * 请求重绘。force = true 用于刷新按钮等「必须重建」的场景；
+   * 默认走指纹守卫：内容没变就不动 DOM，切走再切回不会有任何重建成本。
+   */
+  requestRender(force = false): void {
     // 标签编辑态下整表重建会删掉输入框：既丢未提交内容，又会 rAF 抢焦点把输入法顶出来。
     // 先记下请求，等编辑结束再补一次重绘。
     if (this.editingTagCardId !== null) {
       this.pendingRender = true;
+      this.forceRender = this.forceRender || force;
       return;
+    }
+    if (force) {
+      this.forceRender = true;
     }
     if (this.renderTimer !== null) {
       window.clearTimeout(this.renderTimer);
@@ -146,10 +188,65 @@ export class AnnotationSidebarView extends ItemView {
     }, 0);
   }
 
+  /**
+   * 内容指纹：只有它变化时才值得重建整张侧栏。
+   * 有意不含 openRelated（那是卡片内部 details 的展开态，重绘时由卡片自己带出）。
+   */
+  private currentKey(): string {
+    return [
+      this.annotationScope,
+      this.query,
+      this.color,
+      this.type,
+      this.sort,
+      this.tagFilter,
+      this.plugin.store.version,
+      this.app.workspace.getActiveFile()?.path ?? "",
+      this.plugin.settings.contentRelations ? 1 : 0,
+    ].join("\u0001");
+  }
+
+  /**
+   * 当前范围下的文档与卡片。全库范围按 store.version 复用上一次拍平的结果：
+   * 切走再切回、file-open 触发的刷新都不必重新读文档、重建全部卡片。
+   */
+  private async loadScope(
+    force = false,
+  ): Promise<{ documents: FileAnnotationDocument[]; cards: SidebarCard[] } | null> {
+    const file = this.app.workspace.getActiveFile();
+    if (this.annotationScope === "current" && !file) {
+      return null;
+    }
+    const activePath = this.annotationScope === "current" ? (file?.path ?? "") : "";
+    const version = this.plugin.store.version;
+    const cached = this.scopeCache;
+    if (!force && cached && cached.version === version && cached.scope === this.annotationScope && cached.activePath === activePath) {
+      return { documents: cached.documents, cards: cached.cards };
+    }
+
+    const documents =
+      this.annotationScope === "all"
+        ? await this.plugin.store.getIndexedDocuments()
+        : [await this.plugin.store.getDocument(file!)];
+    const cards = documents.flatMap((document) => buildCards(document));
+    this.scopeCache = { version, scope: this.annotationScope, activePath, documents, cards };
+    return { documents, cards };
+  }
+
   async render(): Promise<void> {
     const token = ++this.renderToken;
     const listToken = ++this.listToken;
+    const force = this.forceRender;
+    this.forceRender = false;
+    const key = this.currentKey();
     const container = this.containerEl.children[1] ?? this.containerEl;
+    // 内容没变且列表还在：直接保留现有 DOM（含滚动位置），不重建
+    if (!force && key === this.renderedKey && container.querySelector(".yh-ov-list")) {
+      return;
+    }
+    this.listObserver?.disconnect();
+    this.listObserver = null;
+
     container.empty();
     container.addClass("yh-overview");
 
@@ -159,21 +256,22 @@ export class AnnotationSidebarView extends ItemView {
 
     if (this.annotationScope === "current" && !file) {
       container.createDiv({ cls: "yh-empty", text: "Open a Markdown or PDF file to inspect annotations." });
+      this.renderedKey = key;
       return;
     }
 
-    const documents =
-      this.annotationScope === "all" ? await this.plugin.store.getIndexedDocuments() : [await this.plugin.store.getDocument(file!)];
-    if (token !== this.renderToken) {
+    const scope = await this.loadScope(force);
+    if (!scope || token !== this.renderToken) {
       return;
     }
+    const { documents } = scope;
     if (this.plugin.settings.contentRelations) {
       await this.plugin.prepareRelations(documents);
       if (token !== this.renderToken) {
         return;
       }
     }
-    const rawCards = documents.flatMap((document) => buildCards(document));
+    const rawCards = scope.cards;
     const cards = this.filterCards(rawCards);
     const highlightCount = rawCards.filter((card) => card.kind === "highlight" && !card.orphaned).length;
     const noteCount = rawCards.filter((card) => card.note && !card.orphaned).length;
@@ -182,6 +280,7 @@ export class AnnotationSidebarView extends ItemView {
 
     const list = container.createDiv({ cls: "yh-ov-list" });
     this.renderCardList(list, cards, listToken);
+    this.renderedKey = key;
   }
 
   /**
@@ -200,15 +299,16 @@ export class AnnotationSidebarView extends ItemView {
       await this.render();
       return;
     }
-    const file = this.app.workspace.getActiveFile();
-    if (this.annotationScope === "current" && !file) {
+    const key = this.currentKey();
+    if (key === this.renderedKey) {
+      return;
+    }
+    const scope = await this.loadScope();
+    if (!scope) {
       await this.render();
       return;
     }
-    const documents =
-      this.annotationScope === "all"
-        ? await this.plugin.store.getIndexedDocuments()
-        : [await this.plugin.store.getDocument(file!)];
+    const { documents, cards: rawCards } = scope;
     if (this.plugin.settings.contentRelations) {
       await this.plugin.prepareRelations(documents);
     }
@@ -216,9 +316,10 @@ export class AnnotationSidebarView extends ItemView {
     if (listToken !== this.listToken) {
       return;
     }
-    const rawCards = documents.flatMap((document) => buildCards(document));
     const cards = this.filterCards(rawCards);
 
+    this.listObserver?.disconnect();
+    this.listObserver = null;
     list.empty();
     this.renderCardList(list, cards, listToken);
 
@@ -229,12 +330,16 @@ export class AnnotationSidebarView extends ItemView {
       const scopeLabel = this.annotationScope === "all" ? `${documents.length} files` : "current file";
       countEl.textContent = `${scopeLabel} · ${highlightCount} highlights · ${noteCount} notes`;
     }
+    this.renderedKey = key;
   }
 
   /**
-   * 列表分批渲染：先同步铺首屏，剩余用空闲时段追加。
-   * 全库几千张卡一次性建 DOM 会形成单个长任务；分批后首屏立刻可交互，
-   * 内容、顺序与筛选结果都与一次性渲染完全一致，只是到达时间不同。
+   * 列表按需渲染：先同步铺首屏，剩余卡片等哨兵滚到附近再追加。
+   *
+   * 早先的做法是「定时把所有批次铺完」，结果是切到全库后一秒内就把全库上千张卡
+   * 全塞进 DOM——之后每次从主界面切回侧栏，浏览器都要为整棵树重做样式与布局，
+   * 手机上还会因为节点过多被系统回收。改成按需追加后，DOM 规模跟着实际滚动深度走；
+   * 内容、顺序与筛选结果不变，只是还没滚到的卡片尚未创建。
    */
   private renderCardList(list: Element, cards: SidebarCard[], token: number): void {
     if (!cards.length) {
@@ -242,29 +347,71 @@ export class AnnotationSidebarView extends ItemView {
       return;
     }
 
-    const firstEnd = Math.min(INITIAL_CARD_BATCH, cards.length);
-    for (let index = 0; index < firstEnd; index += 1) {
-      this.renderCard(list, cards[index]);
-    }
-    if (firstEnd >= cards.length) {
+    let cursor = 0;
+    // 哨兵永远作为列表最后一个子节点：卡片插在它前面，滚到它就追加下一批
+    const sentinel = list.createDiv({ cls: "yh-ov-sentinel" });
+
+    const append = (size: number): boolean => {
+      if (token !== this.listToken) {
+        return true;
+      }
+      const end = Math.min(cursor + size, cards.length);
+      for (; cursor < end; cursor += 1) {
+        this.renderCardBefore(list, cards[cursor], sentinel);
+      }
+      return cursor >= cards.length;
+    };
+
+    if (append(INITIAL_CARD_BATCH)) {
+      sentinel.remove();
       return;
     }
 
-    let cursor = firstEnd;
-    const append = (): void => {
-      // 新一轮 render / refreshList 已开始：旧批次作废，避免往已清空的列表里补卡
-      if (token !== this.listToken) {
+    const scheduleNext = (): void => {
+      if (typeof IntersectionObserver === "undefined") {
+        // 老 WebView 没有观察器：退回「空闲时段继续追加」，行为与本轮之前一致
+        this.scheduleCardBatch(() => {
+          if (!append(CARD_BATCH_SIZE)) {
+            scheduleNext();
+          } else {
+            sentinel.remove();
+          }
+        });
         return;
       }
-      const end = Math.min(cursor + CARD_BATCH_SIZE, cards.length);
-      for (; cursor < end; cursor += 1) {
-        this.renderCard(list, cards[cursor]);
+      if (this.listObserver) {
+        return;
       }
-      if (cursor < cards.length) {
-        this.scheduleCardBatch(append);
-      }
+      const observer = new IntersectionObserver(
+        (entries) => {
+          if (token !== this.listToken) {
+            observer.disconnect();
+            if (this.listObserver === observer) {
+              this.listObserver = null;
+            }
+            return;
+          }
+          if (!entries.some((entry) => entry.isIntersecting)) {
+            return;
+          }
+          observer.disconnect();
+          if (this.listObserver === observer) {
+            this.listObserver = null;
+          }
+          if (append(CARD_BATCH_SIZE)) {
+            sentinel.remove();
+          } else {
+            scheduleNext();
+          }
+        },
+        // 观察器以列表自身为根：侧栏被折叠时哨兵不可见，不会继续铺 DOM
+        { root: list as HTMLElement, rootMargin: `${SENTINEL_MARGIN_PX}px 0px` },
+      );
+      this.listObserver = observer;
+      observer.observe(sentinel);
     };
-    this.scheduleCardBatch(append);
+
+    scheduleNext();
   }
 
   private scheduleCardBatch(run: () => void): void {
@@ -303,7 +450,7 @@ export class AnnotationSidebarView extends ItemView {
       attr: { type: "button", title: "Refresh", "aria-label": "Refresh annotations" },
     });
     setIcon(refresh, "refresh-cw");
-    refresh.addEventListener("click", () => this.requestRender());
+    refresh.addEventListener("click", () => this.requestRender(true));
 
     const close = actions.createEl("button", {
       cls: "yh-icon-btn yh-ov-close",
@@ -516,9 +663,22 @@ export class AnnotationSidebarView extends ItemView {
     });
   }
 
-  private renderCard(list: Element, cardData: SidebarCard): void {
+  /** 把卡片插到哨兵之前：哨兵始终是列表最后一个节点，观察器才代表「已渲染的末尾」 */
+  private renderCardBefore(list: Element, cardData: SidebarCard, before: Element | null): void {
+    const node = this.buildCardElement(cardData);
+    if (before && before.parentElement === list) {
+      list.insertBefore(node, before);
+      return;
+    }
+    list.appendChild(node);
+  }
+
+  private buildCardElement(cardData: SidebarCard): HTMLElement {
     const file = this.fileForCard(cardData);
-    const card = list.createDiv({ attr: this.cardAttributes(cardData) });
+    const card = document.createElement("div");
+    for (const [name, value] of Object.entries(this.cardAttributes(cardData))) {
+      card.setAttribute(name, value);
+    }
     // 内容、字段顺序、动作行由 views/cardBody 唯一产出，与点击高亮的浮层是同一份 DOM
     renderCardBody(card, cardData, this.buildCardHost(cardData, file, card));
 
@@ -544,14 +704,9 @@ export class AnnotationSidebarView extends ItemView {
       );
     }
 
-    const edit = card.createDiv({ cls: "yh-ov-edit hidden" });
-    edit.createEl("textarea", {
-      cls: "yh-ov-textarea",
-      attr: { placeholder: "写下你的想法..." },
-    });
-    const editActions = edit.createDiv({ cls: "yh-ov-edit-actions" });
-    editActions.createEl("button", { cls: "yh-ov-save", text: "保存", attr: { type: "button" } });
-    editActions.createEl("button", { cls: "yh-ov-cancel", text: "取消", attr: { type: "button" } });
+    // 行内编辑区不预建：全库上千张卡各带一个 textarea 是纯内存浪费，
+    // 点「添加/编辑笔记」时由 openInlineEditor 现建
+    return card;
   }
 
   /**
@@ -828,10 +983,33 @@ export class AnnotationSidebarView extends ItemView {
   }
 
   private openInlineEditor(card: HTMLElement, file: TFile, cardData: SidebarCard, initialValue: string): void {
-    const edit = card.querySelector<HTMLElement>(".yh-ov-edit");
-    const textarea = card.querySelector<HTMLTextAreaElement>(".yh-ov-textarea");
-    const save = card.querySelector<HTMLButtonElement>(".yh-ov-save");
-    const cancel = card.querySelector<HTMLButtonElement>(".yh-ov-cancel");
+    // 编辑区按需创建（列表渲染时不再为每张卡预建 textarea + 两个按钮）
+    let edit = card.querySelector<HTMLElement>(".yh-ov-edit");
+    if (!edit) {
+      edit = document.createElement("div");
+      edit.className = "yh-ov-edit hidden";
+      const field = document.createElement("textarea");
+      field.className = "yh-ov-textarea";
+      field.placeholder = "写下你的想法...";
+      edit.appendChild(field);
+      const actions = document.createElement("div");
+      actions.className = "yh-ov-edit-actions";
+      const saveButton = document.createElement("button");
+      saveButton.className = "yh-ov-save";
+      saveButton.type = "button";
+      saveButton.textContent = "保存";
+      const cancelButton = document.createElement("button");
+      cancelButton.className = "yh-ov-cancel";
+      cancelButton.type = "button";
+      cancelButton.textContent = "取消";
+      actions.appendChild(saveButton);
+      actions.appendChild(cancelButton);
+      edit.appendChild(actions);
+      card.appendChild(edit);
+    }
+    const textarea = edit.querySelector<HTMLTextAreaElement>(".yh-ov-textarea");
+    const save = edit.querySelector<HTMLButtonElement>(".yh-ov-save");
+    const cancel = edit.querySelector<HTMLButtonElement>(".yh-ov-cancel");
     const addNote = card.querySelector<HTMLElement>('[data-action="add-note"]');
     if (!edit || !textarea || !save || !cancel) {
       return;

@@ -13616,6 +13616,7 @@ var ANNOTATION_SIDEBAR_VIEW = "yh-inklight-sidebar";
 var INITIAL_CARD_BATCH = 60;
 var CARD_BATCH_SIZE = 80;
 var CARD_BATCH_TIMEOUT_MS = 120;
+var SENTINEL_MARGIN_PX = 600;
 var AnnotationSidebarView = class extends import_obsidian11.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -13639,7 +13640,21 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.renderToken = 0;
     /** 列表追加代次：新一次 render / refreshList 会作废上一轮未跑完的分批任务 */
     this.listToken = 0;
+    /** 列表底部哨兵的观察器：滚到附近才继续追加卡片，离开面板时不白白铺 DOM */
+    this.listObserver = null;
     this.renderTimer = null;
+    /**
+     * 上一次成功渲染的内容指纹。内容没变（同一批批注、同一组筛选、同一个活动文件）时
+     * requestRender 直接返回：从主界面切回侧栏、或 file-open 触发的刷新都不再重建整表。
+     */
+    this.renderedKey = "";
+    /** requestRender(true) 用：刷新按钮与显式重载要绕开指纹守卫 */
+    this.forceRender = false;
+    /**
+     * 全库拍平结果缓存：store.version 变化（任何写入）即失效。
+     * 避免每次重绘都 getIndexedDocuments + 对每个文档 buildCards 一遍。
+     */
+    this.scopeCache = null;
     /**
      * 当前处于标签编辑态的卡片 id。
      * 编辑态必须记在视图上而不是只挂在 DOM class 上，否则任何一次重绘都会把输入框冲掉。
@@ -13668,11 +13683,16 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
   }
   async onOpen() {
     this.containerEl.addClass("yh-sidebar");
+    this.renderedKey = "";
     this.registerDomEvent(this.containerEl, "click", (event) => this.handleViewClick(event));
     await this.render();
   }
   async onClose() {
     this.listToken += 1;
+    this.listObserver?.disconnect();
+    this.listObserver = null;
+    this.renderedKey = "";
+    this.scopeCache = null;
     this.menuPanel = null;
     this.menuButton = null;
     this.keyboardCleanup?.();
@@ -13686,10 +13706,18 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       this.renderTimer = null;
     }
   }
-  requestRender() {
+  /**
+   * 请求重绘。force = true 用于刷新按钮等「必须重建」的场景；
+   * 默认走指纹守卫：内容没变就不动 DOM，切走再切回不会有任何重建成本。
+   */
+  requestRender(force = false) {
     if (this.editingTagCardId !== null) {
       this.pendingRender = true;
+      this.forceRender = this.forceRender || force;
       return;
+    }
+    if (force) {
+      this.forceRender = true;
     }
     if (this.renderTimer !== null) {
       window.clearTimeout(this.renderTimer);
@@ -13699,10 +13727,55 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       void this.render();
     }, 0);
   }
+  /**
+   * 内容指纹：只有它变化时才值得重建整张侧栏。
+   * 有意不含 openRelated（那是卡片内部 details 的展开态，重绘时由卡片自己带出）。
+   */
+  currentKey() {
+    return [
+      this.annotationScope,
+      this.query,
+      this.color,
+      this.type,
+      this.sort,
+      this.tagFilter,
+      this.plugin.store.version,
+      this.app.workspace.getActiveFile()?.path ?? "",
+      this.plugin.settings.contentRelations ? 1 : 0
+    ].join("");
+  }
+  /**
+   * 当前范围下的文档与卡片。全库范围按 store.version 复用上一次拍平的结果：
+   * 切走再切回、file-open 触发的刷新都不必重新读文档、重建全部卡片。
+   */
+  async loadScope(force = false) {
+    const file = this.app.workspace.getActiveFile();
+    if (this.annotationScope === "current" && !file) {
+      return null;
+    }
+    const activePath = this.annotationScope === "current" ? file?.path ?? "" : "";
+    const version = this.plugin.store.version;
+    const cached = this.scopeCache;
+    if (!force && cached && cached.version === version && cached.scope === this.annotationScope && cached.activePath === activePath) {
+      return { documents: cached.documents, cards: cached.cards };
+    }
+    const documents = this.annotationScope === "all" ? await this.plugin.store.getIndexedDocuments() : [await this.plugin.store.getDocument(file)];
+    const cards = documents.flatMap((document2) => buildCards(document2));
+    this.scopeCache = { version, scope: this.annotationScope, activePath, documents, cards };
+    return { documents, cards };
+  }
   async render() {
     const token = ++this.renderToken;
     const listToken = ++this.listToken;
+    const force = this.forceRender;
+    this.forceRender = false;
+    const key = this.currentKey();
     const container = this.containerEl.children[1] ?? this.containerEl;
+    if (!force && key === this.renderedKey && container.querySelector(".yh-ov-list")) {
+      return;
+    }
+    this.listObserver?.disconnect();
+    this.listObserver = null;
     container.empty();
     container.addClass("yh-overview");
     const file = this.app.workspace.getActiveFile();
@@ -13710,19 +13783,21 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.renderMenu(container, file);
     if (this.annotationScope === "current" && !file) {
       container.createDiv({ cls: "yh-empty", text: "Open a Markdown or PDF file to inspect annotations." });
+      this.renderedKey = key;
       return;
     }
-    const documents = this.annotationScope === "all" ? await this.plugin.store.getIndexedDocuments() : [await this.plugin.store.getDocument(file)];
-    if (token !== this.renderToken) {
+    const scope = await this.loadScope(force);
+    if (!scope || token !== this.renderToken) {
       return;
     }
+    const { documents } = scope;
     if (this.plugin.settings.contentRelations) {
       await this.plugin.prepareRelations(documents);
       if (token !== this.renderToken) {
         return;
       }
     }
-    const rawCards = documents.flatMap((document2) => buildCards(document2));
+    const rawCards = scope.cards;
     const cards = this.filterCards(rawCards);
     const highlightCount = rawCards.filter((card) => card.kind === "highlight" && !card.orphaned).length;
     const noteCount = rawCards.filter((card) => card.note && !card.orphaned).length;
@@ -13730,6 +13805,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     container.createDiv({ cls: "yh-ov-count", text: `${scopeLabel} \xB7 ${highlightCount} highlights \xB7 ${noteCount} notes` });
     const list = container.createDiv({ cls: "yh-ov-list" });
     this.renderCardList(list, cards, listToken);
+    this.renderedKey = key;
   }
   /**
    * 只刷新卡片列表（不重建搜索框等控件），用于搜索输入时保持焦点。
@@ -13746,20 +13822,25 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       await this.render();
       return;
     }
-    const file = this.app.workspace.getActiveFile();
-    if (this.annotationScope === "current" && !file) {
+    const key = this.currentKey();
+    if (key === this.renderedKey) {
+      return;
+    }
+    const scope = await this.loadScope();
+    if (!scope) {
       await this.render();
       return;
     }
-    const documents = this.annotationScope === "all" ? await this.plugin.store.getIndexedDocuments() : [await this.plugin.store.getDocument(file)];
+    const { documents, cards: rawCards } = scope;
     if (this.plugin.settings.contentRelations) {
       await this.plugin.prepareRelations(documents);
     }
     if (listToken !== this.listToken) {
       return;
     }
-    const rawCards = documents.flatMap((document2) => buildCards(document2));
     const cards = this.filterCards(rawCards);
+    this.listObserver?.disconnect();
+    this.listObserver = null;
     list.empty();
     this.renderCardList(list, cards, listToken);
     const countEl = root.querySelector(".yh-ov-count");
@@ -13769,38 +13850,80 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       const scopeLabel = this.annotationScope === "all" ? `${documents.length} files` : "current file";
       countEl.textContent = `${scopeLabel} \xB7 ${highlightCount} highlights \xB7 ${noteCount} notes`;
     }
+    this.renderedKey = key;
   }
   /**
-   * 列表分批渲染：先同步铺首屏，剩余用空闲时段追加。
-   * 全库几千张卡一次性建 DOM 会形成单个长任务；分批后首屏立刻可交互，
-   * 内容、顺序与筛选结果都与一次性渲染完全一致，只是到达时间不同。
+   * 列表按需渲染：先同步铺首屏，剩余卡片等哨兵滚到附近再追加。
+   *
+   * 早先的做法是「定时把所有批次铺完」，结果是切到全库后一秒内就把全库上千张卡
+   * 全塞进 DOM——之后每次从主界面切回侧栏，浏览器都要为整棵树重做样式与布局，
+   * 手机上还会因为节点过多被系统回收。改成按需追加后，DOM 规模跟着实际滚动深度走；
+   * 内容、顺序与筛选结果不变，只是还没滚到的卡片尚未创建。
    */
   renderCardList(list, cards, token) {
     if (!cards.length) {
       list.createDiv({ cls: "yh-empty", text: "No matching annotations." });
       return;
     }
-    const firstEnd = Math.min(INITIAL_CARD_BATCH, cards.length);
-    for (let index = 0; index < firstEnd; index += 1) {
-      this.renderCard(list, cards[index]);
-    }
-    if (firstEnd >= cards.length) {
+    let cursor = 0;
+    const sentinel = list.createDiv({ cls: "yh-ov-sentinel" });
+    const append = (size) => {
+      if (token !== this.listToken) {
+        return true;
+      }
+      const end = Math.min(cursor + size, cards.length);
+      for (; cursor < end; cursor += 1) {
+        this.renderCardBefore(list, cards[cursor], sentinel);
+      }
+      return cursor >= cards.length;
+    };
+    if (append(INITIAL_CARD_BATCH)) {
+      sentinel.remove();
       return;
     }
-    let cursor = firstEnd;
-    const append = () => {
-      if (token !== this.listToken) {
+    const scheduleNext = () => {
+      if (typeof IntersectionObserver === "undefined") {
+        this.scheduleCardBatch(() => {
+          if (!append(CARD_BATCH_SIZE)) {
+            scheduleNext();
+          } else {
+            sentinel.remove();
+          }
+        });
         return;
       }
-      const end = Math.min(cursor + CARD_BATCH_SIZE, cards.length);
-      for (; cursor < end; cursor += 1) {
-        this.renderCard(list, cards[cursor]);
+      if (this.listObserver) {
+        return;
       }
-      if (cursor < cards.length) {
-        this.scheduleCardBatch(append);
-      }
+      const observer = new IntersectionObserver(
+        (entries) => {
+          if (token !== this.listToken) {
+            observer.disconnect();
+            if (this.listObserver === observer) {
+              this.listObserver = null;
+            }
+            return;
+          }
+          if (!entries.some((entry) => entry.isIntersecting)) {
+            return;
+          }
+          observer.disconnect();
+          if (this.listObserver === observer) {
+            this.listObserver = null;
+          }
+          if (append(CARD_BATCH_SIZE)) {
+            sentinel.remove();
+          } else {
+            scheduleNext();
+          }
+        },
+        // 观察器以列表自身为根：侧栏被折叠时哨兵不可见，不会继续铺 DOM
+        { root: list, rootMargin: `${SENTINEL_MARGIN_PX}px 0px` }
+      );
+      this.listObserver = observer;
+      observer.observe(sentinel);
     };
-    this.scheduleCardBatch(append);
+    scheduleNext();
   }
   scheduleCardBatch(run) {
     const idle = window.requestIdleCallback;
@@ -13831,7 +13954,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       attr: { type: "button", title: "Refresh", "aria-label": "Refresh annotations" }
     });
     (0, import_obsidian11.setIcon)(refresh, "refresh-cw");
-    refresh.addEventListener("click", () => this.requestRender());
+    refresh.addEventListener("click", () => this.requestRender(true));
     const close = actions.createEl("button", {
       cls: "yh-icon-btn yh-ov-close",
       attr: { type: "button", title: "Close panel", "aria-label": "Close panel" }
@@ -14010,9 +14133,21 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       this.exportFormat = exportFormat.value;
     });
   }
-  renderCard(list, cardData) {
+  /** 把卡片插到哨兵之前：哨兵始终是列表最后一个节点，观察器才代表「已渲染的末尾」 */
+  renderCardBefore(list, cardData, before) {
+    const node = this.buildCardElement(cardData);
+    if (before && before.parentElement === list) {
+      list.insertBefore(node, before);
+      return;
+    }
+    list.appendChild(node);
+  }
+  buildCardElement(cardData) {
     const file = this.fileForCard(cardData);
-    const card = list.createDiv({ attr: this.cardAttributes(cardData) });
+    const card = document.createElement("div");
+    for (const [name, value] of Object.entries(this.cardAttributes(cardData))) {
+      card.setAttribute(name, value);
+    }
     renderCardBody(card, cardData, this.buildCardHost(cardData, file, card));
     if (this.plugin.settings.contentRelations) {
       renderRelatedBlock(
@@ -14034,14 +14169,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
         )
       );
     }
-    const edit = card.createDiv({ cls: "yh-ov-edit hidden" });
-    edit.createEl("textarea", {
-      cls: "yh-ov-textarea",
-      attr: { placeholder: "\u5199\u4E0B\u4F60\u7684\u60F3\u6CD5..." }
-    });
-    const editActions = edit.createDiv({ cls: "yh-ov-edit-actions" });
-    editActions.createEl("button", { cls: "yh-ov-save", text: "\u4FDD\u5B58", attr: { type: "button" } });
-    editActions.createEl("button", { cls: "yh-ov-cancel", text: "\u53D6\u6D88", attr: { type: "button" } });
+    return card;
   }
   /**
    * 把视图能力组装成卡片回调：渲染器只认这张表，列表与浮层各给各的。
@@ -14269,10 +14397,32 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     return attrs;
   }
   openInlineEditor(card, file, cardData, initialValue) {
-    const edit = card.querySelector(".yh-ov-edit");
-    const textarea = card.querySelector(".yh-ov-textarea");
-    const save = card.querySelector(".yh-ov-save");
-    const cancel = card.querySelector(".yh-ov-cancel");
+    let edit = card.querySelector(".yh-ov-edit");
+    if (!edit) {
+      edit = document.createElement("div");
+      edit.className = "yh-ov-edit hidden";
+      const field = document.createElement("textarea");
+      field.className = "yh-ov-textarea";
+      field.placeholder = "\u5199\u4E0B\u4F60\u7684\u60F3\u6CD5...";
+      edit.appendChild(field);
+      const actions = document.createElement("div");
+      actions.className = "yh-ov-edit-actions";
+      const saveButton = document.createElement("button");
+      saveButton.className = "yh-ov-save";
+      saveButton.type = "button";
+      saveButton.textContent = "\u4FDD\u5B58";
+      const cancelButton = document.createElement("button");
+      cancelButton.className = "yh-ov-cancel";
+      cancelButton.type = "button";
+      cancelButton.textContent = "\u53D6\u6D88";
+      actions.appendChild(saveButton);
+      actions.appendChild(cancelButton);
+      edit.appendChild(actions);
+      card.appendChild(edit);
+    }
+    const textarea = edit.querySelector(".yh-ov-textarea");
+    const save = edit.querySelector(".yh-ov-save");
+    const cancel = edit.querySelector(".yh-ov-cancel");
     const addNote = card.querySelector('[data-action="add-note"]');
     if (!edit || !textarea || !save || !cancel) {
       return;

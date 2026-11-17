@@ -408,6 +408,23 @@
   position: relative;
 }
 
+/*
+ * 列表按需渲染的二道保险：视口外的卡片跳过样式/布局/绘制。
+ * 列表按需追加只能限制「没滚到的卡不建」，已经建好的卡仍留在 DOM 里；
+ * 从主界面切回侧栏时，浏览器原本要为整棵树重排，上千张卡就是那一下卡顿。
+ * auto 关键字会记住卡片真实尺寸，滚动条不会先跳到估算值。仅列表内生效，浮层卡片不受影响。
+ */
+.yh-ov-list > .yh-ov-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 160px;
+}
+
+/* 哨兵：列表末尾的 1px 探针，IntersectionObserver 靠它判断「滚到底了」 */
+.yh-ov-sentinel {
+  flex: 0 0 auto;
+  height: 1px;
+}
+
 .yh-ov-card:hover {
   box-shadow: 0 3px 12px rgba(0, 0, 0, 0.1);
 }

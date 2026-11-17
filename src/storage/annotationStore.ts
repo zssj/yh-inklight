@@ -1,6 +1,8 @@
 /**
  * [INPUT]: 依赖 obsidian App/Vault/Adapter 的文件读写能力，依赖 storage/types 的 sidecar JSON 合约
- * [OUTPUT]: 对外提供 AnnotationStore，负责 Markdown/PDF/EPUB 的 .obsidian-annotations sidecar 文件、索引、标签索引与标签字典、缓存、导出（单文件/全库/按标签 MOC 页，正文按批注块增量合并）、孤立批注清理与文件哈希校验迁移
+ * [OUTPUT]: 对外提供 AnnotationStore，负责 Markdown/PDF/EPUB 的 .obsidian-annotations sidecar 文件、索引、标签索引与标签字典、
+ *           标签批量重命名/删除（含影响范围统计、同名合并、失败汇总）、缓存、导出（单文件/全库/按标签 MOC 页，正文按批注块增量合并）、
+ *           孤立批注清理与文件哈希校验迁移
  * [POS]: storage 模块的唯一持久化入口，隔离原始 Markdown 与注释数据
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
@@ -27,7 +29,7 @@ import {
   EpubReadingProgress,
   ReadingBookmark,
 } from "./types";
-import { normalizeTags, sortTagKeys, tagKey, toObsidianTag, toObsidianTags } from "./tags";
+import { normalizeTag, normalizeTags, sortTagKeys, tagKey, toObsidianTag, toObsidianTags } from "./tags";
 import { buildSourceLinkUrl } from "./sourceLink";
 
 const STORE_DIR = ".obsidian-annotations";
@@ -89,6 +91,21 @@ interface ExportEntry {
 export interface TagRef {
   filePath: string;
   annotationId: string;
+}
+
+/** 标签影响范围：删除/重命名前给用户看的确认数据 */
+export interface TagUsage {
+  fileCount: number;
+  annotationCount: number;
+}
+
+/** 批量改标签的结果。失败文件单独列出，调用方必须提示用户，不能静默当成全部成功 */
+export interface TagMutationResult {
+  changedFiles: number;
+  changedAnnotations: number;
+  failed: Array<{ filePath: string; message: string }>;
+  /** 重命名后的比较键；删除时为 undefined */
+  newKey?: string;
 }
 
 /** 提炼原子卡的输入：全部来自侧栏卡片，store 不需要再回查 sidecar */
@@ -613,6 +630,241 @@ export class AnnotationStore {
       };
       await this.saveDocument(nextDocument);
     }
+  }
+
+  /**
+   * 统计某个标签实际影响的范围。索引给出候选文件，最终以 sidecar 里的批注为准：
+   * 索引可能比 sidecar 旧（历史版本、手工改动），确认框不能拿过期数字吓用户。
+   */
+  async getTagUsage(key: string): Promise<TagUsage> {
+    const target = tagKey(key);
+    let fileCount = 0;
+    let annotationCount = 0;
+
+    for (const [filePath, entry] of Object.entries(this.index.files)) {
+      if (!(entry.tags ?? []).includes(target)) {
+        continue;
+      }
+      const file = this.app.vault.getAbstractFileByPath(filePath);
+      if (!(file instanceof TFile)) {
+        continue;
+      }
+      const document = await this.getDocument(file);
+      const count = this.countTagInDocument(document, target);
+      if (count > 0) {
+        fileCount += 1;
+        annotationCount += count;
+      }
+    }
+
+    return { fileCount, annotationCount };
+  }
+
+  /**
+   * 全局重命名标签：逐个文件改批注里的标签，再重建 tagNames。
+   * 目标标签已存在时按 tagKey 合并（同一条批注只保留目标写法），不会把 12 个标签的上限撑爆。
+   * 某个文件失败不会中断其余文件：失败的保留原标签并在结果里列出，避免「改一半还报成功」。
+   */
+  async renameTag(oldKeyRaw: string, newNameRaw: string): Promise<TagMutationResult> {
+    const oldKey = tagKey(oldKeyRaw);
+    const display = normalizeTag(newNameRaw);
+    if (!oldKey || !display) {
+      throw new Error("标签名为空或无效");
+    }
+    const newKey = tagKey(display);
+    const result: TagMutationResult = {
+      changedFiles: 0,
+      changedAnnotations: 0,
+      failed: [],
+      newKey,
+    };
+
+    if (newKey === oldKey && display === this.getTagDisplayName(oldKey)) {
+      return result;
+    }
+
+    const paths = Object.keys(this.index.files).filter((filePath) =>
+      (this.index.files[filePath].tags ?? []).includes(oldKey),
+    );
+
+    // 先把新展示名写进 tagNames，后续 saveDocument 的 mergeTagNames 会保留它；
+    // 旧 key 先留着，失败文件仍需保留旧展示名，最后统一按索引里实际存在的 key 重建。
+    this.index = {
+      ...this.index,
+      tagNames: { ...(this.index.tagNames ?? {}), [newKey]: display },
+    };
+
+    for (const filePath of paths) {
+      const file = this.app.vault.getAbstractFileByPath(filePath);
+      if (!(file instanceof TFile)) {
+        result.failed.push({ filePath, message: "源文件不存在" });
+        continue;
+      }
+
+      try {
+        const document = await this.getDocument(file);
+        const { document: nextDocument, changed } = this.rewriteDocumentTags(document, (tags) => {
+          const next: string[] = [];
+          let replaced = false;
+          for (const tag of tags) {
+            if (tagKey(tag) === oldKey) {
+              if (!replaced) {
+                next.push(display);
+                replaced = true;
+              }
+            } else {
+              next.push(tag);
+            }
+          }
+          return next;
+        });
+
+        if (changed > 0) {
+          await this.saveDocument(nextDocument);
+          result.changedFiles += 1;
+          result.changedAnnotations += changed;
+        }
+      } catch (error) {
+        result.failed.push({
+          filePath,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    await this.persistTagNames();
+    return result;
+  }
+
+  /**
+   * 全局删除标签：从所有批注上摘掉该标签，不删除任何批注或原文。
+   * 与重命名同一套逐文件保存 + 失败汇总策略；单个文件失败时该文件的标签保留。
+   */
+  async deleteTag(keyRaw: string): Promise<TagMutationResult> {
+    const target = tagKey(keyRaw);
+    const result: TagMutationResult = {
+      changedFiles: 0,
+      changedAnnotations: 0,
+      failed: [],
+    };
+    if (!target) {
+      return result;
+    }
+
+    const paths = Object.keys(this.index.files).filter((filePath) =>
+      (this.index.files[filePath].tags ?? []).includes(target),
+    );
+
+    for (const filePath of paths) {
+      const file = this.app.vault.getAbstractFileByPath(filePath);
+      if (!(file instanceof TFile)) {
+        result.failed.push({ filePath, message: "源文件不存在" });
+        continue;
+      }
+
+      try {
+        const document = await this.getDocument(file);
+        const { document: nextDocument, changed } = this.rewriteDocumentTags(
+          document,
+          (tags) => tags.filter((tag) => tagKey(tag) !== target),
+        );
+
+        if (changed > 0) {
+          await this.saveDocument(nextDocument);
+          result.changedFiles += 1;
+          result.changedAnnotations += changed;
+        }
+      } catch (error) {
+        result.failed.push({
+          filePath,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    await this.persistTagNames();
+    return result;
+  }
+
+  /** 只改写有标签的批注；返回新文档与被改动的批注条数 */
+  private rewriteDocumentTags(
+    document: FileAnnotationDocument,
+    rewrite: (tags: readonly string[]) => string[],
+  ): { document: FileAnnotationDocument; changed: number } {
+    let changed = 0;
+    const apply = <T extends { tags?: string[] }>(item: T): T => {
+      if (!item.tags || item.tags.length === 0) {
+        return item;
+      }
+      const before = normalizeTags(item.tags);
+      const after = normalizeTags(rewrite(before));
+      if (before.length === after.length && before.every((tag, index) => tag === after[index])) {
+        return item;
+      }
+      changed += 1;
+      const clone = { ...item };
+      if (after.length > 0) {
+        clone.tags = after;
+      } else {
+        delete clone.tags;
+      }
+      return clone;
+    };
+
+    return {
+      document: {
+        ...document,
+        highlights: document.highlights.map(apply),
+        comments: document.comments.map(apply),
+        pdfHighlights: document.pdfHighlights.map(apply),
+        pdfComments: document.pdfComments.map(apply),
+        epubHighlights: document.epubHighlights.map(apply),
+        epubComments: document.epubComments.map(apply),
+      },
+      changed,
+    };
+  }
+
+  /** 批注里出现某标签的次数（高亮与其笔记各算一条） */
+  private countTagInDocument(document: FileAnnotationDocument, target: string): number {
+    const items = [
+      ...document.highlights,
+      ...document.comments,
+      ...document.pdfHighlights,
+      ...document.pdfComments,
+      ...document.epubHighlights,
+      ...document.epubComments,
+    ];
+    return items.reduce(
+      (count, item) => count + ((item.tags ?? []).some((tag) => tagKey(tag) === target) ? 1 : 0),
+      0,
+    );
+  }
+
+  /**
+   * 按索引里实际存在的标签重建 tagNames。
+   * saveDocument 的 mergeTagNames 只增不删，重命名/删除后必须走这一道，否则旧 key 会永远留在字典里。
+   */
+  private async persistTagNames(): Promise<void> {
+    const previous = this.index.tagNames ?? {};
+    const next: Record<string, string> = {};
+    for (const entry of Object.values(this.index.files)) {
+      for (const key of entry.tags ?? []) {
+        if (!next[key]) {
+          next[key] = previous[key] ?? key;
+        }
+      }
+    }
+
+    const same = Object.keys(next).length === Object.keys(previous).length
+      && Object.entries(next).every(([key, value]) => previous[key] === value);
+    if (same) {
+      return;
+    }
+
+    this.index = { ...this.index, tagNames: next };
+    await this.writeIndex(this.index);
+    this.changeVersion += 1;
   }
 
   /**

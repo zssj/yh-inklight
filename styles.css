@@ -3129,6 +3129,7 @@ a.yh-epub-goto-link:hover {
 }
 
 .yh-tagboard-row-name {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3140,6 +3141,63 @@ a.yh-epub-goto-link:hover {
   font-size: var(--yh-font-xs);
   font-weight: 400;
   color: var(--text-faint);
+}
+
+/* 行尾管理入口：桌面悬停才出现，触屏常驻，避免占满标签行 */
+.yh-tagboard-row-menu {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  color: var(--text-faint);
+  opacity: 0;
+  cursor: pointer;
+}
+
+.yh-tagboard-row:hover .yh-tagboard-row-menu,
+.yh-tagboard-row-menu:focus-visible {
+  opacity: 1;
+}
+
+.yh-tagboard-row-menu:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+@media (hover: none) {
+  .yh-tagboard-row-menu {
+    opacity: 1;
+  }
+}
+
+body.is-mobile .yh-tagboard-row-menu {
+  opacity: 1;
+}
+
+.yh-tagboard-modal-hint {
+  color: var(--text-muted);
+  font-size: var(--yh-font-sm);
+  line-height: 1.5;
+}
+
+.yh-tagboard-modal-warning {
+  color: var(--text-error);
+  font-size: var(--yh-font-sm);
+  line-height: 1.5;
+}
+
+.yh-tagboard-modal-input {
+  width: 100%;
+  margin: 8px 0 14px;
+}
+
+.yh-tagboard-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .yh-tagboard-file-row .yh-tagboard-row-name {
@@ -3258,6 +3316,35 @@ a.yh-epub-goto-link:hover {
 
 .yh-tag-suggest-item.is-recommended .yh-tag-suggest-kind {
   color: var(--text-accent);
+}
+
+/* ===== AI 推荐标签：只有用户点这一行才发请求 ===== */
+.yh-tag-suggest-item.is-ai .yh-tag-suggest-name {
+  font-weight: 600;
+}
+
+.yh-tag-suggest-item.is-ai .yh-tag-suggest-kind {
+  color: var(--text-accent);
+}
+
+.yh-tag-suggest-ai {
+  margin-top: 3px;
+  border-top: 0.5px solid var(--yh-border);
+  border-radius: 0;
+  color: var(--text-muted);
+}
+
+.yh-tag-suggest-ai:hover {
+  color: var(--text-normal);
+}
+
+.yh-tag-suggest-ai.is-loading {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.yh-tag-suggest-ai .yh-tag-suggest-name {
+  font-size: var(--yh-font-xs);
 }
 
 .yh-ov-related {

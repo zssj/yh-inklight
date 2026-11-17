@@ -1,8 +1,10 @@
 /**
  * [INPUT]: 依赖 storage/tags 的归一化规则与 dom 辅助（Obsidian HTMLElement 扩展）
  * [OUTPUT]: 对外提供 renderTagChips（只读 chip 行）、renderTagInput（可编辑 chip + 补全下拉）、
- *           TagSuggestion（带来源的补全候选，含按内容推荐）与 buildTagSuggestions（候选聚合，含 Obsidian 标签）；
- *           推荐项独立配额（最多 3 个），不挤占常规候选；showSuggestionsOnOpen 供侧栏打开即显示候选；
+ *           TagSuggestion（带来源的补全候选，含按内容推荐与按需 AI 推荐）与 buildTagSuggestions（候选聚合，含 Obsidian 标签）；
+ *           推荐项独立配额（本地按内容推荐最多 3 个、AI 推荐最多 1 个），互不挤占常规候选；
+ *           AI 推荐只有用户点下拉里的 AI 行才发请求，加载/失败/无结果都在组件内维护；
+ *           showSuggestionsOnOpen 供侧栏打开即显示候选；
  *           空内容折叠为「推荐 3 + 常用 5」，其余收进可点开的「还有 N 个候选」，有输入则按输入过滤；
  *           initialQuery / onQueryChange 供调用方在重绘后回填未提交输入；
  *           renderTagInput 处理中文输入法组合态，拼音选词不会误建标签
@@ -19,9 +21,11 @@ const MAX_COMPACT_OTHERS = 5;
 const MAX_EXPANDED_OTHERS = 20;
 /** 按内容推荐的标签独立配额，不挤占常规候选 */
 const MAX_RECOMMENDATIONS = 3;
+/** AI 推荐独立配额：默认只加 1 条，不挤占本地 3 条推荐 */
+const MAX_AI_RECOMMENDATIONS = 1;
 
 /** 补全候选的来源，决定下拉右侧的角标文案 */
-export type TagSuggestionKind = "current" | "used" | "ob" | "page" | "recommended";
+export type TagSuggestionKind = "current" | "used" | "ob" | "page" | "recommended" | "ai";
 
 /** 带来源的补全候选：name 用于写入标签，kind 只用于展示 */
 export interface TagSuggestion {
@@ -35,6 +39,7 @@ const KIND_LABELS: Record<TagSuggestionKind, string> = {
   ob: "OB 标签",
   page: "概念页",
   recommended: "按内容推荐",
+  ai: "AI 推荐",
 };
 
 export interface TagChipOptions {
@@ -98,6 +103,12 @@ export interface TagInputOptions {
   initialQuery?: string;
   /** 输入内容变化回调，供调用方暂存未提交文本，避免一次重绘吞掉正在打的标签 */
   onQueryChange?: (value: string) => void;
+  /**
+   * 按需请求 AI 推荐标签。只有用户点下拉里的「AI 推荐」行才会调用：
+   * force=false 表示可复用调用方缓存；force=true 表示用户明确要求重新获取。
+   * 返回值必须是调用方已经校验过的、确实存在于标签库中的展示名。
+   */
+  onRequestAi?: (force: boolean) => Promise<readonly string[]>;
   onChange: (tags: string[]) => void;
   placeholder?: string;
 }
@@ -132,7 +143,14 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
   let showAll = false;
   /** 侧栏要求打开即显示；有按内容推荐项时其它调用方也保持打开即显示 */
   const showOnOpen = options.showSuggestionsOnOpen === true
-    || options.suggestions.some((item) => item.kind === "recommended");
+    || options.suggestions.some((item) => item.kind === "recommended")
+    || typeof options.onRequestAi === "function";
+  const hasAi = typeof options.onRequestAi === "function";
+  /** AI 推荐是组件内的按需状态：不进入宿主的 suggestions 数组，避免重绘时被当成普通候选 */
+  let aiState: "idle" | "loading" | "empty" | "error" = "idle";
+  let aiSuggestions: TagSuggestion[] = [];
+  let aiRequestId = 0;
+  let requestAi = async (_force: boolean): Promise<void> => {};
   /**
    * 中文输入法组合态：拼音串还在候选栏里时，Enter / 逗号是「选词」不是「提交标签」。
    * isComposing 在部分安卓输入法上不可靠，因此自己维护一份显式标志。
@@ -165,6 +183,8 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
   };
 
   const closeDropdown = (): void => {
+    // 关闭/提交后让在途 AI 请求失效，避免它晚到又把下拉重新弹开
+    aiRequestId += 1;
     dropdown.addClass("yh-hidden");
     dropdown.empty();
     matches = [];
@@ -187,9 +207,11 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
       : (showAll ? MAX_EXPANDED_OTHERS : MAX_SUGGESTIONS);
     const pool: TagSuggestion[] = [];
     let recommendedCount = 0;
+    let aiCount = 0;
     let otherCount = 0;
     let hiddenCount = 0;
-    for (const item of options.suggestions) {
+    // 本地候选在前、AI 候选在后：同名的本地推荐优先，AI 不会重复占位
+    for (const item of [...options.suggestions, ...aiSuggestions]) {
       const key = tagKey(item.name);
       if (!key || existing.has(key) || seen.has(key)) {
         continue;
@@ -197,12 +219,16 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
       if (query && !item.name.toLowerCase().includes(query)) {
         continue;
       }
-      const isRecommended = item.kind === "recommended";
-      if (isRecommended) {
+      if (item.kind === "recommended") {
         if (recommendedCount >= MAX_RECOMMENDATIONS) {
           continue;
         }
         recommendedCount += 1;
+      } else if (item.kind === "ai") {
+        if (aiCount >= MAX_AI_RECOMMENDATIONS) {
+          continue;
+        }
+        aiCount += 1;
       } else {
         if (otherCount >= othersLimit) {
           hiddenCount += 1;
@@ -217,8 +243,9 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
     matches = pool;
     const canCreate = Boolean(suggestion) && !existing.has(tagKey(suggestion!)) && !pool.some((item) => tagKey(item.name) === tagKey(suggestion!));
     const showQuick = !query && Boolean(options.quickApply?.tags.length);
+    const showAiTrigger = !query && hasAi;
 
-    if (matches.length === 0 && !canCreate && !showQuick) {
+    if (matches.length === 0 && !canCreate && !showQuick && !showAiTrigger) {
       closeDropdown();
       return;
     }
@@ -244,6 +271,8 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
       const row = dropdown.createDiv({ cls: "yh-tag-suggest-item" });
       if (item.kind === "recommended") {
         row.addClass("is-recommended");
+      } else if (item.kind === "ai") {
+        row.addClass("is-ai");
       }
       row.createSpan({ cls: "yh-tag-suggest-name", text: item.name });
       row.createSpan({ cls: "yh-tag-suggest-kind", text: KIND_LABELS[item.kind] });
@@ -255,6 +284,37 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
         commitTag(item.name);
       });
     });
+
+    if (showAiTrigger) {
+      const row = dropdown.createDiv({ cls: "yh-tag-suggest-item yh-tag-suggest-ai" });
+      const label = aiState === "loading"
+        ? "AI 推荐中…"
+        : aiState === "error"
+          ? "AI 推荐失败"
+          : aiState === "empty"
+            ? "AI 没找到合适的标签"
+            : aiSuggestions.length > 0
+              ? "重新获取 AI 推荐"
+              : "✨ AI 推荐标签";
+      const kind = aiState === "loading"
+        ? "请稍候"
+        : aiState === "error" || aiState === "empty"
+          ? "点此重试"
+          : aiSuggestions.length > 0
+            ? "重新获取"
+            : "点击获取";
+      row.createSpan({ cls: "yh-tag-suggest-name", text: label });
+      row.createSpan({ cls: "yh-tag-suggest-kind", text: kind });
+      if (aiState === "loading") {
+        row.addClass("is-loading");
+      } else {
+        row.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          // 失败/无结果/已有结果时都强制重算；首次点按可复用宿主缓存
+          void requestAi(aiState !== "idle" || aiSuggestions.length > 0);
+        });
+      }
+    }
 
     // 折叠态剩下多少条：点一下展开，固定排在候选末尾、新建项之前
     if (hiddenCount > 0) {
@@ -276,6 +336,38 @@ export function renderTagInput(parent: HTMLElement, options: TagInputOptions): T
         event.preventDefault();
         commitTag(suggestion!);
       });
+    }
+  };
+
+  requestAi = async (force: boolean): Promise<void> => {
+    if (!options.onRequestAi || aiState === "loading") {
+      return;
+    }
+    const token = ++aiRequestId;
+    aiState = "loading";
+    aiSuggestions = [];
+    renderDropdown();
+    try {
+      const names = await options.onRequestAi(force);
+      if (token !== aiRequestId) {
+        return;
+      }
+      const current = new Set(tags.map((tag) => tagKey(tag)));
+      aiSuggestions = names
+        .filter((name) => {
+          const key = tagKey(name);
+          return !!key && !current.has(key);
+        })
+        .map((name) => ({ name, kind: "ai" as const }));
+      aiState = aiSuggestions.length > 0 ? "idle" : "empty";
+    } catch {
+      if (token !== aiRequestId) {
+        return;
+      }
+      aiState = "error";
+    }
+    if (wrap.isConnected) {
+      renderDropdown();
     }
   };
 

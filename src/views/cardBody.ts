@@ -71,6 +71,8 @@ export interface CardTagHost {
   /** 用户点了标签行的「+」或已有 chip：宿主置状态，随后 body 重绘标签行 */
   onStartTagEdit: () => void;
   suggestions: () => readonly TagSuggestion[];
+  /** 按需 AI 推荐：只有用户点下拉里的 AI 行才会调用；不传则整条入口不出现 */
+  requestAi?: (force: boolean) => Promise<readonly string[]>;
   onChange: (tags: string[]) => Promise<void> | void;
   /** 未提交输入的暂存与回填 */
   initialQuery?: () => string;
@@ -240,6 +242,7 @@ function renderTagRowContent(
     renderTagInput(row, {
       tags: card.tags,
       suggestions: [...(tags.suggestions() ?? [])],
+      ...(tags.requestAi ? { onRequestAi: tags.requestAi } : {}),
       ...(quickApply ? { quickApply } : {}),
       // 侧栏点 + 即刻给出候选：空内容也显示，不必先输入一个字符
       showSuggestionsOnOpen: true,

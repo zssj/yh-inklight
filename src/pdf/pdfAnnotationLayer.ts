@@ -46,6 +46,8 @@ interface PdfAnnotationLayerOptions {
   /** 详情浮层内编辑标签：按 annotationId 关联到 sidecar */
   setTags?: (file: TFile, annotationId: string, tags: readonly string[]) => Promise<void> | void;
   getTagSuggestions?: () => TagSuggestion[];
+  /** 按需 AI 推荐：只有用户点标签下拉里的 AI 行才会调用 */
+  requestAiTagSuggestions?: (card: SidebarCard, force: boolean) => Promise<readonly string[]>;
   /** 卡片上的插件级动作（导出笔记/原子卡/关系跳转与解除）：由 main.ts 注入 */
   cardActions?: CardExternalActions;
 }
@@ -508,6 +510,9 @@ export class PdfAnnotationLayer {
         ? (next) => this.options.setTags?.(file, annotation.id, next)
         : undefined,
       tagSuggestions: () => this.options.getTagSuggestions?.() ?? [],
+      ...(this.options.requestAiTagSuggestions
+        ? { onRequestAiTag: (force) => this.options.requestAiTagSuggestions?.(cardData, force) ?? Promise.resolve([]) }
+        : {}),
       ...(actions.openDerivedNote
         ? { onOpenExport: () => void actions.openDerivedNote?.(cardData.sourcePath) }
         : {}),

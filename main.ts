@@ -42,6 +42,12 @@ import { StickyNoteLane } from "./src/views/stickyNoteLane";
 import { EpubReaderView, EPUB_READER_VIEW_TYPE } from "./src/epub/EpubReaderView";
 import { EpubBookshelfView, EPUB_BOOKSHELF_VIEW_TYPE } from "./src/epub/EpubBookshelfView";
 import { EpubAiModal } from "./src/epub/EpubAiModal";
+import {
+  isAiConfigured,
+  parseSuggestedTag,
+  resolveAiConfig,
+  suggestTagWithAi,
+} from "./src/ai/EpubAiClient";
 import { EpubTocView, EPUB_TOC_VIEW_TYPE } from "./src/epub/EpubTocView";
 import { registerEpubGotoHandler } from "./src/epub/EpubGotoHandler";
 import { AnnotationReviewEntry, MarkdownStatsView, MARKDOWN_STATS_VIEW_TYPE } from "./src/views/markdownStatsView";
@@ -72,6 +78,12 @@ const ANNOTATION_REVIEW_STATE_PATH = ".obsidian-annotations/annotation-review.js
  * 靠时间窗口兜底避免 sidecar 无限膨胀。
  */
 const REVIEW_STATE_TTL_DAYS = 90;
+
+/**
+ * AI 标签推荐最多带多少个候选标签。按使用频率降序取前 N 个：
+ * 标签库很大时全量塞进 prompt 会把输入侧成本放大到几倍，而长尾标签命中概率本来也低。
+ */
+const MAX_AI_TAG_CANDIDATES = 80;
 
 /** 源文件连续写入的合并窗口：同步盘与外部程序常连续触发 modify，逐次迁移性价比极低 */
 const MD_MODIFY_DEBOUNCE_MS = 300;
@@ -161,6 +173,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       saveSettings: () => this.saveSettings(),
       onTocChanged: () => this.refreshEpubToc(),
       tagSuggestions: () => this.getTagSuggestions(),
+      requestAiTagSuggestions: (card, force) => this.suggestTagsForCard(card, force),
       cardActions: {
         openDerivedNote: (sourcePath) => this.openDerivedNote(sourcePath),
         createAtomCard: (card) => this.createAtomCardFor(card),
@@ -311,6 +324,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
         }
       },
       getTagSuggestions: () => this.getTagSuggestions(),
+      requestAiTagSuggestions: (card, force) => this.suggestTagsForCard(card, force),
     });
 
     this.stickyLane = new StickyNoteLane({
@@ -418,6 +432,8 @@ export default class OverlayAnnotationsPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+    // 服务商/模型/Key 改了，旧的 AI 标签推荐结果不应继续命中
+    this.aiTagCache.clear();
   }
 
   async refreshAnnotations(): Promise<void> {
@@ -1475,6 +1491,11 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   // ------------------------------------------------------------------ 卡片「相关」区
 
   private relationModelInstance: RelationModel | null = null;
+  /**
+   * AI 标签推荐缓存：同一条批注、同一版数据只请求一次。
+   * 批注一改 store.version 就变，旧结果自动失效；不落盘，避免把用户划线内容缓存到磁盘。
+   */
+  private readonly aiTagCache = new Map<string, { version: number; tag: string | null }>();
 
   /**
    * 关系模型单点：侧栏与三端浮层共用同一个快照。
@@ -1510,6 +1531,54 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       return [];
     }
     return this.relationModel().getRecommendedTags(card).map((name) => ({ name, kind: "recommended" as const }));
+  }
+
+  /**
+   * 按需 AI 推荐标签。只有用户点标签下拉里的「AI 推荐」行才会调用。
+   * 关键约束：候选只来自 store 的标签字典，模型输出还要按 tagKey 精确校验回候选表；
+   * 不在表里的结果直接丢弃，绝不把 AI 发明的词写进标签体系。
+   */
+  async suggestTagsForCard(card: SidebarCard, force = false): Promise<string[]> {
+    const text = `${card.text} ${card.content}`.trim();
+    if (text.length < 8) {
+      return [];
+    }
+
+    const existing = new Set(card.tags.map((tag) => tagKey(tag)));
+    const candidates = this.store
+      .getTagDictionary()
+      .map((item) => item.name)
+      .filter((name) => !existing.has(tagKey(name)))
+      .slice(0, MAX_AI_TAG_CANDIDATES);
+    if (candidates.length === 0) {
+      return [];
+    }
+
+    const cacheKey = `${card.sourcePath}\u0000${card.id}`;
+    const cached = this.aiTagCache.get(cacheKey);
+    if (!force && cached && cached.version === this.store.version) {
+      return cached.tag && !existing.has(tagKey(cached.tag)) ? [cached.tag] : [];
+    }
+
+    const cfg = resolveAiConfig(this.settings);
+    if (!isAiConfigured(cfg)) {
+      new Notice("AI 助手还没配置。请到 设置 → 第三方插件 → 墨光批注 →「AI 助手」填写服务商与 API Key。");
+      throw new Error("AI 未配置");
+    }
+
+    const requestVersion = this.store.version;
+    try {
+      const raw = await suggestTagWithAi(cfg, text, candidates);
+      const tag = parseSuggestedTag(raw, candidates);
+      if (this.store.version === requestVersion) {
+        this.aiTagCache.set(cacheKey, { version: requestVersion, tag });
+      }
+      return tag ? [tag] : [];
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      new Notice(`AI 推荐标签失败：${message}`);
+      throw error;
+    }
   }
 
   /** 浮层用：命中可能还没算过，先确保全库快照就绪 */
@@ -2039,6 +2108,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       onDelete: () => void this.deleteMarkdownAnnotation(file, annotation.id),
       onTagsChange: (next) => this.saveMarkdownAnnotationTags(file, annotation.id, next),
       tagSuggestions: () => this.getTagSuggestions(),
+      onRequestAiTag: (force) => this.suggestTagsForCard(cardData, force),
       onOpenExport: () => void this.openDerivedNote(cardData.sourcePath),
       // 与侧栏同一门槛：只要自己写了内容（不限类型），否则不渲染按钮（浮层不给空卡开口子）
       ...(canExtractAtomCard(cardData)

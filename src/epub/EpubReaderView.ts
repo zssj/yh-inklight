@@ -49,7 +49,7 @@ import type { TagSuggestion } from "../views/tagInput";
 import { EpubAiModal } from "./EpubAiModal";
 import { AnnotationCard, AnnotationCardAnchor } from "../views/annotationCard";
 import { CardExternalActions } from "../views/cardBody";
-import { buildCards, canExtractAtomCard } from "../views/cardModel";
+import { buildCards, canExtractAtomCard, type SidebarCard } from "../views/cardModel";
 import { PopoverRect } from "../views/popoverPlacement";
 import { EpubImageViewer } from "./EpubImageViewer";
 
@@ -189,6 +189,8 @@ export interface EpubReaderViewOptions {
 	onTocChanged: () => void;
 	/** 标签补全候选（已有标签 ∪ 概念页名），由 main.ts 注入 */
 	tagSuggestions?: () => TagSuggestion[];
+	/** 按需 AI 推荐：只有用户点标签下拉里的 AI 行才会调用 */
+	requestAiTagSuggestions?: (card: SidebarCard, force: boolean) => Promise<readonly string[]>;
 	/** 卡片上的插件级动作（跨文件跳转/解除关系/派生笔记/原子卡）：由 main.ts 注入 */
 	cardActions?: EpubCardActions;
 }
@@ -222,6 +224,7 @@ export class EpubReaderView extends FileView {
 	private readonly saveSettings: () => Promise<void>;
 	private readonly onTocChanged: () => void;
 	private readonly tagSuggestions: () => TagSuggestion[];
+	private readonly requestAiTagSuggestions: (card: SidebarCard, force: boolean) => Promise<readonly string[]>;
 	private readonly cardActions: EpubCardActions;
 
 	// ---- foliate 实例 ----
@@ -372,6 +375,7 @@ export class EpubReaderView extends FileView {
 		this.saveSettings = options.saveSettings;
 		this.onTocChanged = options.onTocChanged;
 		this.tagSuggestions = options.tagSuggestions ?? (() => []);
+		this.requestAiTagSuggestions = options.requestAiTagSuggestions ?? (() => Promise.resolve([]));
 		this.cardActions = options.cardActions ?? {};
 		this.themeManager = new EpubThemeManager();
 		this.currentFlowMode = options.settings.epubDefaultFlow;
@@ -2516,6 +2520,7 @@ export class EpubReaderView extends FileView {
 			},
 			onTagsChange: (tags) => this.saveAnnotationTags(highlight.id, tags),
 			tagSuggestions: this.tagSuggestions,
+			onRequestAiTag: (force) => this.requestAiTagSuggestions(cardData, force),
 			...(actions.openDerivedNote
 				? { onOpenExport: () => void actions.openDerivedNote?.(cardData.sourcePath) }
 				: {}),

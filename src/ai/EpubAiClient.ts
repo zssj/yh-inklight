@@ -1,7 +1,8 @@
 /**
- * [INPUT]: 依赖 Obsidian 的 requestUrl（绕过安卓 WebView 的 CORS 限制）与 storage/types 的 AI 设置字段
- * [OUTPUT]: OpenAI 兼容聊天客户端、服务商预设、AI 动作预设与内置系统提示词、配置解析与完整性检查、连接测试
- * [POS]: ai 模块的唯一网络出口，被 EpubAiModal 与设置页消费
+ * [INPUT]: 依赖 Obsidian 的 requestUrl（绕过安卓 WebView 的 CORS 限制）、storage/tags 的归一化规则与 storage/types 的 AI 设置字段
+ * [OUTPUT]: OpenAI 兼容聊天客户端、服务商预设、AI 动作预设与内置系统提示词、配置解析与完整性检查、连接测试、
+ *           标签推荐请求与「只认已有标签」的响应解析
+ * [POS]: ai 模块的唯一网络出口，被 EpubAiModal、标签编辑器（经 main）与设置页消费
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  *
  * 实现要点：
@@ -13,6 +14,8 @@
  */
 
 import { requestUrl, type RequestUrlResponse } from "obsidian";
+
+import { normalizeTag, tagKey } from "../storage/tags";
 
 /** 一次请求的硬超时（毫秒）。requestUrl 不支持 AbortSignal，超时后只放弃等待。 */
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -350,4 +353,100 @@ export async function chatWithAi(
 export async function testAiConnection(cfg: AiRuntimeConfig): Promise<string> {
   const result = await chatWithAi(cfg, TEST_SYSTEM_PROMPT, "请只回复两个字：正常");
   return result.content;
+}
+
+/** 标签推荐只看划线前 600 字，与 utils/textTerms 的抽词上限对齐 */
+const MAX_TAG_SUGGEST_TEXT_CHARS = 600;
+
+/**
+ * 标签推荐系统提示词。刻意把「只能从列表里挑」写成硬规则：
+ * AI 一旦自由发挥，标签库会很快出现「认知偏差 / 确认偏误 / 先入为主」三份同义标签，检索反而更差。
+ */
+const TAG_SUGGEST_SYSTEM_PROMPT = [
+  "你是阅读批注的标签助手。只能从用户给出的候选标签列表中挑选最贴合划线内容的一个标签。",
+  "规则：",
+  "1. 只能输出候选列表里已有的标签原文，不得改写、不得发明新标签。",
+  "2. 只输出一个标签名，不要解释、不要标点、不要加引号或前缀。",
+  "3. 如果没有合适的标签，只输出：无",
+].join("\n");
+
+/** 组装标签推荐的 user 消息；候选列表由调用方按使用频率截断，避免长尾标签把输入撑大 */
+export function buildTagSuggestUserText(text: string, candidates: readonly string[]): string {
+  const clipped = text.length > MAX_TAG_SUGGEST_TEXT_CHARS
+    ? text.slice(0, MAX_TAG_SUGGEST_TEXT_CHARS)
+    : text;
+  return `候选标签：${candidates.join("、")}\n\n划线内容：${clipped}`;
+}
+
+/** 发一次标签推荐请求。max_tokens 固定 64：只需要一个标签名，不参与用户的「最大 Token」设置。 */
+export async function suggestTagWithAi(
+  cfg: AiRuntimeConfig,
+  text: string,
+  candidates: readonly string[],
+): Promise<string> {
+  if (candidates.length === 0) {
+    return "无";
+  }
+  const result = await chatWithAi(
+    { ...cfg, maxTokens: 64, temperature: 0.2 },
+    TAG_SUGGEST_SYSTEM_PROMPT,
+    buildTagSuggestUserText(text, candidates),
+  );
+  return result.content;
+}
+
+/**
+ * 把模型回复解析成一个候选标签。只做「与候选表精确匹配」，不做模糊包含：
+ * 模型回了「确认偏误（因为……）」时先剥括号与标点；仍然对不上就宁可放弃，避免把长句当标签写进去。
+ */
+export function parseSuggestedTag(raw: string, candidates: readonly string[]): string | null {
+  const cleaned = raw
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/^[\s"'“”‘’`]+|[\s"'“”‘’`]+$/g, "")
+    .trim();
+  const firstLine = cleaned.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "";
+  if (!firstLine) {
+    return null;
+  }
+
+  const withoutPrefix = firstLine
+    .replace(/^(?:标签|tag|答案|结果)\s*[:：]\s*/i, "")
+    .replace(/[（(].*$/, "")
+    .replace(/[。.!！?？]+$/g, "")
+    .trim();
+  if (!withoutPrefix) {
+    return null;
+  }
+
+  const byKey = new Map<string, string>();
+  for (const name of candidates) {
+    const key = tagKey(name);
+    if (key && !byKey.has(key)) {
+      byKey.set(key, name);
+    }
+  }
+
+  // 「无」是模型约定的空结果；除非用户真的有个叫「无」的标签
+  if (withoutPrefix === "无" && !byKey.has(tagKey("无"))) {
+    return null;
+  }
+
+  const exact = byKey.get(tagKey(withoutPrefix));
+  if (exact) {
+    return exact;
+  }
+
+  // 模型偶尔会输出「标签A、标签B」，取第一个能在候选表里对上的，仍然不发明新词
+  for (const token of withoutPrefix.split(/[\n,，、;；|]+/)) {
+    const value = normalizeTag(token.replace(/^[\s"'“”‘’`]+|[\s"'“”‘’`]+$/g, ""));
+    if (!value) {
+      continue;
+    }
+    const hit = byKey.get(tagKey(value));
+    if (hit) {
+      return hit;
+    }
+  }
+
+  return null;
 }

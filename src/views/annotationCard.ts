@@ -36,6 +36,8 @@ export interface AnnotationCardOptions {
   /** 标签落盘：失败时抛错，错误由宿主给 Notice */
   onTagsChange?: (tags: string[]) => Promise<void> | void;
   tagSuggestions?: () => readonly TagSuggestion[];
+  /** 按需 AI 推荐：只有用户点标签下拉里的 AI 行才会调用 */
+  onRequestAiTag?: (force: boolean) => Promise<readonly string[]>;
   onJumpRelation?: (relation: AnnotationRelation) => void;
   onRemoveRelation?: (relation: AnnotationRelation) => void;
   /** 字面相关区宿主：与侧栏同一份 DOM，命中/写入走插件单点 */
@@ -101,6 +103,7 @@ export class AnnotationCard {
           this.tagEditing = true;
         },
         suggestions: () => this.options.tagSuggestions?.() ?? [],
+        ...(this.options.onRequestAiTag ? { requestAi: this.options.onRequestAiTag } : {}),
         onChange: (tags) => this.options.onTagsChange?.(tags),
         // 浮层只有一条卡，没有「重绘重建」的场景：进编辑态就聚焦
         onEditorReady: (row) => {

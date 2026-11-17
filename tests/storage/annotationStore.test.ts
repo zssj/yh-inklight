@@ -845,6 +845,100 @@ describe("EPUB 回链", () => {
   });
 });
 
+describe("标签批量重命名 / 删除", () => {
+  const OTHER_PATH = "读书笔记/另一篇.md";
+
+  async function setupTwoFiles(options: Parameters<typeof createApp>[0] = {}) {
+    const { app, vault } = createApp({
+      files: {
+        [MD_PATH]: "在复利效应的作用下，长期投资会放大收益。",
+        [OTHER_PATH]: "长期投资需要耐心。",
+      },
+      ...options,
+    });
+    const store = new AnnotationStore(app);
+    await store.initialize();
+    return { vault, store };
+  }
+
+  it("重命名会改所有文件里的批注，并在目标标签已存在时合并", async () => {
+    const { store, vault } = await setupTwoFiles();
+    await store.addHighlight(vault.fileAt(MD_PATH), highlightOf("h1", "复利效应", 2, ["金融", "投资"]));
+    await store.addHighlight(vault.fileAt(OTHER_PATH), highlightOf("h2", "长期投资", 0, ["金融"]));
+
+    expect(await store.getTagUsage("金融")).toEqual({ fileCount: 2, annotationCount: 2 });
+    const result = await store.renameTag("金融", "投资");
+
+    expect(result.failed).toEqual([]);
+    expect(result.changedFiles).toBe(2);
+    expect(result.changedAnnotations).toBe(2);
+    expect(result.newKey).toBe("投资");
+
+    const first = vault.readJson<FileAnnotationDocument>(store.toSidecarPath(MD_PATH));
+    const second = vault.readJson<FileAnnotationDocument>(store.toSidecarPath(OTHER_PATH));
+    expect(first.highlights[0].tags).toEqual(["投资"]);
+    expect(second.highlights[0].tags).toEqual(["投资"]);
+
+    expect(store.getTagDictionary().map((entry) => entry.key)).toEqual(["投资"]);
+    expect(store.getTagDisplayName("金融")).toBe("金融");
+    expect(store.getTagDisplayName("投资")).toBe("投资");
+  });
+
+  it("仅改大小写时比较键不变，但批注写法与展示名一起更新", async () => {
+    const { store, vault } = await setupTwoFiles();
+    await store.addHighlight(vault.fileAt(MD_PATH), highlightOf("h1", "复利效应", 2, ["Foo"]));
+
+    const result = await store.renameTag("foo", "foo");
+    expect(result.changedFiles).toBe(1);
+    expect(result.changedAnnotations).toBe(1);
+    expect(result.newKey).toBe("foo");
+
+    const document = vault.readJson<FileAnnotationDocument>(store.toSidecarPath(MD_PATH));
+    expect(document.highlights[0].tags).toEqual(["foo"]);
+    expect(store.getTagDisplayName("foo")).toBe("foo");
+  });
+
+  it("删除只摘掉标签，不删除批注；最后一个标签被删时字段一并移除", async () => {
+    const { store, vault } = await setupTwoFiles();
+    await store.addHighlight(vault.fileAt(MD_PATH), highlightOf("h1", "复利效应", 2, ["金融", "投资"]));
+    await store.addHighlight(vault.fileAt(OTHER_PATH), highlightOf("h2", "长期投资", 0, ["金融"]));
+
+    const result = await store.deleteTag("金融");
+    expect(result.failed).toEqual([]);
+    expect(result.changedFiles).toBe(2);
+    expect(result.changedAnnotations).toBe(2);
+
+    const first = vault.readJson<FileAnnotationDocument>(store.toSidecarPath(MD_PATH));
+    const second = vault.readJson<FileAnnotationDocument>(store.toSidecarPath(OTHER_PATH));
+    expect(first.highlights).toHaveLength(1);
+    expect(first.highlights[0].tags).toEqual(["投资"]);
+    expect(second.highlights).toHaveLength(1);
+    expect(second.highlights[0]).not.toHaveProperty("tags");
+    expect(store.getTagDictionary().map((entry) => entry.key)).toEqual(["投资"]);
+  });
+
+  it("单个文件写入失败时不中断其它文件，失败项如实返回", async () => {
+    let failPath = "";
+    const { store, vault } = await setupTwoFiles({
+      failWrite: (path) => path === failPath,
+    });
+    await store.addHighlight(vault.fileAt(MD_PATH), highlightOf("h1", "复利效应", 2, ["金融"]));
+    await store.addHighlight(vault.fileAt(OTHER_PATH), highlightOf("h2", "长期投资", 0, ["金融"]));
+    // 两篇都写入成功后再打开失败开关，只拦另一篇的 sidecar
+    failPath = store.toSidecarPath(OTHER_PATH);
+
+    const result = await store.renameTag("金融", "投资");
+    expect(result.changedFiles).toBe(1);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0].filePath).toBe(OTHER_PATH);
+
+    const first = vault.readJson<FileAnnotationDocument>(store.toSidecarPath(MD_PATH));
+    expect(first.highlights[0].tags).toEqual(["投资"]);
+    // 失败文件保留原标签，不能出现「改一半还报成功」
+    expect(vault.readJson<FileAnnotationDocument>(failPath).highlights[0].tags).toEqual(["金融"]);
+  });
+});
+
 describe("toSidecarPath", () => {
   it("短路径用可读的 legacy 命名（路径段以 __ 连接）", async () => {
     const { store } = await setup();

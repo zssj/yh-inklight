@@ -887,6 +887,8 @@ export class AnnotationSidebarView extends ItemView {
           ...this.plugin.getRecommendedTags(cardData),
           ...this.plugin.getTagSuggestions(),
         ],
+        // 只有用户点下拉里的 AI 行才会走到这里；默认复用缓存，force 时重新请求
+        requestAi: (force) => this.plugin.suggestTagsForCard(cardData, force),
         onChange: (tags) => {
           if (!file) {
             return;

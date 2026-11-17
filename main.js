@@ -8836,12 +8836,14 @@ var MAX_SUGGESTIONS = 8;
 var MAX_COMPACT_OTHERS = 5;
 var MAX_EXPANDED_OTHERS = 20;
 var MAX_RECOMMENDATIONS = 3;
+var MAX_AI_RECOMMENDATIONS = 1;
 var KIND_LABELS = {
   current: "\u672C\u6587\u6863",
   used: "\u5DF2\u7528\u6807\u7B7E",
   ob: "OB \u6807\u7B7E",
   page: "\u6982\u5FF5\u9875",
-  recommended: "\u6309\u5185\u5BB9\u63A8\u8350"
+  recommended: "\u6309\u5185\u5BB9\u63A8\u8350",
+  ai: "AI \u63A8\u8350"
 };
 function renderTagChips(parent, tags, options = {}) {
   const list = normalizeTags(tags);
@@ -8896,7 +8898,13 @@ function renderTagInput(parent, options) {
   let matches = [];
   let activeIndex = 0;
   let showAll = false;
-  const showOnOpen = options.showSuggestionsOnOpen === true || options.suggestions.some((item) => item.kind === "recommended");
+  const showOnOpen = options.showSuggestionsOnOpen === true || options.suggestions.some((item) => item.kind === "recommended") || typeof options.onRequestAi === "function";
+  const hasAi = typeof options.onRequestAi === "function";
+  let aiState = "idle";
+  let aiSuggestions = [];
+  let aiRequestId = 0;
+  let requestAi = async (_force) => {
+  };
   let composing = false;
   const emit = (next) => {
     const normalized = normalizeTags(next);
@@ -8922,6 +8930,7 @@ function renderTagInput(parent, options) {
     field.toggleClass("yh-hidden", tags.length >= MAX_TAGS_PER_ANNOTATION);
   };
   const closeDropdown = () => {
+    aiRequestId += 1;
     dropdown.addClass("yh-hidden");
     dropdown.empty();
     matches = [];
@@ -8938,9 +8947,10 @@ function renderTagInput(parent, options) {
     const othersLimit = compact ? MAX_COMPACT_OTHERS : showAll ? MAX_EXPANDED_OTHERS : MAX_SUGGESTIONS;
     const pool = [];
     let recommendedCount = 0;
+    let aiCount = 0;
     let otherCount = 0;
     let hiddenCount = 0;
-    for (const item of options.suggestions) {
+    for (const item of [...options.suggestions, ...aiSuggestions]) {
       const key = tagKey(item.name);
       if (!key || existing.has(key) || seen.has(key)) {
         continue;
@@ -8948,12 +8958,16 @@ function renderTagInput(parent, options) {
       if (query && !item.name.toLowerCase().includes(query)) {
         continue;
       }
-      const isRecommended = item.kind === "recommended";
-      if (isRecommended) {
+      if (item.kind === "recommended") {
         if (recommendedCount >= MAX_RECOMMENDATIONS) {
           continue;
         }
         recommendedCount += 1;
+      } else if (item.kind === "ai") {
+        if (aiCount >= MAX_AI_RECOMMENDATIONS) {
+          continue;
+        }
+        aiCount += 1;
       } else {
         if (otherCount >= othersLimit) {
           hiddenCount += 1;
@@ -8967,7 +8981,8 @@ function renderTagInput(parent, options) {
     matches = pool;
     const canCreate = Boolean(suggestion) && !existing.has(tagKey(suggestion)) && !pool.some((item) => tagKey(item.name) === tagKey(suggestion));
     const showQuick = !query && Boolean(options.quickApply?.tags.length);
-    if (matches.length === 0 && !canCreate && !showQuick) {
+    const showAiTrigger = !query && hasAi;
+    if (matches.length === 0 && !canCreate && !showQuick && !showAiTrigger) {
       closeDropdown();
       return;
     }
@@ -8990,6 +9005,8 @@ function renderTagInput(parent, options) {
       const row = dropdown.createDiv({ cls: "yh-tag-suggest-item" });
       if (item.kind === "recommended") {
         row.addClass("is-recommended");
+      } else if (item.kind === "ai") {
+        row.addClass("is-ai");
       }
       row.createSpan({ cls: "yh-tag-suggest-name", text: item.name });
       row.createSpan({ cls: "yh-tag-suggest-kind", text: KIND_LABELS[item.kind] });
@@ -9001,6 +9018,21 @@ function renderTagInput(parent, options) {
         commitTag(item.name);
       });
     });
+    if (showAiTrigger) {
+      const row = dropdown.createDiv({ cls: "yh-tag-suggest-item yh-tag-suggest-ai" });
+      const label = aiState === "loading" ? "AI \u63A8\u8350\u4E2D\u2026" : aiState === "error" ? "AI \u63A8\u8350\u5931\u8D25" : aiState === "empty" ? "AI \u6CA1\u627E\u5230\u5408\u9002\u7684\u6807\u7B7E" : aiSuggestions.length > 0 ? "\u91CD\u65B0\u83B7\u53D6 AI \u63A8\u8350" : "\u2728 AI \u63A8\u8350\u6807\u7B7E";
+      const kind = aiState === "loading" ? "\u8BF7\u7A0D\u5019" : aiState === "error" || aiState === "empty" ? "\u70B9\u6B64\u91CD\u8BD5" : aiSuggestions.length > 0 ? "\u91CD\u65B0\u83B7\u53D6" : "\u70B9\u51FB\u83B7\u53D6";
+      row.createSpan({ cls: "yh-tag-suggest-name", text: label });
+      row.createSpan({ cls: "yh-tag-suggest-kind", text: kind });
+      if (aiState === "loading") {
+        row.addClass("is-loading");
+      } else {
+        row.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          void requestAi(aiState !== "idle" || aiSuggestions.length > 0);
+        });
+      }
+    }
     if (hiddenCount > 0) {
       const more = dropdown.createDiv({ cls: "yh-tag-suggest-item yh-tag-suggest-more" });
       more.createSpan({ cls: "yh-tag-suggest-name", text: `\u8FD8\u6709 ${hiddenCount} \u4E2A\u5019\u9009\u2026` });
@@ -9019,6 +9051,35 @@ function renderTagInput(parent, options) {
         event.preventDefault();
         commitTag(suggestion);
       });
+    }
+  };
+  requestAi = async (force) => {
+    if (!options.onRequestAi || aiState === "loading") {
+      return;
+    }
+    const token = ++aiRequestId;
+    aiState = "loading";
+    aiSuggestions = [];
+    renderDropdown();
+    try {
+      const names = await options.onRequestAi(force);
+      if (token !== aiRequestId) {
+        return;
+      }
+      const current = new Set(tags.map((tag) => tagKey(tag)));
+      aiSuggestions = names.filter((name) => {
+        const key = tagKey(name);
+        return !!key && !current.has(key);
+      }).map((name) => ({ name, kind: "ai" }));
+      aiState = aiSuggestions.length > 0 ? "idle" : "empty";
+    } catch {
+      if (token !== aiRequestId) {
+        return;
+      }
+      aiState = "error";
+    }
+    if (wrap2.isConnected) {
+      renderDropdown();
     }
   };
   const commitTag = (raw) => {
@@ -9499,6 +9560,7 @@ function renderTagRowContent(row, card, host, repaint) {
     renderTagInput(row, {
       tags: card.tags,
       suggestions: [...tags.suggestions() ?? []],
+      ...tags.requestAi ? { onRequestAi: tags.requestAi } : {},
       ...quickApply ? { quickApply } : {},
       // 侧栏点 + 即刻给出候选：空内容也显示，不必先输入一个字符
       showSuggestionsOnOpen: true,
@@ -9917,6 +9979,7 @@ var AnnotationCard = class {
           this.tagEditing = true;
         },
         suggestions: () => this.options.tagSuggestions?.() ?? [],
+        ...this.options.onRequestAiTag ? { requestAi: this.options.onRequestAiTag } : {},
         onChange: (tags) => this.options.onTagsChange?.(tags),
         // 浮层只有一条卡，没有「重绘重建」的场景：进编辑态就聚焦
         onEditorReady: (row) => {
@@ -10686,6 +10749,7 @@ var PdfAnnotationLayer = class {
       onDelete: () => void this.removeAnnotation(file, annotation.id),
       onTagsChange: this.options.setTags ? (next) => this.options.setTags?.(file, annotation.id, next) : void 0,
       tagSuggestions: () => this.options.getTagSuggestions?.() ?? [],
+      ...this.options.requestAiTagSuggestions ? { onRequestAiTag: (force) => this.options.requestAiTagSuggestions?.(cardData, force) ?? Promise.resolve([]) } : {},
       ...actions.openDerivedNote ? { onOpenExport: () => void actions.openDerivedNote?.(cardData.sourcePath) } : {},
       ...actions.createAtomCard && canExtractAtomCard(cardData) ? { onAtomCard: () => void actions.createAtomCard?.(cardData) } : {},
       ...actions.jumpToRelation ? { onJumpRelation: actions.jumpToRelation } : {},
@@ -11228,6 +11292,67 @@ async function chatWithAi(cfg, systemPrompt, userText) {
 async function testAiConnection(cfg) {
   const result = await chatWithAi(cfg, TEST_SYSTEM_PROMPT, "\u8BF7\u53EA\u56DE\u590D\u4E24\u4E2A\u5B57\uFF1A\u6B63\u5E38");
   return result.content;
+}
+var MAX_TAG_SUGGEST_TEXT_CHARS = 600;
+var TAG_SUGGEST_SYSTEM_PROMPT = [
+  "\u4F60\u662F\u9605\u8BFB\u6279\u6CE8\u7684\u6807\u7B7E\u52A9\u624B\u3002\u53EA\u80FD\u4ECE\u7528\u6237\u7ED9\u51FA\u7684\u5019\u9009\u6807\u7B7E\u5217\u8868\u4E2D\u6311\u9009\u6700\u8D34\u5408\u5212\u7EBF\u5185\u5BB9\u7684\u4E00\u4E2A\u6807\u7B7E\u3002",
+  "\u89C4\u5219\uFF1A",
+  "1. \u53EA\u80FD\u8F93\u51FA\u5019\u9009\u5217\u8868\u91CC\u5DF2\u6709\u7684\u6807\u7B7E\u539F\u6587\uFF0C\u4E0D\u5F97\u6539\u5199\u3001\u4E0D\u5F97\u53D1\u660E\u65B0\u6807\u7B7E\u3002",
+  "2. \u53EA\u8F93\u51FA\u4E00\u4E2A\u6807\u7B7E\u540D\uFF0C\u4E0D\u8981\u89E3\u91CA\u3001\u4E0D\u8981\u6807\u70B9\u3001\u4E0D\u8981\u52A0\u5F15\u53F7\u6216\u524D\u7F00\u3002",
+  "3. \u5982\u679C\u6CA1\u6709\u5408\u9002\u7684\u6807\u7B7E\uFF0C\u53EA\u8F93\u51FA\uFF1A\u65E0"
+].join("\n");
+function buildTagSuggestUserText(text, candidates) {
+  const clipped = text.length > MAX_TAG_SUGGEST_TEXT_CHARS ? text.slice(0, MAX_TAG_SUGGEST_TEXT_CHARS) : text;
+  return `\u5019\u9009\u6807\u7B7E\uFF1A${candidates.join("\u3001")}
+
+\u5212\u7EBF\u5185\u5BB9\uFF1A${clipped}`;
+}
+async function suggestTagWithAi(cfg, text, candidates) {
+  if (candidates.length === 0) {
+    return "\u65E0";
+  }
+  const result = await chatWithAi(
+    { ...cfg, maxTokens: 64, temperature: 0.2 },
+    TAG_SUGGEST_SYSTEM_PROMPT,
+    buildTagSuggestUserText(text, candidates)
+  );
+  return result.content;
+}
+function parseSuggestedTag(raw, candidates) {
+  const cleaned = raw.replace(/```[\s\S]*?```/g, " ").replace(/^[\s"'“”‘’`]+|[\s"'“”‘’`]+$/g, "").trim();
+  const firstLine = cleaned.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "";
+  if (!firstLine) {
+    return null;
+  }
+  const withoutPrefix = firstLine.replace(/^(?:标签|tag|答案|结果)\s*[:：]\s*/i, "").replace(/[（(].*$/, "").replace(/[。.!！?？]+$/g, "").trim();
+  if (!withoutPrefix) {
+    return null;
+  }
+  const byKey = /* @__PURE__ */ new Map();
+  for (const name of candidates) {
+    const key = tagKey(name);
+    if (key && !byKey.has(key)) {
+      byKey.set(key, name);
+    }
+  }
+  if (withoutPrefix === "\u65E0" && !byKey.has(tagKey("\u65E0"))) {
+    return null;
+  }
+  const exact = byKey.get(tagKey(withoutPrefix));
+  if (exact) {
+    return exact;
+  }
+  for (const token of withoutPrefix.split(/[\n,，、;；|]+/)) {
+    const value = normalizeTag(token.replace(/^[\s"'“”‘’`]+|[\s"'“”‘’`]+$/g, ""));
+    if (!value) {
+      continue;
+    }
+    const hit = byKey.get(tagKey(value));
+    if (hit) {
+      return hit;
+    }
+  }
+  return null;
 }
 
 // src/epub/EpubFontCatalog.ts
@@ -12260,6 +12385,212 @@ var AnnotationStore = class {
       };
       await this.saveDocument(nextDocument);
     }
+  }
+  /**
+   * 统计某个标签实际影响的范围。索引给出候选文件，最终以 sidecar 里的批注为准：
+   * 索引可能比 sidecar 旧（历史版本、手工改动），确认框不能拿过期数字吓用户。
+   */
+  async getTagUsage(key) {
+    const target = tagKey(key);
+    let fileCount = 0;
+    let annotationCount = 0;
+    for (const [filePath, entry] of Object.entries(this.index.files)) {
+      if (!(entry.tags ?? []).includes(target)) {
+        continue;
+      }
+      const file = this.app.vault.getAbstractFileByPath(filePath);
+      if (!(file instanceof import_obsidian9.TFile)) {
+        continue;
+      }
+      const document2 = await this.getDocument(file);
+      const count = this.countTagInDocument(document2, target);
+      if (count > 0) {
+        fileCount += 1;
+        annotationCount += count;
+      }
+    }
+    return { fileCount, annotationCount };
+  }
+  /**
+   * 全局重命名标签：逐个文件改批注里的标签，再重建 tagNames。
+   * 目标标签已存在时按 tagKey 合并（同一条批注只保留目标写法），不会把 12 个标签的上限撑爆。
+   * 某个文件失败不会中断其余文件：失败的保留原标签并在结果里列出，避免「改一半还报成功」。
+   */
+  async renameTag(oldKeyRaw, newNameRaw) {
+    const oldKey = tagKey(oldKeyRaw);
+    const display = normalizeTag(newNameRaw);
+    if (!oldKey || !display) {
+      throw new Error("\u6807\u7B7E\u540D\u4E3A\u7A7A\u6216\u65E0\u6548");
+    }
+    const newKey = tagKey(display);
+    const result = {
+      changedFiles: 0,
+      changedAnnotations: 0,
+      failed: [],
+      newKey
+    };
+    if (newKey === oldKey && display === this.getTagDisplayName(oldKey)) {
+      return result;
+    }
+    const paths = Object.keys(this.index.files).filter(
+      (filePath) => (this.index.files[filePath].tags ?? []).includes(oldKey)
+    );
+    this.index = {
+      ...this.index,
+      tagNames: { ...this.index.tagNames ?? {}, [newKey]: display }
+    };
+    for (const filePath of paths) {
+      const file = this.app.vault.getAbstractFileByPath(filePath);
+      if (!(file instanceof import_obsidian9.TFile)) {
+        result.failed.push({ filePath, message: "\u6E90\u6587\u4EF6\u4E0D\u5B58\u5728" });
+        continue;
+      }
+      try {
+        const document2 = await this.getDocument(file);
+        const { document: nextDocument, changed } = this.rewriteDocumentTags(document2, (tags) => {
+          const next = [];
+          let replaced = false;
+          for (const tag of tags) {
+            if (tagKey(tag) === oldKey) {
+              if (!replaced) {
+                next.push(display);
+                replaced = true;
+              }
+            } else {
+              next.push(tag);
+            }
+          }
+          return next;
+        });
+        if (changed > 0) {
+          await this.saveDocument(nextDocument);
+          result.changedFiles += 1;
+          result.changedAnnotations += changed;
+        }
+      } catch (error) {
+        result.failed.push({
+          filePath,
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+    await this.persistTagNames();
+    return result;
+  }
+  /**
+   * 全局删除标签：从所有批注上摘掉该标签，不删除任何批注或原文。
+   * 与重命名同一套逐文件保存 + 失败汇总策略；单个文件失败时该文件的标签保留。
+   */
+  async deleteTag(keyRaw) {
+    const target = tagKey(keyRaw);
+    const result = {
+      changedFiles: 0,
+      changedAnnotations: 0,
+      failed: []
+    };
+    if (!target) {
+      return result;
+    }
+    const paths = Object.keys(this.index.files).filter(
+      (filePath) => (this.index.files[filePath].tags ?? []).includes(target)
+    );
+    for (const filePath of paths) {
+      const file = this.app.vault.getAbstractFileByPath(filePath);
+      if (!(file instanceof import_obsidian9.TFile)) {
+        result.failed.push({ filePath, message: "\u6E90\u6587\u4EF6\u4E0D\u5B58\u5728" });
+        continue;
+      }
+      try {
+        const document2 = await this.getDocument(file);
+        const { document: nextDocument, changed } = this.rewriteDocumentTags(
+          document2,
+          (tags) => tags.filter((tag) => tagKey(tag) !== target)
+        );
+        if (changed > 0) {
+          await this.saveDocument(nextDocument);
+          result.changedFiles += 1;
+          result.changedAnnotations += changed;
+        }
+      } catch (error) {
+        result.failed.push({
+          filePath,
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+    await this.persistTagNames();
+    return result;
+  }
+  /** 只改写有标签的批注；返回新文档与被改动的批注条数 */
+  rewriteDocumentTags(document2, rewrite) {
+    let changed = 0;
+    const apply = (item) => {
+      if (!item.tags || item.tags.length === 0) {
+        return item;
+      }
+      const before = normalizeTags(item.tags);
+      const after = normalizeTags(rewrite(before));
+      if (before.length === after.length && before.every((tag, index) => tag === after[index])) {
+        return item;
+      }
+      changed += 1;
+      const clone = { ...item };
+      if (after.length > 0) {
+        clone.tags = after;
+      } else {
+        delete clone.tags;
+      }
+      return clone;
+    };
+    return {
+      document: {
+        ...document2,
+        highlights: document2.highlights.map(apply),
+        comments: document2.comments.map(apply),
+        pdfHighlights: document2.pdfHighlights.map(apply),
+        pdfComments: document2.pdfComments.map(apply),
+        epubHighlights: document2.epubHighlights.map(apply),
+        epubComments: document2.epubComments.map(apply)
+      },
+      changed
+    };
+  }
+  /** 批注里出现某标签的次数（高亮与其笔记各算一条） */
+  countTagInDocument(document2, target) {
+    const items = [
+      ...document2.highlights,
+      ...document2.comments,
+      ...document2.pdfHighlights,
+      ...document2.pdfComments,
+      ...document2.epubHighlights,
+      ...document2.epubComments
+    ];
+    return items.reduce(
+      (count, item) => count + ((item.tags ?? []).some((tag) => tagKey(tag) === target) ? 1 : 0),
+      0
+    );
+  }
+  /**
+   * 按索引里实际存在的标签重建 tagNames。
+   * saveDocument 的 mergeTagNames 只增不删，重命名/删除后必须走这一道，否则旧 key 会永远留在字典里。
+   */
+  async persistTagNames() {
+    const previous = this.index.tagNames ?? {};
+    const next = {};
+    for (const entry of Object.values(this.index.files)) {
+      for (const key of entry.tags ?? []) {
+        if (!next[key]) {
+          next[key] = previous[key] ?? key;
+        }
+      }
+    }
+    const same = Object.keys(next).length === Object.keys(previous).length && Object.entries(next).every(([key, value]) => previous[key] === value);
+    if (same) {
+      return;
+    }
+    this.index = { ...this.index, tagNames: next };
+    await this.writeIndex(this.index);
+    this.changeVersion += 1;
   }
   /**
    * 标签字典（含文件数），按文件数降序；数据来自内存索引，不读磁盘。
@@ -14353,6 +14684,8 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
           ...this.plugin.getRecommendedTags(cardData),
           ...this.plugin.getTagSuggestions()
         ],
+        // 只有用户点下拉里的 AI 行才会走到这里；默认复用缓存，force 时重新请求
+        requestAi: (force) => this.plugin.suggestTagsForCard(cardData, force),
         onChange: (tags) => {
           if (!file) {
             return;
@@ -17417,6 +17750,7 @@ var EpubReaderView = class extends import_obsidian17.FileView {
     this.saveSettings = options.saveSettings;
     this.onTocChanged = options.onTocChanged;
     this.tagSuggestions = options.tagSuggestions ?? (() => []);
+    this.requestAiTagSuggestions = options.requestAiTagSuggestions ?? (() => Promise.resolve([]));
     this.cardActions = options.cardActions ?? {};
     this.themeManager = new EpubThemeManager();
     this.currentFlowMode = options.settings.epubDefaultFlow;
@@ -19178,6 +19512,7 @@ var EpubReaderView = class extends import_obsidian17.FileView {
         },
         onTagsChange: (tags) => this.saveAnnotationTags(highlight.id, tags),
         tagSuggestions: this.tagSuggestions,
+        onRequestAiTag: (force) => this.requestAiTagSuggestions(cardData, force),
         ...actions.openDerivedNote ? { onOpenExport: () => void actions.openDerivedNote?.(cardData.sourcePath) } : {},
         ...actions.createAtomCard && canExtractAtomCard(cardData) ? { onAtomCard: () => void actions.createAtomCard?.(cardData) } : {},
         ...actions.jumpToRelation ? { onJumpRelation: actions.jumpToRelation } : {},
@@ -20937,6 +21272,8 @@ var TagBoardView = class extends import_obsidian21.ItemView {
     this.renderToken = 0;
     this.resizeObserver = null;
     this.observedWidth = 0;
+    /** 批量改标签期间挡住第二次操作，避免两个写循环交叉覆盖 sidecar */
+    this.mutating = false;
   }
   getViewType() {
     return TAG_BOARD_VIEW_TYPE;
@@ -21107,6 +21444,32 @@ var TagBoardView = class extends import_obsidian21.ItemView {
       row.toggleClass("is-active", item.key === this.selectedTagKey);
       row.createSpan({ cls: "yh-tagboard-row-name", text: item.name });
       row.createSpan({ cls: "yh-tagboard-row-count", text: String(item.fileCount) });
+      const menu = row.createSpan({
+        cls: "yh-tagboard-row-menu",
+        attr: { role: "button", "aria-label": `\u7BA1\u7406\u6807\u7B7E ${item.name}`, tabindex: "0" }
+      });
+      (0, import_obsidian21.setIcon)(menu, "more-horizontal");
+      menu.addEventListener("click", (event) => {
+        event.stopPropagation();
+        this.openTagMenu(item, event);
+      });
+      menu.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = menu.getBoundingClientRect();
+        this.openTagMenu(item, new MouseEvent("click", {
+          clientX: rect.left,
+          clientY: rect.bottom,
+          bubbles: true
+        }));
+      });
+      row.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        this.openTagMenu(item, event);
+      });
       row.addEventListener("click", () => {
         this.selectedTagKey = item.key;
         this.selectedFilePath = "";
@@ -21120,6 +21483,105 @@ var TagBoardView = class extends import_obsidian21.ItemView {
         text: `\u8FD8\u6709 ${filtered.length - MAX_TAG_ROWS} \u4E2A\u6807\u7B7E\uFF0C\u7528\u4E0A\u65B9\u7B5B\u9009\u6846\u7F29\u5C0F\u8303\u56F4`
       });
     }
+  }
+  openTagMenu(item, event) {
+    const menu = new import_obsidian21.Menu();
+    menu.addItem((menuItem) => {
+      menuItem.setTitle("\u91CD\u547D\u540D\u6807\u7B7E").setIcon("pencil").onClick(() => this.openRenameTag(item));
+    });
+    menu.addItem((menuItem) => {
+      menuItem.setTitle("\u5220\u9664\u6807\u7B7E").setIcon("trash-2").onClick(() => void this.confirmDeleteTag(item));
+    });
+    menu.showAtMouseEvent(event);
+  }
+  openRenameTag(item) {
+    new RenameTagModal(this.app, item.name, (value) => {
+      void this.applyRenameTag(item, value);
+    }).open();
+  }
+  async applyRenameTag(item, rawName) {
+    if (this.mutating) {
+      return;
+    }
+    const display = normalizeTag(rawName);
+    if (!display) {
+      new import_obsidian21.Notice("\u6807\u7B7E\u540D\u4E0D\u80FD\u4E3A\u7A7A");
+      return;
+    }
+    if (display === item.name) {
+      return;
+    }
+    this.mutating = true;
+    try {
+      const result = await this.plugin.store.renameTag(item.key, display);
+      this.plugin.invalidateRelations();
+      this.selectedTagKey = result.newKey ?? item.key;
+      this.selectedFilePath = "";
+      await this.plugin.refreshAnnotations();
+      await this.render();
+      this.notifyMutation("\u91CD\u547D\u540D", result);
+    } catch (error) {
+      console.warn("yh-inklight: \u91CD\u547D\u540D\u6807\u7B7E\u5931\u8D25", error);
+      new import_obsidian21.Notice(`\u91CD\u547D\u540D\u6807\u7B7E\u5931\u8D25\uFF1A${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      this.mutating = false;
+    }
+  }
+  async confirmDeleteTag(item) {
+    if (this.mutating) {
+      return;
+    }
+    let usage;
+    try {
+      usage = await this.plugin.store.getTagUsage(item.key);
+    } catch (error) {
+      new import_obsidian21.Notice(`\u7EDF\u8BA1\u6807\u7B7E\u5F71\u54CD\u8303\u56F4\u5931\u8D25\uFF1A${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    if (usage.annotationCount === 0) {
+      new import_obsidian21.Notice("\u8FD9\u4E2A\u6807\u7B7E\u5DF2\u7ECF\u6CA1\u6709\u6279\u6CE8\u5728\u4F7F\u7528\u4E86");
+      return;
+    }
+    new DeleteTagModal(this.app, item.name, usage, () => {
+      void this.applyDeleteTag(item);
+    }).open();
+  }
+  async applyDeleteTag(item) {
+    if (this.mutating) {
+      return;
+    }
+    this.mutating = true;
+    try {
+      const result = await this.plugin.store.deleteTag(item.key);
+      this.plugin.invalidateRelations();
+      if (this.selectedTagKey === item.key) {
+        this.selectedTagKey = "";
+        this.selectedFilePath = "";
+      }
+      await this.plugin.refreshAnnotations();
+      await this.render();
+      this.notifyMutation("\u5220\u9664", result);
+    } catch (error) {
+      console.warn("yh-inklight: \u5220\u9664\u6807\u7B7E\u5931\u8D25", error);
+      new import_obsidian21.Notice(`\u5220\u9664\u6807\u7B7E\u5931\u8D25\uFF1A${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      this.mutating = false;
+    }
+  }
+  notifyMutation(action, result) {
+    if (result.failed.length > 0) {
+      console.warn("yh-inklight: \u6807\u7B7E\u6279\u91CF\u64CD\u4F5C\u5B58\u5728\u5931\u8D25\u6587\u4EF6", result.failed);
+      new import_obsidian21.Notice(
+        `${action}\u5B8C\u6210\uFF0C\u4F46\u6709 ${result.failed.length} \u4E2A\u6587\u4EF6\u5931\u8D25\uFF08\u6210\u529F ${result.changedFiles} \u4E2A / ${result.changedAnnotations} \u6761\u6279\u6CE8\uFF09\uFF0C\u8BE6\u60C5\u89C1\u63A7\u5236\u53F0`,
+        8e3
+      );
+      return;
+    }
+    if (result.changedFiles === 0) {
+      new import_obsidian21.Notice("\u6CA1\u6709\u9700\u8981\u4FEE\u6539\u7684\u6279\u6CE8");
+      return;
+    }
+    new import_obsidian21.Notice(`${action}\u6210\u529F\uFF1A${result.changedFiles} \u4E2A\u6587\u4EF6 / ${result.changedAnnotations} \u6761\u6279\u6CE8`);
   }
   renderFileColumn(col, files) {
     const head = col.createDiv({ cls: "yh-tagboard-head" });
@@ -21206,6 +21668,88 @@ var TagBoardView = class extends import_obsidian21.ItemView {
     return card.kind === "highlight" ? "\u9AD8\u4EAE" : "\u7B14\u8BB0";
   }
 };
+var RenameTagModal = class extends import_obsidian21.Modal {
+  constructor(app, currentName, onSubmit) {
+    super(app);
+    this.currentName = currentName;
+    this.onSubmit = onSubmit;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.addClass("yh-tagboard-modal");
+    contentEl.createEl("h3", { text: "\u91CD\u547D\u540D\u6807\u7B7E" });
+    contentEl.createEl("p", {
+      cls: "yh-tagboard-modal-hint",
+      text: `\u5F53\u524D\u6807\u7B7E\uFF1A${this.currentName}\u3002\u5982\u679C\u76EE\u6807\u6807\u7B7E\u5DF2\u5B58\u5728\uFF0C\u4F1A\u5408\u5E76\u5230\u76EE\u6807\u6807\u7B7E\uFF0C\u6279\u6CE8\u4E0D\u4F1A\u4E22\u5931\u3002`
+    });
+    const input = contentEl.createEl("input", {
+      cls: "yh-tagboard-modal-input",
+      attr: { type: "text", placeholder: "\u65B0\u7684\u6807\u7B7E\u540D" }
+    });
+    input.value = this.currentName;
+    const actions = contentEl.createDiv({ cls: "yh-tagboard-modal-actions" });
+    const cancel = actions.createEl("button", { text: "\u53D6\u6D88" });
+    const submit = actions.createEl("button", { text: "\u91CD\u547D\u540D" });
+    submit.addClass("mod-cta");
+    const apply = () => {
+      const value = input.value.trim();
+      if (!value) {
+        input.focus();
+        return;
+      }
+      this.close();
+      this.onSubmit(value);
+    };
+    cancel.addEventListener("click", () => this.close());
+    submit.addEventListener("click", apply);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        apply();
+      }
+    });
+    window.setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 30);
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+var DeleteTagModal = class extends import_obsidian21.Modal {
+  constructor(app, tagName, usage, onConfirm) {
+    super(app);
+    this.tagName = tagName;
+    this.usage = usage;
+    this.onConfirm = onConfirm;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.addClass("yh-tagboard-modal");
+    contentEl.createEl("h3", { text: "\u5220\u9664\u6807\u7B7E" });
+    contentEl.createEl("p", {
+      cls: "yh-tagboard-modal-hint",
+      text: `\u5C06\u4ECE ${this.usage.fileCount} \u4E2A\u6587\u4EF6\u7684 ${this.usage.annotationCount} \u6761\u6279\u6CE8\u4E0A\u79FB\u9664\u300C${this.tagName}\u300D\u3002`
+    });
+    contentEl.createEl("p", {
+      cls: "yh-tagboard-modal-warning",
+      text: "\u53EA\u4F1A\u5220\u9664\u6807\u7B7E\u672C\u8EAB\uFF0C\u4E0D\u4F1A\u5220\u9664\u4EFB\u4F55\u6279\u6CE8\u6216\u539F\u6587\u3002\u6B64\u64CD\u4F5C\u4E0D\u53EF\u64A4\u9500\u3002"
+    });
+    const actions = contentEl.createDiv({ cls: "yh-tagboard-modal-actions" });
+    const cancel = actions.createEl("button", { text: "\u53D6\u6D88" });
+    const confirm = actions.createEl("button", { text: "\u5220\u9664\u6807\u7B7E" });
+    confirm.addClass("mod-warning");
+    cancel.addEventListener("click", () => this.close());
+    confirm.addEventListener("click", () => {
+      this.close();
+      this.onConfirm();
+    });
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
 
 // main.ts
 var NOTE_TITLE_OPTIONS = [
@@ -21216,6 +21760,7 @@ var NOTE_TITLE_OPTIONS = [
 var MD_OPEN_STATS_PATH = ".obsidian-annotations/md-open-stats.json";
 var ANNOTATION_REVIEW_STATE_PATH = ".obsidian-annotations/annotation-review.json";
 var REVIEW_STATE_TTL_DAYS = 90;
+var MAX_AI_TAG_CANDIDATES = 80;
 var MD_MODIFY_DEBOUNCE_MS = 300;
 function anchorsUnchanged(before, after) {
   const same = (left, right) => left.anchor.startOffset === right.anchor.startOffset && left.anchor.endOffset === right.anchor.endOffset && left.anchor.selectedText === right.anchor.selectedText && Boolean(left.orphaned) === Boolean(right.orphaned);
@@ -21261,6 +21806,11 @@ var OverlayAnnotationsPlugin = class extends import_obsidian22.Plugin {
     this.reviewedAnnotations = {};
     // ------------------------------------------------------------------ 卡片「相关」区
     this.relationModelInstance = null;
+    /**
+     * AI 标签推荐缓存：同一条批注、同一版数据只请求一次。
+     * 批注一改 store.version 就变，旧结果自动失效；不落盘，避免把用户划线内容缓存到磁盘。
+     */
+    this.aiTagCache = /* @__PURE__ */ new Map();
   }
   async onload() {
     (0, import_obsidian22.addIcon)("yh-inklight-icon", YH_INKLIGHT_ICON);
@@ -21280,6 +21830,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian22.Plugin {
       saveSettings: () => this.saveSettings(),
       onTocChanged: () => this.refreshEpubToc(),
       tagSuggestions: () => this.getTagSuggestions(),
+      requestAiTagSuggestions: (card, force) => this.suggestTagsForCard(card, force),
       cardActions: {
         openDerivedNote: (sourcePath) => this.openDerivedNote(sourcePath),
         createAtomCard: (card) => this.createAtomCardFor(card),
@@ -21420,7 +21971,8 @@ var OverlayAnnotationsPlugin = class extends import_obsidian22.Plugin {
           throw error;
         }
       },
-      getTagSuggestions: () => this.getTagSuggestions()
+      getTagSuggestions: () => this.getTagSuggestions(),
+      requestAiTagSuggestions: (card, force) => this.suggestTagsForCard(card, force)
     });
     this.stickyLane = new StickyNoteLane({
       app: this.app,
@@ -21516,6 +22068,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian22.Plugin {
   }
   async saveSettings() {
     await this.saveData(this.settings);
+    this.aiTagCache.clear();
   }
   async refreshAnnotations() {
     this.app.workspace.updateOptions();
@@ -22471,6 +23024,45 @@ ${lines.slice(0, 8).join("\n")}`);
     }
     return this.relationModel().getRecommendedTags(card).map((name) => ({ name, kind: "recommended" }));
   }
+  /**
+   * 按需 AI 推荐标签。只有用户点标签下拉里的「AI 推荐」行才会调用。
+   * 关键约束：候选只来自 store 的标签字典，模型输出还要按 tagKey 精确校验回候选表；
+   * 不在表里的结果直接丢弃，绝不把 AI 发明的词写进标签体系。
+   */
+  async suggestTagsForCard(card, force = false) {
+    const text = `${card.text} ${card.content}`.trim();
+    if (text.length < 8) {
+      return [];
+    }
+    const existing = new Set(card.tags.map((tag) => tagKey(tag)));
+    const candidates = this.store.getTagDictionary().map((item) => item.name).filter((name) => !existing.has(tagKey(name))).slice(0, MAX_AI_TAG_CANDIDATES);
+    if (candidates.length === 0) {
+      return [];
+    }
+    const cacheKey = `${card.sourcePath}\0${card.id}`;
+    const cached = this.aiTagCache.get(cacheKey);
+    if (!force && cached && cached.version === this.store.version) {
+      return cached.tag && !existing.has(tagKey(cached.tag)) ? [cached.tag] : [];
+    }
+    const cfg = resolveAiConfig(this.settings);
+    if (!isAiConfigured(cfg)) {
+      new import_obsidian22.Notice("AI \u52A9\u624B\u8FD8\u6CA1\u914D\u7F6E\u3002\u8BF7\u5230 \u8BBE\u7F6E \u2192 \u7B2C\u4E09\u65B9\u63D2\u4EF6 \u2192 \u58A8\u5149\u6279\u6CE8 \u2192\u300CAI \u52A9\u624B\u300D\u586B\u5199\u670D\u52A1\u5546\u4E0E API Key\u3002");
+      throw new Error("AI \u672A\u914D\u7F6E");
+    }
+    const requestVersion = this.store.version;
+    try {
+      const raw = await suggestTagWithAi(cfg, text, candidates);
+      const tag = parseSuggestedTag(raw, candidates);
+      if (this.store.version === requestVersion) {
+        this.aiTagCache.set(cacheKey, { version: requestVersion, tag });
+      }
+      return tag ? [tag] : [];
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      new import_obsidian22.Notice(`AI \u63A8\u8350\u6807\u7B7E\u5931\u8D25\uFF1A${message}`);
+      throw error;
+    }
+  }
   /** 浮层用：命中可能还没算过，先确保全库快照就绪 */
   async relatedHitsFor(card) {
     if (!this.settings.contentRelations) {
@@ -22918,6 +23510,7 @@ ${lines.slice(0, 8).join("\n")}`);
       onDelete: () => void this.deleteMarkdownAnnotation(file, annotation.id),
       onTagsChange: (next) => this.saveMarkdownAnnotationTags(file, annotation.id, next),
       tagSuggestions: () => this.getTagSuggestions(),
+      onRequestAiTag: (force) => this.suggestTagsForCard(cardData, force),
       onOpenExport: () => void this.openDerivedNote(cardData.sourcePath),
       // 与侧栏同一门槛：只要自己写了内容（不限类型），否则不渲染按钮（浮层不给空卡开口子）
       ...canExtractAtomCard(cardData) ? { onAtomCard: () => void this.createAtomCardFor(cardData) } : {},

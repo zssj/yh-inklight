@@ -5,7 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
-import { App, MarkdownView, TFile, WorkspaceLeaf } from "obsidian";
+import { App, MarkdownView, Notice, TFile, WorkspaceLeaf } from "obsidian";
 
 import type { AnnotationMode } from "./cardModel";
 
@@ -58,8 +58,20 @@ export async function openAnnotationTarget(
     }
   }
 
-  const leaf = app.workspace.getLeaf(options?.newTab ? "tab" : false);
-  await leaf.openFile(target.file);
+  // 目标文件已经在某个标签页里就直接切过去，不要为同一文件再开一个标签页
+  const opened = findLeafShowingFile(app, target.file);
+  const leaf = opened ?? pickNavigationLeaf(app, options?.newTab === true);
+  try {
+    if (opened) {
+      await app.workspace.revealLeaf(opened);
+    } else {
+      await leaf.openFile(target.file);
+    }
+  } catch (error) {
+    // 静默失败最难查：拿不到文件就打出来，别再让用户面对「点了没反应」
+    new Notice(`跳转失败：${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
 
   // 无 CFI 的 EPUB：打开即可，不能继续走下面的 Markdown 定位（会白等 2s 拿不到 MarkdownView）
   if (target.mode === "epub") {
@@ -90,6 +102,36 @@ export async function openAnnotationTarget(
       }
     }, delay);
   }
+}
+
+/**
+ * 选一个「文件该在主区域打开」的 leaf。
+ *
+ * 不要用 workspace.getLeaf(false)：从 Obsidian 1.12 起它的实现是 getUnpinnedLeaf()，
+ * 会优先返回**当前活动 leaf**。用户在右侧栏点「跳转」或在标签总览点「跳回原文」时，
+ * 活动 leaf 就是侧栏/标签总览自己，文档于是被开进那一分组（侧栏里冒出文档、正文区毫无反应），
+ * 表现就是「所有跳转都失效」。getMostRecentLeaf() 默认只在 rootSplit（主区域）与浮窗里找，语义稳定。
+ */
+function pickNavigationLeaf(app: App, newTab: boolean): WorkspaceLeaf {
+  if (newTab) {
+    return app.workspace.getLeaf("tab");
+  }
+  return app.workspace.getMostRecentLeaf() ?? app.workspace.getLeaf("tab");
+}
+
+/** 找出已经显示该文件的标签页（不区分视图类型；epub 有自己的 findOpenEpubLeaf） */
+function findLeafShowingFile(app: App, file: TFile): WorkspaceLeaf | null {
+  const matches: WorkspaceLeaf[] = [];
+  app.workspace.iterateAllLeaves((leaf) => {
+    if (matches.length > 0) {
+      return;
+    }
+    const viewFile = (leaf.view as { file?: TFile } | undefined)?.file;
+    if (viewFile?.path === file.path) {
+      matches.push(leaf);
+    }
+  });
+  return matches[0] ?? null;
 }
 
 /** 轮询等待目标文件的 MarkdownView 就绪：先看刚打开的 leaf，再扫一遍已打开的 md 标签页 */

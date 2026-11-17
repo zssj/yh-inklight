@@ -13909,8 +13909,18 @@ async function openAnnotationTarget(app, target, navigateEpub, options) {
       return;
     }
   }
-  const leaf = app.workspace.getLeaf(options?.newTab ? "tab" : false);
-  await leaf.openFile(target.file);
+  const opened = findLeafShowingFile(app, target.file);
+  const leaf = opened ?? pickNavigationLeaf(app, options?.newTab === true);
+  try {
+    if (opened) {
+      await app.workspace.revealLeaf(opened);
+    } else {
+      await leaf.openFile(target.file);
+    }
+  } catch (error) {
+    new import_obsidian10.Notice(`\u8DF3\u8F6C\u5931\u8D25\uFF1A${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
   if (target.mode === "epub") {
     return;
   }
@@ -13932,6 +13942,25 @@ async function openAnnotationTarget(app, target, navigateEpub, options) {
       }
     }, delay);
   }
+}
+function pickNavigationLeaf(app, newTab) {
+  if (newTab) {
+    return app.workspace.getLeaf("tab");
+  }
+  return app.workspace.getMostRecentLeaf() ?? app.workspace.getLeaf("tab");
+}
+function findLeafShowingFile(app, file) {
+  const matches = [];
+  app.workspace.iterateAllLeaves((leaf) => {
+    if (matches.length > 0) {
+      return;
+    }
+    const viewFile = leaf.view?.file;
+    if (viewFile?.path === file.path) {
+      matches.push(leaf);
+    }
+  });
+  return matches[0] ?? null;
 }
 async function resolveMarkdownView(app, leaf, file, timeoutMs = 2e3) {
   const deadline = Date.now() + timeoutMs;

@@ -496,7 +496,8 @@ export class TagBoardView extends ItemView {
           mode: card.mode,
           cfiRange: card.cfiRange,
         },
-        (target, cfi) => this.plugin.navigateEpubToCfi(target, cfi),
+        // 必须是「打开书 + 定位」：navigateEpubToCfi 只定位已打开的阅读器，书没开就什么都不做
+        (target, cfi) => this.plugin.openEpubAtCfi(target.path, cfi),
       );
     });
   }

@@ -1361,7 +1361,9 @@ export class AnnotationSidebarView extends ItemView {
     cfiRange?: string,
   ): Promise<void> {
     await openAnnotationTarget(this.app, { file, offset, pageNumber, mode, cfiRange }, (target, cfi) =>
-      this.plugin.navigateEpubToCfi(target, cfi),
+      // 必须是「打开书 + 定位」：navigateEpubToCfi 只在已打开的阅读器里定位，
+      // 书没开时它只会重试到超时，用户看到的就是「点了完全没反应、也不报错」。
+      this.plugin.openEpubAtCfi(target.path, cfi),
     );
   }
 }

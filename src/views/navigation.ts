@@ -42,13 +42,14 @@ export interface OpenAnnotationTargetOptions {
 export async function openAnnotationTarget(
   app: App,
   target: AnnotationTarget,
-  navigateEpub: (file: TFile, cfiRange: string) => void,
+  /** 第三参必须是「打开书 + 定位」（main.openEpubAtCfi）：只定位已开视图的实现会在书没开时彻底空转 */
+  openEpubAt: (file: TFile, cfiRange: string) => void,
   options?: OpenAnnotationTargetOptions,
 ): Promise<void> {
   if (target.mode === "epub") {
     // 有 CFI：打开 + 定位一律交给插件，避免本层与 openEpubAtCfi 各开一个标签页
     if (target.cfiRange) {
-      navigateEpub(target.file, target.cfiRange);
+      openEpubAt(target.file, target.cfiRange);
       return;
     }
     const existing = findOpenEpubLeaf(app, target.file);

@@ -2010,11 +2010,14 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   }
 
   /**
-   * 在已打开的 EPUB 视图中导航到指定 CFI。
-   * 统一的跳转入口：openEpubAtCfi（摘录回跳/协议跳转）与侧栏 jumpTo 的 epub 分支都走这里。
-   * 这里只负责「找到正确的 leaf」；书是否加载完成由 EpubReaderView 自己暂存 pendingCfi 处理。
+   * 在**已打开**的 EPUB 视图里导航到指定 CFI（openEpubAtCfi 打开/复用之后才调它）。
+   *
+   * 它不会打开任何文件：找不到该书的 leaf 时只会重试到超时。
+   * 因此**视图层一律调用 openEpubAtCfi**——历史上侧栏与标签总览误传了本方法，
+   * 书没打开时点击跳转就是「完全没反应、也不报错」。故此处保持 private，
+   * 让「视图直接调它」在编译期就失败。
    */
-  navigateEpubToCfi(file: TFile, cfi: string): void {
+  private navigateEpubToCfi(file: TFile, cfi: string): void {
     const matchesFile = (leaf: WorkspaceLeaf): boolean => {
       const viewFile = (leaf.view as { file?: TFile } | undefined)?.file?.path;
       if (viewFile === file.path) {

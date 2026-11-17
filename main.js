@@ -13897,10 +13897,10 @@ function pickScrollAnchor(cards, listTop) {
 var import_obsidian10 = require("obsidian");
 var EPUB_READER_VIEW_TYPE = "inklight-epub-reader";
 var MARKDOWN_VIEW_TYPE = "markdown";
-async function openAnnotationTarget(app, target, navigateEpub, options) {
+async function openAnnotationTarget(app, target, openEpubAt, options) {
   if (target.mode === "epub") {
     if (target.cfiRange) {
-      navigateEpub(target.file, target.cfiRange);
+      openEpubAt(target.file, target.cfiRange);
       return;
     }
     const existing = findOpenEpubLeaf(app, target.file);
@@ -15112,7 +15112,11 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     await openAnnotationTarget(
       this.app,
       { file, offset, pageNumber, mode, cfiRange },
-      (target, cfi) => this.plugin.navigateEpubToCfi(target, cfi)
+      (target, cfi) => (
+        // 必须是「打开书 + 定位」：navigateEpubToCfi 只在已打开的阅读器里定位，
+        // 书没开时它只会重试到超时，用户看到的就是「点了完全没反应、也不报错」。
+        this.plugin.openEpubAtCfi(target.path, cfi)
+      )
     );
   }
 };
@@ -21691,7 +21695,8 @@ var TagBoardView = class extends import_obsidian21.ItemView {
           mode: card.mode,
           cfiRange: card.cfiRange
         },
-        (target, cfi) => this.plugin.navigateEpubToCfi(target, cfi)
+        // 必须是「打开书 + 定位」：navigateEpubToCfi 只定位已打开的阅读器，书没开就什么都不做
+        (target, cfi) => this.plugin.openEpubAtCfi(target.path, cfi)
       );
     });
   }
@@ -23478,9 +23483,12 @@ ${lines.slice(0, 8).join("\n")}`);
     this.navigateEpubToCfi(file, cfi);
   }
   /**
-   * 在已打开的 EPUB 视图中导航到指定 CFI。
-   * 统一的跳转入口：openEpubAtCfi（摘录回跳/协议跳转）与侧栏 jumpTo 的 epub 分支都走这里。
-   * 这里只负责「找到正确的 leaf」；书是否加载完成由 EpubReaderView 自己暂存 pendingCfi 处理。
+   * 在**已打开**的 EPUB 视图里导航到指定 CFI（openEpubAtCfi 打开/复用之后才调它）。
+   *
+   * 它不会打开任何文件：找不到该书的 leaf 时只会重试到超时。
+   * 因此**视图层一律调用 openEpubAtCfi**——历史上侧栏与标签总览误传了本方法，
+   * 书没打开时点击跳转就是「完全没反应、也不报错」。故此处保持 private，
+   * 让「视图直接调它」在编译期就失败。
    */
   navigateEpubToCfi(file, cfi) {
     const matchesFile = (leaf) => {

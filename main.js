@@ -13539,6 +13539,29 @@ function observeKeyboardInset(onChange, isAlive = () => true) {
   return cleanup;
 }
 
+// src/views/scrollRestore.ts
+var RESTORE_MAX_CARDS = 400;
+function applyScrollRestore(target, restore, fill) {
+  const finished = fill(restore.top + target.viewportHeight());
+  target.setTop(restore.top);
+  const offset = restore.anchorId ? target.anchorOffsetIn(restore.anchorId) : null;
+  if (offset !== null) {
+    const delta = offset - restore.anchorOffset;
+    if (Math.abs(delta) > 0.5) {
+      target.adjust(delta);
+    }
+  }
+  return finished;
+}
+function pickScrollAnchor(cards, listTop) {
+  for (const card of cards) {
+    if (card.bottom > listTop + 1) {
+      return { anchorId: card.id, anchorOffset: card.top - listTop };
+    }
+  }
+  return { anchorId: "", anchorOffset: 0 };
+}
+
 // src/views/navigation.ts
 var import_obsidian10 = require("obsidian");
 var EPUB_READER_VIEW_TYPE = "inklight-epub-reader";
@@ -13667,6 +13690,11 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
      * requestRender 直接返回：从主界面切回侧栏、或 file-open 触发的刷新都不再重建整表。
      */
     this.renderedKey = "";
+    /**
+     * 上一次渲染时的「视角身份」（范围 + 搜索 + 筛选 + 排序 + 当前文件），不含数据版本。
+     * 数据变化触发的重建要保留滚动位置，视角变化则是用户主动换内容，回到顶部。
+     */
+    this.renderedIdentity = "";
     /** requestRender(true) 用：刷新按钮与显式重载要绕开指纹守卫 */
     this.forceRender = false;
     /**
@@ -13703,6 +13731,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
   async onOpen() {
     this.containerEl.addClass("yh-sidebar");
     this.renderedKey = "";
+    this.renderedIdentity = "";
     this.registerDomEvent(this.containerEl, "click", (event) => this.handleViewClick(event));
     await this.render();
   }
@@ -13712,6 +13741,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.listObserver = null;
     this.resetDeferredContent();
     this.renderedKey = "";
+    this.renderedIdentity = "";
     this.scopeCache = null;
     this.menuPanel = null;
     this.menuButton = null;
@@ -13748,21 +13778,40 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     }, 0);
   }
   /**
+   * 视角身份：只含用户选的那几个维度，不含数据版本。
+   * 数据版本变化（新增/删除批注）要刷新列表，但用户滚到哪就该留在哪；
+   * 视角变了才是换了另一批内容，回到顶部才符合预期。
+   */
+  listIdentity() {
+    const activePath = this.annotationScope === "current" ? this.app.workspace.getActiveFile()?.path ?? "" : "";
+    return [this.annotationScope, this.query, this.color, this.type, this.sort, this.tagFilter, activePath].join("");
+  }
+  /**
    * 内容指纹：只有它变化时才值得重建整张侧栏。
    * 有意不含 openRelated（那是卡片内部 details 的展开态，重绘时由卡片自己带出）。
    */
   currentKey() {
-    return [
-      this.annotationScope,
-      this.query,
-      this.color,
-      this.type,
-      this.sort,
-      this.tagFilter,
-      this.plugin.store.version,
-      this.app.workspace.getActiveFile()?.path ?? "",
-      this.plugin.settings.contentRelations ? 1 : 0
-    ].join("");
+    return [this.listIdentity(), this.plugin.store.version, this.plugin.settings.contentRelations ? 1 : 0].join("");
+  }
+  /**
+   * 重建前记下滚动位置：像素位置 + 列表顶端第一张可见卡片。
+   * 必须在清空 DOM 之前调用，之后列表里已经没有卡片可量了。
+   */
+  captureScroll(list) {
+    const target = list ?? this.containerEl.querySelector(".yh-ov-list");
+    if (!target) {
+      return null;
+    }
+    const top = target.scrollTop;
+    if (top <= 1) {
+      return null;
+    }
+    const listTop = target.getBoundingClientRect().top;
+    const cards = Array.from(target.querySelectorAll(".yh-ov-card"), (card) => {
+      const rect = card.getBoundingClientRect();
+      return { id: card.dataset.id ?? "", top: rect.top, bottom: rect.bottom };
+    });
+    return { top, ...pickScrollAnchor(cards, listTop) };
   }
   /**
    * 当前范围下的文档与卡片。全库范围按 store.version 复用上一次拍平的结果：
@@ -13790,10 +13839,12 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     const force = this.forceRender;
     this.forceRender = false;
     const key = this.currentKey();
+    const identity = this.listIdentity();
     const container = this.containerEl.children[1] ?? this.containerEl;
     if (!force && key === this.renderedKey && container.querySelector(".yh-ov-list")) {
       return;
     }
+    const restore = this.renderedIdentity === identity ? this.captureScroll() : null;
     this.listObserver?.disconnect();
     this.listObserver = null;
     this.resetDeferredContent();
@@ -13805,6 +13856,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     if (this.annotationScope === "current" && !file) {
       container.createDiv({ cls: "yh-empty", text: "Open a Markdown or PDF file to inspect annotations." });
       this.renderedKey = key;
+      this.renderedIdentity = identity;
       return;
     }
     const scope = await this.loadScope(force);
@@ -13825,8 +13877,9 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     const scopeLabel = this.annotationScope === "all" ? `${documents.length} files` : "current file";
     container.createDiv({ cls: "yh-ov-count", text: `${scopeLabel} \xB7 ${highlightCount} highlights \xB7 ${noteCount} notes` });
     const list = container.createDiv({ cls: "yh-ov-list" });
-    this.renderCardList(list, cards, listToken);
+    this.renderCardList(list, cards, listToken, restore);
     this.renderedKey = key;
+    this.renderedIdentity = identity;
   }
   /**
    * 只刷新卡片列表（不重建搜索框等控件），用于搜索输入时保持焦点。
@@ -13847,6 +13900,8 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     if (key === this.renderedKey) {
       return;
     }
+    const identity = this.listIdentity();
+    const restore = this.renderedIdentity === identity ? this.captureScroll(list) : null;
     const scope = await this.loadScope();
     if (!scope) {
       await this.render();
@@ -13864,7 +13919,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.listObserver = null;
     this.resetDeferredContent();
     list.empty();
-    this.renderCardList(list, cards, listToken);
+    this.renderCardList(list, cards, listToken, restore);
     const countEl = root.querySelector(".yh-ov-count");
     if (countEl) {
       const highlightCount = rawCards.filter((card) => card.kind === "highlight" && !card.orphaned).length;
@@ -13873,6 +13928,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       countEl.textContent = `${scopeLabel} \xB7 ${highlightCount} highlights \xB7 ${noteCount} notes`;
     }
     this.renderedKey = key;
+    this.renderedIdentity = identity;
   }
   /**
    * 列表按需渲染：先同步铺首屏，剩余卡片等哨兵滚到附近再追加。
@@ -13882,7 +13938,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
    * 手机上还会因为节点过多被系统回收。改成按需追加后，DOM 规模跟着实际滚动深度走；
    * 内容、顺序与筛选结果不变，只是还没滚到的卡片尚未创建。
    */
-  renderCardList(list, cards, token) {
+  renderCardList(list, cards, token, restore = null) {
     if (!cards.length) {
       list.createDiv({ cls: "yh-empty", text: "No matching annotations." });
       return;
@@ -13900,7 +13956,12 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       return cursor >= cards.length;
     };
     this.deferMarkdown = false;
-    if (append(INITIAL_CARD_BATCH)) {
+    let finished = append(INITIAL_CARD_BATCH);
+    if (restore) {
+      this.deferMarkdown = true;
+      finished = this.restoreListScroll(list, append, finished, restore);
+    }
+    if (finished) {
       sentinel.remove();
       return;
     }
@@ -13948,6 +14009,43 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       observer.observe(sentinel);
     };
     scheduleNext();
+  }
+  /**
+   * 回到重建前的滚动位置。
+   *
+   * 列表是「滚到才建」的，重建后只有首屏那么高，直接写 scrollTop 会被夹住；
+   * 所以先按需补渲染（最多 RESTORE_MAX_CARDS 张，再深就退回像素落位、其余交给滚动追加），
+   * 落位后再按锚点卡校正——卡片高度会随笔记内容变化，纯像素会漂。
+   */
+  restoreListScroll(list, append, finished, restore) {
+    const target = {
+      contentHeight: () => list.scrollHeight,
+      viewportHeight: () => list.clientHeight,
+      anchorOffsetIn: (anchorId) => {
+        for (const card of Array.from(list.querySelectorAll(".yh-ov-card"))) {
+          if (card.dataset.id === anchorId) {
+            return card.getBoundingClientRect().top - list.getBoundingClientRect().top;
+          }
+        }
+        return null;
+      },
+      setTop: (top) => {
+        list.scrollTop = top;
+      },
+      adjust: (delta) => {
+        list.scrollTop += delta;
+      }
+    };
+    const fill = (atLeastHeight) => {
+      let done = finished;
+      let budget = RESTORE_MAX_CARDS;
+      while (!done && budget > 0 && target.contentHeight() < atLeastHeight) {
+        done = append(CARD_BATCH_SIZE);
+        budget -= CARD_BATCH_SIZE;
+      }
+      return done;
+    };
+    return applyScrollRestore(target, restore, fill);
   }
   /**
    * 正文 Markdown 的延迟渲染：卡片进入列表可视区（提前 400px）才解析。

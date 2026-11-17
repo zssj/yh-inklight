@@ -417,6 +417,12 @@
 .yh-ov-list > .yh-ov-card {
   content-visibility: auto;
   contain-intrinsic-size: auto 160px;
+  /*
+   * 老 WebView（Safari 18 之前）不认识 content-visibility，缺这层时一张卡高度变化
+   * 就会让整条列表重排；补上布局/样式隔离后，影响范围止于卡片自身。
+   * 有意不加 paint：那会裁掉卡片阴影与相关区的溢出内容。
+   */
+  contain: layout style;
 }
 
 /* 哨兵：列表末尾的 1px 探针，IntersectionObserver 靠它判断「滚到底了」 */

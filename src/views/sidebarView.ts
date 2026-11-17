@@ -13,7 +13,9 @@
  *        用户滚到附近才追加下一批（不再定时把全库铺完），listToken 作废旧批次；
  *        渲染前已预热关联快照时，卡片相关区直接同步取命中，不再逐卡 await prepare；
  *        render/refreshList 各有一次「无变化就跳过」的守卫（store.version + 筛选 + 活动文件），
- *        避免切走再切回时把上千张卡整表重建
+ *        避免切走再切回时把上千张卡整表重建；
+ *        重建后按「视角身份 + 锚点卡」恢复滚动位置：同一批筛选下数据变化（新增/删除批注）
+ *        不再把用户从列表深处弹回顶部，换范围/换筛选则照旧回到顶部
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
@@ -39,6 +41,8 @@ import {
 import { AnnotationKind, AnnotationMode, buildCards, canExtractAtomCard, SidebarCard } from "./cardModel";
 import { CardBodyHost, renderCardBody } from "./cardBody";
 import { renderRelatedBlock } from "./relatedBlock";
+import { applyScrollRestore, pickScrollAnchor, RESTORE_MAX_CARDS } from "./scrollRestore";
+import type { ScrollRestore } from "./scrollRestore";
 import { openAnnotationTarget } from "./navigation";
 import { hasTag, tagKey } from "../storage/tags";
 import type { TagRef } from "../storage/annotationStore";
@@ -100,6 +104,11 @@ export class AnnotationSidebarView extends ItemView {
    * requestRender 直接返回：从主界面切回侧栏、或 file-open 触发的刷新都不再重建整表。
    */
   private renderedKey = "";
+  /**
+   * 上一次渲染时的「视角身份」（范围 + 搜索 + 筛选 + 排序 + 当前文件），不含数据版本。
+   * 数据变化触发的重建要保留滚动位置，视角变化则是用户主动换内容，回到顶部。
+   */
+  private renderedIdentity = "";
   /** requestRender(true) 用：刷新按钮与显式重载要绕开指纹守卫 */
   private forceRender = false;
   /**
@@ -150,6 +159,7 @@ export class AnnotationSidebarView extends ItemView {
     this.containerEl.addClass("yh-sidebar");
     // 重新打开时容器可能已被清空：指纹必须作废，否则守卫会跳过一次真正需要的渲染
     this.renderedKey = "";
+    this.renderedIdentity = "";
     // 点击委托挂在视图根节点上：header 每次重绘都会重建按钮，
     // 绑在按钮自身上的监听会随节点一起消失，委托则始终有效。
     this.registerDomEvent(this.containerEl, "click", (event) => this.handleViewClick(event));
@@ -162,6 +172,7 @@ export class AnnotationSidebarView extends ItemView {
     this.listObserver = null;
     this.resetDeferredContent();
     this.renderedKey = "";
+    this.renderedIdentity = "";
     this.scopeCache = null;
     this.menuPanel = null;
     this.menuButton = null;
@@ -202,21 +213,42 @@ export class AnnotationSidebarView extends ItemView {
   }
 
   /**
+   * 视角身份：只含用户选的那几个维度，不含数据版本。
+   * 数据版本变化（新增/删除批注）要刷新列表，但用户滚到哪就该留在哪；
+   * 视角变了才是换了另一批内容，回到顶部才符合预期。
+   */
+  private listIdentity(): string {
+    const activePath = this.annotationScope === "current" ? (this.app.workspace.getActiveFile()?.path ?? "") : "";
+    return [this.annotationScope, this.query, this.color, this.type, this.sort, this.tagFilter, activePath].join("\u0001");
+  }
+
+  /**
    * 内容指纹：只有它变化时才值得重建整张侧栏。
    * 有意不含 openRelated（那是卡片内部 details 的展开态，重绘时由卡片自己带出）。
    */
   private currentKey(): string {
-    return [
-      this.annotationScope,
-      this.query,
-      this.color,
-      this.type,
-      this.sort,
-      this.tagFilter,
-      this.plugin.store.version,
-      this.app.workspace.getActiveFile()?.path ?? "",
-      this.plugin.settings.contentRelations ? 1 : 0,
-    ].join("\u0001");
+    return [this.listIdentity(), this.plugin.store.version, this.plugin.settings.contentRelations ? 1 : 0].join("\u0002");
+  }
+
+  /**
+   * 重建前记下滚动位置：像素位置 + 列表顶端第一张可见卡片。
+   * 必须在清空 DOM 之前调用，之后列表里已经没有卡片可量了。
+   */
+  private captureScroll(list?: HTMLElement | null): ScrollRestore | null {
+    const target = list ?? this.containerEl.querySelector<HTMLElement>(".yh-ov-list");
+    if (!target) {
+      return null;
+    }
+    const top = target.scrollTop;
+    if (top <= 1) {
+      return null;
+    }
+    const listTop = target.getBoundingClientRect().top;
+    const cards = Array.from(target.querySelectorAll<HTMLElement>(".yh-ov-card"), (card) => {
+      const rect = card.getBoundingClientRect();
+      return { id: card.dataset.id ?? "", top: rect.top, bottom: rect.bottom };
+    });
+    return { top, ...pickScrollAnchor(cards, listTop) };
   }
 
   /**
@@ -252,11 +284,14 @@ export class AnnotationSidebarView extends ItemView {
     const force = this.forceRender;
     this.forceRender = false;
     const key = this.currentKey();
+    const identity = this.listIdentity();
     const container = this.containerEl.children[1] ?? this.containerEl;
     // 内容没变且列表还在：直接保留现有 DOM（含滚动位置），不重建
     if (!force && key === this.renderedKey && container.querySelector(".yh-ov-list")) {
       return;
     }
+    // 视角没变、只是数据变了 → 重建后回到原位；视角变了 → 从顶部开始
+    const restore = this.renderedIdentity === identity ? this.captureScroll() : null;
     this.listObserver?.disconnect();
     this.listObserver = null;
     this.resetDeferredContent();
@@ -271,6 +306,7 @@ export class AnnotationSidebarView extends ItemView {
     if (this.annotationScope === "current" && !file) {
       container.createDiv({ cls: "yh-empty", text: "Open a Markdown or PDF file to inspect annotations." });
       this.renderedKey = key;
+      this.renderedIdentity = identity;
       return;
     }
 
@@ -293,8 +329,9 @@ export class AnnotationSidebarView extends ItemView {
     container.createDiv({ cls: "yh-ov-count", text: `${scopeLabel} · ${highlightCount} highlights · ${noteCount} notes` });
 
     const list = container.createDiv({ cls: "yh-ov-list" });
-    this.renderCardList(list, cards, listToken);
+    this.renderCardList(list, cards, listToken, restore);
     this.renderedKey = key;
+    this.renderedIdentity = identity;
   }
 
   /**
@@ -317,6 +354,9 @@ export class AnnotationSidebarView extends ItemView {
     if (key === this.renderedKey) {
       return;
     }
+    const identity = this.listIdentity();
+    // 位置必须在清空之前取：清空后列表里已经没有卡片可量
+    const restore = this.renderedIdentity === identity ? this.captureScroll(list) : null;
     const scope = await this.loadScope();
     if (!scope) {
       await this.render();
@@ -336,7 +376,7 @@ export class AnnotationSidebarView extends ItemView {
     this.listObserver = null;
     this.resetDeferredContent();
     list.empty();
-    this.renderCardList(list, cards, listToken);
+    this.renderCardList(list, cards, listToken, restore);
 
     const countEl = root.querySelector<HTMLElement>(".yh-ov-count");
     if (countEl) {
@@ -346,6 +386,7 @@ export class AnnotationSidebarView extends ItemView {
       countEl.textContent = `${scopeLabel} · ${highlightCount} highlights · ${noteCount} notes`;
     }
     this.renderedKey = key;
+    this.renderedIdentity = identity;
   }
 
   /**
@@ -356,7 +397,12 @@ export class AnnotationSidebarView extends ItemView {
    * 手机上还会因为节点过多被系统回收。改成按需追加后，DOM 规模跟着实际滚动深度走；
    * 内容、顺序与筛选结果不变，只是还没滚到的卡片尚未创建。
    */
-  private renderCardList(list: Element, cards: SidebarCard[], token: number): void {
+  private renderCardList(
+    list: Element,
+    cards: SidebarCard[],
+    token: number,
+    restore: ScrollRestore | null = null,
+  ): void {
     if (!cards.length) {
       list.createDiv({ cls: "yh-empty", text: "No matching annotations." });
       return;
@@ -379,7 +425,14 @@ export class AnnotationSidebarView extends ItemView {
 
     // 首屏这批立即渲染正文（它们就在眼前）；之后的批次等滚到再解析 Markdown
     this.deferMarkdown = false;
-    if (append(INITIAL_CARD_BATCH)) {
+    let finished = append(INITIAL_CARD_BATCH);
+    if (restore) {
+      // 恢复位置要补的批次都在首屏之外，正文照旧延迟到进入视口再解析，
+      // 否则「滚到很深的位置时数据变了」会一次解析几百张卡，等于把卡顿搬回来
+      this.deferMarkdown = true;
+      finished = this.restoreListScroll(list as HTMLElement, append, finished, restore);
+    }
+    if (finished) {
       sentinel.remove();
       return;
     }
@@ -430,6 +483,49 @@ export class AnnotationSidebarView extends ItemView {
     };
 
     scheduleNext();
+  }
+
+  /**
+   * 回到重建前的滚动位置。
+   *
+   * 列表是「滚到才建」的，重建后只有首屏那么高，直接写 scrollTop 会被夹住；
+   * 所以先按需补渲染（最多 RESTORE_MAX_CARDS 张，再深就退回像素落位、其余交给滚动追加），
+   * 落位后再按锚点卡校正——卡片高度会随笔记内容变化，纯像素会漂。
+   */
+  private restoreListScroll(
+    list: HTMLElement,
+    append: (size: number) => boolean,
+    finished: boolean,
+    restore: ScrollRestore,
+  ): boolean {
+    const target = {
+      contentHeight: () => list.scrollHeight,
+      viewportHeight: () => list.clientHeight,
+      anchorOffsetIn: (anchorId: string): number | null => {
+        for (const card of Array.from(list.querySelectorAll<HTMLElement>(".yh-ov-card"))) {
+          if (card.dataset.id === anchorId) {
+            return card.getBoundingClientRect().top - list.getBoundingClientRect().top;
+          }
+        }
+        return null;
+      },
+      setTop: (top: number) => {
+        list.scrollTop = top;
+      },
+      adjust: (delta: number) => {
+        list.scrollTop += delta;
+      },
+    };
+    const fill = (atLeastHeight: number): boolean => {
+      let done = finished;
+      let budget = RESTORE_MAX_CARDS;
+      while (!done && budget > 0 && target.contentHeight() < atLeastHeight) {
+        done = append(CARD_BATCH_SIZE);
+        budget -= CARD_BATCH_SIZE;
+      }
+      return done;
+    };
+    return applyScrollRestore(target, restore, fill);
   }
 
   /**

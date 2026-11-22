@@ -14078,6 +14078,12 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     /** 字面关联的按需内存快照：随 store.version 自动失效，不落盘 */
     /** 移动端标签编辑态的键盘监听清理：同一时刻只允许一个编辑态持有 */
     this.keyboardCleanup = null;
+    /**
+     * 当前标签编辑器的收口：abort 外部点击 / 软键盘监听并把该行复原成 chip。
+     * 挂载新编辑器前先调它：键盘激活「+」不先触发 pointerdown，旧监听与旧输入框会残留，
+     * 结果就是两张卡同时显示输入框、点一次外面两个一起关。
+     */
+    this.tagEditorCleanup = null;
     /** 标签编辑期间被挡下的重绘请求，编辑结束后补一次 */
     this.pendingRender = false;
     /** 只有用户主动点「+」进入编辑态时才抢焦点；重绘重建不抢，否则输入法会自动弹起 */
@@ -14113,8 +14119,11 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.scopeCache = null;
     this.menuPanel = null;
     this.menuButton = null;
+    this.tagEditorCleanup?.();
+    this.tagEditorCleanup = null;
     this.keyboardCleanup?.();
     this.keyboardCleanup = null;
+    this.editingTagCardId = null;
     this.pendingRender = false;
     this.pendingTagQuery = "";
     this.tagEditorAutoFocus = false;
@@ -14202,6 +14211,10 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     return { documents, cards };
   }
   async render() {
+    if (this.editingTagCardId !== null) {
+      this.pendingRender = true;
+      return;
+    }
     const token = ++this.renderToken;
     const listToken = ++this.listToken;
     const force = this.forceRender;
@@ -14266,6 +14279,10 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     }
     const key = this.currentKey();
     if (key === this.renderedKey) {
+      return;
+    }
+    if (this.editingTagCardId !== null) {
+      this.pendingRender = true;
       return;
     }
     const identity = this.listIdentity();
@@ -14802,6 +14819,8 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
    * 编辑态存于 this.editingTagCardId，重绘不丢；退出后 repaint 把标签行换回 chip。
    */
   wireTagEditor(row, cardData, repaint) {
+    this.tagEditorCleanup?.();
+    this.tagEditorCleanup = null;
     const shouldFocus = this.tagEditorAutoFocus;
     this.tagEditorAutoFocus = false;
     const field = row.querySelector(".yh-tag-input-field");
@@ -14813,8 +14832,11 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     };
     const listeners = new AbortController();
     const { signal } = listeners;
-    this.keyboardCleanup?.();
-    this.keyboardCleanup = null;
+    const abort = () => {
+      listeners.abort();
+      this.keyboardCleanup?.();
+      this.keyboardCleanup = null;
+    };
     if (import_obsidian11.Platform.isMobile && list) {
       const stop = observeKeyboardInset((inset) => {
         list.style.paddingBottom = inset > 0 ? `${inset + 24}px` : "";
@@ -14838,9 +14860,10 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       }
     });
     const close = () => {
-      listeners.abort();
-      this.keyboardCleanup?.();
-      this.keyboardCleanup = null;
+      abort();
+      if (this.tagEditorCleanup === close) {
+        this.tagEditorCleanup = null;
+      }
       this.pendingTagQuery = "";
       if (this.editingTagCardId === cardData.id) {
         this.editingTagCardId = null;
@@ -14854,6 +14877,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
         this.requestRender();
       }
     };
+    this.tagEditorCleanup = close;
     document.addEventListener(
       "pointerdown",
       (event) => {

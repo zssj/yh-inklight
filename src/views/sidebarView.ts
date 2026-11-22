@@ -130,6 +130,12 @@ export class AnnotationSidebarView extends ItemView {
   /** 字面关联的按需内存快照：随 store.version 自动失效，不落盘 */
   /** 移动端标签编辑态的键盘监听清理：同一时刻只允许一个编辑态持有 */
   private keyboardCleanup: (() => void) | null = null;
+  /**
+   * 当前标签编辑器的收口：abort 外部点击 / 软键盘监听并把该行复原成 chip。
+   * 挂载新编辑器前先调它：键盘激活「+」不先触发 pointerdown，旧监听与旧输入框会残留，
+   * 结果就是两张卡同时显示输入框、点一次外面两个一起关。
+   */
+  private tagEditorCleanup: (() => void) | null = null;
   /** 标签编辑期间被挡下的重绘请求，编辑结束后补一次 */
   private pendingRender = false;
   /** 只有用户主动点「+」进入编辑态时才抢焦点；重绘重建不抢，否则输入法会自动弹起 */
@@ -176,8 +182,11 @@ export class AnnotationSidebarView extends ItemView {
     this.scopeCache = null;
     this.menuPanel = null;
     this.menuButton = null;
+    this.tagEditorCleanup?.();
+    this.tagEditorCleanup = null;
     this.keyboardCleanup?.();
     this.keyboardCleanup = null;
+    this.editingTagCardId = null;
     this.pendingRender = false;
     this.pendingTagQuery = "";
     this.tagEditorAutoFocus = false;
@@ -279,6 +288,12 @@ export class AnnotationSidebarView extends ItemView {
   }
 
   async render(): Promise<void> {
+    // 兜底守卫：requestRender 在「调用时」挡重绘，但若排队中的 setTimeout(0) 在编辑态
+    // 开始后才执行，仍会走进这里 container.empty() 把输入框删掉。编辑态下一律不重建。
+    if (this.editingTagCardId !== null) {
+      this.pendingRender = true;
+      return;
+    }
     const token = ++this.renderToken;
     const listToken = ++this.listToken;
     const force = this.forceRender;
@@ -352,6 +367,12 @@ export class AnnotationSidebarView extends ItemView {
     }
     const key = this.currentKey();
     if (key === this.renderedKey) {
+      return;
+    }
+    // 上面的 await（loadScope / prepareRelations）期间用户可能刚点开某个「+」。
+    // 此刻 list.empty() 会把新挂载的输入框删掉——再挡一次。
+    if (this.editingTagCardId !== null) {
+      this.pendingRender = true;
       return;
     }
     const identity = this.listIdentity();
@@ -992,6 +1013,12 @@ export class AnnotationSidebarView extends ItemView {
    * 编辑态存于 this.editingTagCardId，重绘不丢；退出后 repaint 把标签行换回 chip。
    */
   private wireTagEditor(row: HTMLElement, cardData: SidebarCard, repaint: () => void): void {
+    // 新编辑器挂载前先收掉上一个（键盘激活「+」不先触发 pointerdown，旧监听与旧输入框会残留）。
+    // 此刻 onStartTagEdit 已把 editingTagCardId 指向新卡，旧 close 不会清掉新状态；
+    // 它对旧行 repaint 时 isTagEditing() 为 false，只会换回 chip，不会递归重挂编辑器。
+    this.tagEditorCleanup?.();
+    this.tagEditorCleanup = null;
+
     // 本次挂载是否由用户主动触发；重绘重建时为 false，不抢焦点、不弹输入法
     const shouldFocus = this.tagEditorAutoFocus;
     this.tagEditorAutoFocus = false;
@@ -1009,9 +1036,12 @@ export class AnnotationSidebarView extends ItemView {
     const listeners = new AbortController();
     const { signal } = listeners;
 
-    // 前一个编辑态可能没走 close 就被覆盖（点 chip 溢出直接重挂），先收掉旧监听
-    this.keyboardCleanup?.();
-    this.keyboardCleanup = null;
+    const abort = (): void => {
+      listeners.abort();
+      this.keyboardCleanup?.();
+      this.keyboardCleanup = null;
+    };
+
     if (Platform.isMobile && list) {
       const stop = observeKeyboardInset((inset) => {
         // 软键盘 + 中文候选栏会压缩视觉视口；补一段可滚动留白，底部卡片才滚得上来
@@ -1039,9 +1069,12 @@ export class AnnotationSidebarView extends ItemView {
     });
 
     const close = (): void => {
-      listeners.abort();
-      this.keyboardCleanup?.();
-      this.keyboardCleanup = null;
+      abort();
+      // 先卸掉自身句柄：否则同一张卡再次点「+」时，新 wireTagEditor 开头的
+      // tagEditorCleanup 会拿到这个旧 close，把刚挂上的输入框 repaint 掉。
+      if (this.tagEditorCleanup === close) {
+        this.tagEditorCleanup = null;
+      }
       this.pendingTagQuery = "";
       if (this.editingTagCardId === cardData.id) {
         this.editingTagCardId = null;
@@ -1056,6 +1089,7 @@ export class AnnotationSidebarView extends ItemView {
         this.requestRender();
       }
     };
+    this.tagEditorCleanup = close;
 
     document.addEventListener(
       "pointerdown",

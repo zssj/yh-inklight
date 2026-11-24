@@ -3,7 +3,7 @@
 
 成员清单
 EpubReaderView.ts: EPUB 阅读器主视图（ItemView，注册为 inklight-epub-reader），编排 foliate-view 生命周期、工具栏、侧栏、进度/阅读时长、选区菜单、标注卡片、AI 入口、书签、点击/滑动翻页、手机端沉浸式导航栏；文件顶部含 CFI 跳转统一入口常量。只打标签不写想法时保持划线形态（updateEpubHighlight），不生成 note 为空的 comment。进度保存（saveCurrentProgress，relocate 后 2s 防抖）只写 sidecar，**不得调 refreshAnnotations**：位置/时长未变时直接跳过写盘，否则移动端会形成「每 2 秒全量重绘侧栏 + 输入法自动弹起」的自激循环。外部批注跳转统一走 navigateToCfi：书未完成 open + 进度恢复时用 pendingCfi 暂存（bookReady 后执行），防止 goTo 被 restoreProgress 覆盖；就绪后 performAnnotationJump 执行 goTo 并显式重绘高亮层（立即 + 160ms 补绘），补上「foliate addAnnotation 只作用于已渲染 section」导致的跨章节标注丢失，且不恢复周期性全量刷新。内嵌侧栏 navigateToAnnotation 复用同一入口。历史 CFI 因书换版而指向错误章节时，goTo 后用批注原文归一化前缀校验落点，未命中则遍历 book.sections 的 createDocument、构造 Range 并交给 getCFI 生成修正 CFI，存 cfiOverrides（annotationId → 新 CFI，仅内存、不写 sidecar）；高亮绘制与详情卡片回查都走该覆盖表。
-EpubFoliateLoader.ts: foliate-js 加载器，从 npm 包构造 foliate-view、从二进制打开书籍，并安装自定义元素与 iframe patch。
+EpubFoliateLoader.ts: foliate-js 加载器，从 npm 包构造 foliate-view、从二进制打开书籍，并安装自定义元素与 iframe patch；另含 transformTarget 的 data 事件 hook（必须恒产出字符串，见法则）。
 EpubFoliateGuard.ts: customElements 注册守卫，防止 foliate 自定义元素与其他插件（obsidian-weave-reader）重复注册冲突。
 EpubFoliatePatches.ts: foliate iframe 运行时 patch，覆盖 sandbox 检测、选区与内部行为以适配 Obsidian 移动端。
 EpubBookshelfView.ts: 书架视图（ItemView），扫描 vault 内电子书文件，按书名搜索过滤并打开到阅读器。
@@ -29,6 +29,7 @@ EpubFoliateLoader.ts.bak / EpubReaderView.ts.bak2: 历史备份文件（*.bak2 �
 ·不可改 .yh-epub-reader 的 padding: 会改变阅读区高度触发 foliate ResizeObserver 重新分页，导致阅读位置错乱/进度不准。
 ·标注卡片定位禁止用估算高度与单点 anchor: 必须用选区全部行矩形的并集（createSelectionAvoidRect）+ 浮层实测尺寸，可用区域取「视口 ∩ 阅读区 − --yh-safe-* 安全区」。卡片标签按 annotationId 走 store.setTags 关联并重建 index.json 的 tags/tagNames，只调 refreshAnnotations 同步全局侧栏，卡片内不得再主动触发 refreshRenditionAnnotations（标签不影响 foliate 绘制）。浮层类名固定 .yh-epub-annotation-popover，勿复用历史同名 .yh-epub-annotation-card 规则。
 ·翻页竞态: 点击翻页需吞掉 foliate snap 的双重翻页与动画竞态（v0.17.72 修复），改动翻页逻辑后必须真机回归。
+·transform hook 契约：detail.data 恒字符串、永不 reject（v0.19.29 定案）: `attachFoliateTransformPipeline` 注册在 `book.transformTarget` 的 `data` 事件上、先于 foliate 自己的监听器执行，而 foliate View 对同一事件还会 `detail.data.replace(...)`（CSS vw/vh/page-break 换算）。故 hook 必须用 async IIFE 包住整链——await 原始 data 包 try/catch（reject → 返回 `""`）、非字符串一律降级 `""`、业务异常回落原始 payload。一旦透传非字符串或让 promise reject → `data.replace is not a function` → createURL 崩 → 资源加载失败 → `#view` 不建立 → 整章正文空白（v0.19.26/27/28 连续三次发版都没修到这个点）。另：解析前必须剥离 PUBLIC 外部 DOCTYPE（`xhtml1-strict.dtd` 会让 iframe 去拉 DTD、拖住 load 事件），解析器类型必须 `mediaType === "text/html"` 精确判定（`application/xhtml+xml` 含 `html` 子串）。守卫 tests/epub/foliateMarkup.test.ts。
 ·foliate 版本升级: 升级 foliate-js 前先确认 EpubFoliatePatches 与 Guard 的补丁点未失效。
 
 [PROTOCOL]: 变更时更新此头部，然后检查 ../AGENTS.md

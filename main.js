@@ -16939,9 +16939,18 @@ function attachFoliateTransformPipeline(book) {
       return;
     }
     const mediaType = String(detail.type || "").toLowerCase();
-    detail.data = Promise.resolve(detail.data).then(async (payload) => {
+    const originalData = detail.data;
+    detail.data = (async () => {
+      let payload;
+      try {
+        payload = await originalData;
+      } catch (err) {
+        console.warn("[inklight/epub] foliate data rejected, degrade to empty", mediaType, err);
+        return "";
+      }
       if (typeof payload !== "string") {
-        return payload;
+        console.warn("[inklight/epub] foliate data is not a string, degrade", mediaType, typeof payload);
+        return "";
       }
       try {
         if (mediaType.includes("css")) {
@@ -16955,7 +16964,7 @@ function attachFoliateTransformPipeline(book) {
         console.warn("[inklight/epub] foliate transform failed, fallback to raw payload", mediaType, err);
         return payload;
       }
-    });
+    })();
   });
 }
 async function openBookFromBuffer(view, buffer, filename) {

@@ -1,10 +1,13 @@
 /**
- * [INPUT]: 读 src/epub/EpubFoliateLoader.ts 源码文本（本仓库自有文件）
- * [OUTPUT]: 守住 transformFoliateMarkup 的解析器判定与 DOCTYPE 剥离契约
+ * [INPUT]: 读 src/epub/EpubFoliateLoader.ts 与 EpubFoliatePatches.ts 源码文本（本仓库自有文件）
+ * [OUTPUT]: 守住 transformFoliateMarkup 的解析器判定 / DOCTYPE 剥离 / data 链恒为字符串契约
  * [POS]: L1 静态守卫——"application/xhtml+xml" 含 "html" 子串，旧代码用
  *        mediaType.includes("html") 判定，会把合法 XHTML 当 HTML 解析并序列化，
  *        却仍以 xhtml+xml MIME 建 blob → iframe 严格解析失败 → 旧式 XHTML 书正文空白。
- *        另需先剥离 PUBLIC 外部 DTD，否则 Obsidian CSP 下拉取 DTD 失败同样白屏。
+ *        另需先剥离 PUBLIC 外部 DTD：带外部 DTD 的 blob 会让 iframe 拉取 DTD，
+ *        加载被拖住/中断 → load 事件不来 → paginator #view 不建立 → 整章空白。
+ *        且 detail.data 必须恒 resolve 成字符串：foliate 自己的 CSS 监听器会对它
+ *        直接调 .replace，非字符串会抛 `data.replace is not a function`。
  */
 
 import { readFileSync } from "node:fs";
@@ -70,6 +73,24 @@ describe("foliate XHTML transform 守卫", () => {
     // detail.data 的转换链里必须有 try/catch，且 catch 中返回原始 payload
     expect(fn).toMatch(/try\s*\{[\s\S]*?normalizeFoliateCss[\s\S]*?transformFoliateMarkup[\s\S]*?\}\s*catch\s*\(/);
     expect(fn).toMatch(/catch\s*\([^)]*\)[\s\S]{0,200}?return payload/);
+  });
+
+  it("transform hook 必须永远 resolve 成字符串：非字符串降级为空，不得复用原值", () => {
+    const src = source();
+    const start = src.indexOf("function attachFoliateTransformPipeline");
+    const fn = src.slice(start);
+    // foliate 的 View 在同一个 `data` 事件上还挂着自己的监听器（CSS vw/vh 换算），
+    // 它直接 `data.replace(...)`；我们若让 detail.data 变成非字符串，那行必抛
+    // `data.replace is not a function` → createURL 崩 → 资源加载失败 → 整章空白。
+    expect(fn).toMatch(/if \(typeof payload !== "string"\)\s*\{[\s\S]{0,240}?return ""/);
+    expect(fn).not.toMatch(/if \(typeof payload !== "string"\)\s*\{\s*return payload/);
+  });
+
+  it("transform hook 等待原始 data 时必须包 catch（reject 时降级为空字符串）", () => {
+    const src = source();
+    const start = src.indexOf("function attachFoliateTransformPipeline");
+    const fn = src.slice(start);
+    expect(fn).toMatch(/try\s*\{\s*payload = await originalData;?\s*\}\s*catch/);
   });
 
   it("readBlobUrlAsDataUrl 的 xhr 操作必须包 try（自引用 blob 会同步抛）", () => {

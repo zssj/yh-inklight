@@ -271,14 +271,26 @@ function attachFoliateTransformPipeline(book: FoliateBookHandle): void {
       return;
     }
     const mediaType = String(detail.type || "").toLowerCase();
-    detail.data = Promise.resolve(detail.data).then(async (payload) => {
-      if (typeof payload !== "string") {
-        return payload;
+    const originalData: unknown = detail.data;
+    // ⚠️ 必须始终 resolve 成【字符串】，且永不 reject。
+    // foliate 的 View 在同一个 `data` 事件上还挂着它自己的监听器（CSS 的
+    // vw/vh/page-break 换算），它会对 detail.data 直接调用 `.replace(...)`：
+    //   detail.data = Promise.resolve(detail.data).then((data) => data.replace(...))
+    // 我们的监听器先注册、先执行，一旦我们让 detail.data 变成非字符串或 reject，
+    // 它那行就抛 `data.replace is not a function` → createURL 抛错 → 该资源
+    // 加载失败 → section.load() 失败 → #view 不建立 → 整章正文空白。
+    detail.data = (async (): Promise<string> => {
+      let payload: unknown;
+      try {
+        payload = await originalData;
+      } catch (err) {
+        console.warn("[inklight/epub] foliate data rejected, degrade to empty", mediaType, err);
+        return "";
       }
-      // ⚠️ 兜底：transform 任何异常都不能让 detail.data reject。foliate 的
-      // section.load() 会因此失败 → catch 返回空对象 → #view 未建立 →
-      // Paginator.scrollToAnchor 读 viewSize 抛 TypeError → 整章正文空白。
-      // 降级返回原始 payload（foliate 自身的解析链仍可渲染）。
+      if (typeof payload !== "string") {
+        console.warn("[inklight/epub] foliate data is not a string, degrade", mediaType, typeof payload);
+        return "";
+      }
       try {
         if (mediaType.includes("css")) {
           return await normalizeFoliateCss(payload);
@@ -291,7 +303,7 @@ function attachFoliateTransformPipeline(book: FoliateBookHandle): void {
         console.warn("[inklight/epub] foliate transform failed, fallback to raw payload", mediaType, err);
         return payload;
       }
-    });
+    })();
   });
 }
 

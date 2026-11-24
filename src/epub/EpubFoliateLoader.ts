@@ -193,12 +193,25 @@ async function normalizeFoliateCss(cssText: string): Promise<string> {
 }
 
 async function transformFoliateMarkup(markup: string, mediaType: string): Promise<string> {
-  const parserType = mediaType.includes("html") ? "text/html" : "application/xhtml+xml";
+  // 旧式 XHTML 1.0 Strict 带 PUBLIC 外部 DTD（如 xhtml1-strict.dtd）。blob 以
+  // application/xhtml+xml 加载时浏览器会尝试拉取该 DTD；Obsidian CSP 下请求被拦 →
+  // parsererror → 整章正文空白。DOCTYPE 对渲染无作用，先剥离（根元素 xmlns 自带）。
+  const safeMarkup = markup.replace(/<!DOCTYPE\b[^>]*>/gi, "");
+  // "application/xhtml+xml" 含 "html" 子串：旧的 includes("html") 判定会把合法 XHTML
+  // 当 HTML 解析并按 HTML 语法序列化，而 createURL 仍以 xhtml+xml MIME 建 blob →
+  // 内容/MIME 不匹配 → iframe 严格解析失败 → 正文空白。必须精确判定。
+  const isHtml = mediaType === "text/html";
+  const parserType = isHtml ? "text/html" : "application/xhtml+xml";
   let doc: Document;
   try {
-    doc = new DOMParser().parseFromString(markup, parserType);
+    doc = new DOMParser().parseFromString(safeMarkup, parserType);
   } catch {
-    return markup;
+    return safeMarkup;
+  }
+  if (doc.querySelector("parsererror") && !isHtml) {
+    // 严格 XHTML 仍解析失败：原样返回（剥离 DOCTYPE 后仍是合法 XHTML），
+    // 不能降级成 HTML 序列化——那会与 xhtml+xml MIME 不匹配，重演空白。
+    return safeMarkup;
   }
 
   for (const element of Array.from(doc.querySelectorAll("script, iframe, object, embed"))) {
@@ -241,7 +254,7 @@ async function transformFoliateMarkup(markup: string, mediaType: string): Promis
     }
   }
 
-  return parserType === "text/html" ? doc.documentElement.outerHTML : new XMLSerializer().serializeToString(doc);
+  return isHtml ? doc.documentElement.outerHTML : new XMLSerializer().serializeToString(doc);
 }
 
 function attachFoliateTransformPipeline(book: FoliateBookHandle): void {

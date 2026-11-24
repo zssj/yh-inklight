@@ -16867,12 +16867,17 @@ async function normalizeFoliateCss(cssText) {
   return inlineBlobCssUrls(await inlineBlobCssImports(cssText));
 }
 async function transformFoliateMarkup(markup, mediaType) {
-  const parserType = mediaType.includes("html") ? "text/html" : "application/xhtml+xml";
+  const safeMarkup = markup.replace(/<!DOCTYPE\b[^>]*>/gi, "");
+  const isHtml = mediaType === "text/html";
+  const parserType = isHtml ? "text/html" : "application/xhtml+xml";
   let doc;
   try {
-    doc = new DOMParser().parseFromString(markup, parserType);
+    doc = new DOMParser().parseFromString(safeMarkup, parserType);
   } catch {
-    return markup;
+    return safeMarkup;
+  }
+  if (doc.querySelector("parsererror") && !isHtml) {
+    return safeMarkup;
   }
   for (const element of Array.from(doc.querySelectorAll("script, iframe, object, embed"))) {
     element.remove();
@@ -16912,7 +16917,7 @@ async function transformFoliateMarkup(markup, mediaType) {
       element.setAttribute("style", await normalizeFoliateCss(styleValue));
     }
   }
-  return parserType === "text/html" ? doc.documentElement.outerHTML : new XMLSerializer().serializeToString(doc);
+  return isHtml ? doc.documentElement.outerHTML : new XMLSerializer().serializeToString(doc);
 }
 function attachFoliateTransformPipeline(book) {
   book.transformTarget?.addEventListener("data", (event) => {

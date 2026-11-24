@@ -62,4 +62,22 @@ describe("foliate XHTML transform 守卫", () => {
     expect(guard).toContain("return safeMarkup");
     expect(guard).not.toMatch(/parseFromString\(/);
   });
+
+  it("transform hook 必须兜底异常，不让 detail.data reject（否则整章空白）", () => {
+    const src = source();
+    const start = src.indexOf("function attachFoliateTransformPipeline");
+    const fn = src.slice(start);
+    // detail.data 的转换链里必须有 try/catch，且 catch 中返回原始 payload
+    expect(fn).toMatch(/try\s*\{[\s\S]*?normalizeFoliateCss[\s\S]*?transformFoliateMarkup[\s\S]*?\}\s*catch\s*\(/);
+    expect(fn).toMatch(/catch\s*\([^)]*\)[\s\S]{0,200}?return payload/);
+  });
+
+  it("readBlobUrlAsDataUrl 的 xhr 操作必须包 try（自引用 blob 会同步抛）", () => {
+    const src = source();
+    const start = src.indexOf("function readBlobUrlAsDataUrl");
+    const end = src.indexOf("async function inlineBlobCssImports", start);
+    const fn = src.slice(start, end);
+    expect(fn).toMatch(/try\s*\{[\s\S]*?xhr\.open[\s\S]*?\}\s*catch\s*\(/);
+    expect(fn).toMatch(/resolve\(null\)/);
+  });
 });

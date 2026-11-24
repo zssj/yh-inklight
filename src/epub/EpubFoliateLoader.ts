@@ -136,21 +136,28 @@ function readBlobUrlAsText(url: string): Promise<string> {
 
 function readBlobUrlAsDataUrl(url: string): Promise<string | null> {
   return new Promise((resolve) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("GET", url);
-    xhr.responseType = "blob";
-    xhr.onload = () => {
-      if (!(xhr.status === 0 || (xhr.status >= 200 && xhr.status < 300)) || !(xhr.response instanceof Blob)) {
-        resolve(null);
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
-      reader.onerror = () => resolve(null);
-      reader.readAsDataURL(xhr.response);
-    };
-    xhr.onerror = () => resolve(null);
-    xhr.send();
+    try {
+      const xhr = new XMLHttpRequest();
+      xhr.open("GET", url);
+      xhr.responseType = "blob";
+      xhr.onload = () => {
+        if (!(xhr.status === 0 || (xhr.status >= 200 && xhr.status < 300)) || !(xhr.response instanceof Blob)) {
+          resolve(null);
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(xhr.response);
+      };
+      xhr.onerror = () => resolve(null);
+      xhr.send();
+    } catch (err) {
+      // 自引用/失效 blob 会让 xhr.open 同步抛错；吞掉并返回 null，绝不让
+      // 资源内联失败冒泡到 section.load（否则整章加载失败 → 正文空白）。
+      console.warn("[inklight/epub] readBlobUrlAsDataUrl failed", err);
+      resolve(null);
+    }
   });
 }
 
@@ -268,13 +275,22 @@ function attachFoliateTransformPipeline(book: FoliateBookHandle): void {
       if (typeof payload !== "string") {
         return payload;
       }
-      if (mediaType.includes("css")) {
-        return normalizeFoliateCss(payload);
+      // ⚠️ 兜底：transform 任何异常都不能让 detail.data reject。foliate 的
+      // section.load() 会因此失败 → catch 返回空对象 → #view 未建立 →
+      // Paginator.scrollToAnchor 读 viewSize 抛 TypeError → 整章正文空白。
+      // 降级返回原始 payload（foliate 自身的解析链仍可渲染）。
+      try {
+        if (mediaType.includes("css")) {
+          return await normalizeFoliateCss(payload);
+        }
+        if (mediaType.includes("html") || mediaType.includes("xml") || mediaType.includes("svg")) {
+          return await transformFoliateMarkup(payload, mediaType);
+        }
+        return payload;
+      } catch (err) {
+        console.warn("[inklight/epub] foliate transform failed, fallback to raw payload", mediaType, err);
+        return payload;
       }
-      if (mediaType.includes("html") || mediaType.includes("xml") || mediaType.includes("svg")) {
-        return transformFoliateMarkup(payload, mediaType);
-      }
-      return payload;
     });
   });
 }

@@ -16814,21 +16814,26 @@ function readBlobUrlAsText2(url) {
 }
 function readBlobUrlAsDataUrl(url) {
   return new Promise((resolve) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("GET", url);
-    xhr.responseType = "blob";
-    xhr.onload = () => {
-      if (!(xhr.status === 0 || xhr.status >= 200 && xhr.status < 300) || !(xhr.response instanceof Blob)) {
-        resolve(null);
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
-      reader.onerror = () => resolve(null);
-      reader.readAsDataURL(xhr.response);
-    };
-    xhr.onerror = () => resolve(null);
-    xhr.send();
+    try {
+      const xhr = new XMLHttpRequest();
+      xhr.open("GET", url);
+      xhr.responseType = "blob";
+      xhr.onload = () => {
+        if (!(xhr.status === 0 || xhr.status >= 200 && xhr.status < 300) || !(xhr.response instanceof Blob)) {
+          resolve(null);
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(xhr.response);
+      };
+      xhr.onerror = () => resolve(null);
+      xhr.send();
+    } catch (err) {
+      console.warn("[inklight/epub] readBlobUrlAsDataUrl failed", err);
+      resolve(null);
+    }
   });
 }
 async function inlineBlobCssImports(cssText, visited = /* @__PURE__ */ new Set()) {
@@ -16930,13 +16935,18 @@ function attachFoliateTransformPipeline(book) {
       if (typeof payload !== "string") {
         return payload;
       }
-      if (mediaType.includes("css")) {
-        return normalizeFoliateCss(payload);
+      try {
+        if (mediaType.includes("css")) {
+          return await normalizeFoliateCss(payload);
+        }
+        if (mediaType.includes("html") || mediaType.includes("xml") || mediaType.includes("svg")) {
+          return await transformFoliateMarkup(payload, mediaType);
+        }
+        return payload;
+      } catch (err) {
+        console.warn("[inklight/epub] foliate transform failed, fallback to raw payload", mediaType, err);
+        return payload;
       }
-      if (mediaType.includes("html") || mediaType.includes("xml") || mediaType.includes("svg")) {
-        return transformFoliateMarkup(payload, mediaType);
-      }
-      return payload;
     });
   });
 }

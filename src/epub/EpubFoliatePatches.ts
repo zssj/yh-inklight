@@ -172,9 +172,23 @@ export function installFoliateBlobIframePatch(onLoadError: (error: unknown) => v
 			const loadToken = (foliateBlobIframeLoadTokens.get(this) || 0) + 1;
 			foliateBlobIframeLoadTokens.set(this, loadToken);
 			void readBlobUrlAsText(normalizedValue)
-				.then((html) => inlineBlobStylesheetsInHtml(html))
+				.then((html) => {
+					// 旧式 XHTML（根元素带 xmlns / XHTML DOCTYPE）绝不能走 srcdoc 重解析：
+					// inlineBlobStylesheetsInHtml 用 text/html 解析 + outerHTML 序列化，会破坏
+					// XHTML 命名空间与 DOCTYPE，导致 iframe 严格解析失败 → 整章正文空白。
+					// 上游 EpubFoliateLoader 的 transform hook 已把 blob CSS 内联成 <style>，
+					// 无需此补丁再内联；直接用原始 blob src，恢复 foliate 原生加载时序。
+					if (/<html[^>]*\bxmlns=/i.test(html) || /<!DOCTYPE[^>]*XHTML/i.test(html)) {
+						console.debug("[inklight/epub] iframe blob is XHTML, keep native src");
+						// srcdoc 优先级高于 src；残留的 srcdoc 会让原生 src 不生效。
+						this.removeAttribute("srcdoc");
+						setIframeSrc(this, normalizedValue);
+						return null;
+					}
+					return inlineBlobStylesheetsInHtml(html);
+				})
 				.then((inlined) => {
-					if (foliateBlobIframeLoadTokens.get(this) !== loadToken) {
+					if (inlined === null || foliateBlobIframeLoadTokens.get(this) !== loadToken) {
 						return;
 					}
 					this.srcdoc = inlined;

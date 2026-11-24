@@ -16751,8 +16751,16 @@ function installFoliateBlobIframePatch(onLoadError) {
       }
       const loadToken = (foliateBlobIframeLoadTokens.get(this) || 0) + 1;
       foliateBlobIframeLoadTokens.set(this, loadToken);
-      void readBlobUrlAsText(normalizedValue).then((html) => inlineBlobStylesheetsInHtml(html)).then((inlined) => {
-        if (foliateBlobIframeLoadTokens.get(this) !== loadToken) {
+      void readBlobUrlAsText(normalizedValue).then((html) => {
+        if (/<html[^>]*\bxmlns=/i.test(html) || /<!DOCTYPE[^>]*XHTML/i.test(html)) {
+          console.debug("[inklight/epub] iframe blob is XHTML, keep native src");
+          this.removeAttribute("srcdoc");
+          setIframeSrc(this, normalizedValue);
+          return null;
+        }
+        return inlineBlobStylesheetsInHtml(html);
+      }).then((inlined) => {
+        if (inlined === null || foliateBlobIframeLoadTokens.get(this) !== loadToken) {
           return;
         }
         this.srcdoc = inlined;

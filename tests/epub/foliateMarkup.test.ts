@@ -81,3 +81,20 @@ describe("foliate XHTML transform 守卫", () => {
     expect(fn).toMatch(/resolve\(null\)/);
   });
 });
+
+describe("foliate blob iframe 补丁守卫", () => {
+  const PATCH = "src/epub/EpubFoliatePatches.ts";
+
+  it("XHTML blob 不得走 srcdoc 的 text/html 重解析（会破坏命名空间导致正文空白）", () => {
+    const src = readFileSync(join(ROOT, PATCH), "utf8");
+    // 必须有 XHTML 检测分支，且分支内用原生 src、不走 inlineBlobStylesheetsInHtml
+    expect(src).toMatch(/<html\[\^>\]\*\\bxmlns=/);
+    expect(src).toMatch(/XHTML/i);
+    const start = src.indexOf("if (/<html");
+    const end = src.indexOf("return inlineBlobStylesheetsInHtml(html)", start);
+    const branch = src.slice(start, end);
+    expect(branch).toMatch(/setIframeSrc\(this, normalizedValue\)/);
+    expect(branch).toMatch(/removeAttribute\("srcdoc"\)/);
+    expect(branch).not.toMatch(/inlineBlobStylesheetsInHtml/);
+  });
+});

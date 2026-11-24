@@ -75,14 +75,16 @@ describe("foliate XHTML transform 守卫", () => {
     expect(fn).toMatch(/catch\s*\([^)]*\)[\s\S]{0,200}?return payload/);
   });
 
-  it("transform hook 必须永远 resolve 成字符串：非字符串降级为空，不得复用原值", () => {
+  it("transform hook：非字符串文本资源降级为空，二进制资源必须原样放行", () => {
     const src = source();
     const start = src.indexOf("function attachFoliateTransformPipeline");
     const fn = src.slice(start);
     // foliate 的 View 在同一个 `data` 事件上还挂着自己的监听器（CSS vw/vh 换算），
-    // 它直接 `data.replace(...)`；我们若让 detail.data 变成非字符串，那行必抛
-    // `data.replace is not a function` → createURL 崩 → 资源加载失败 → 整章空白。
-    expect(fn).toMatch(/if \(typeof payload !== "string"\)\s*\{[\s\S]{0,240}?return ""/);
+    // 它只对 text/css 调 `data.replace(...)`：文本资源若让 detail.data 变成非字符串
+    // 那行必抛 → createURL 崩 → 整章空白。但二进制（图片/字体）被降级成 "" 会让
+    // 移动端插图全空、界面错乱，必须原样放行。
+    expect(fn).toMatch(/const textual[\s\S]{0,300}?if \(!textual\)\s*\{[\s\S]{0,120}?return payload as unknown as string/);
+    expect(fn).toMatch(/if \(!textual\)[\s\S]*?degrade to empty[\s\S]*?return "";/);
     expect(fn).not.toMatch(/if \(typeof payload !== "string"\)\s*\{\s*return payload/);
   });
 
@@ -106,12 +108,21 @@ describe("foliate XHTML transform 守卫", () => {
 describe("foliate blob iframe 补丁守卫", () => {
   const PATCH = "src/epub/EpubFoliatePatches.ts";
 
-  it("XHTML blob 不得走 srcdoc 的 text/html 重解析（会破坏命名空间导致正文空白）", () => {
+  it("XHTML 原生 src 分支必须限定桌面端（移动端靠 srcdoc 绕过 CSP）", () => {
+    const src = readFileSync(join(ROOT, PATCH), "utf8");
+    // 移动端 WebView 会拦 blob iframe 的 stylesheet，srcdoc 是本补丁存在的理由。
+    // 若该分支不限平台，几乎所有书（transform 后普遍带 xmlns）都会在移动端跳过
+    // srcdoc → 整章空白 + 阅读区布局崩（v0.19.29 事故）。
+    expect(src).toMatch(/if \(!Platform\.isMobile && \(\/<html/);
+  });
+
+  it("XHTML blob 不得走 srcdoc 的 text/html 重解析（桌面端破坏命名空间会导致正文空白）", () => {
     const src = readFileSync(join(ROOT, PATCH), "utf8");
     // 必须有 XHTML 检测分支，且分支内用原生 src、不走 inlineBlobStylesheetsInHtml
     expect(src).toMatch(/<html\[\^>\]\*\\bxmlns=/);
     expect(src).toMatch(/XHTML/i);
-    const start = src.indexOf("if (/<html");
+    const start = src.indexOf("if (!Platform.isMobile && (/<html");
+    expect(start).toBeGreaterThan(-1);
     const end = src.indexOf("return inlineBlobStylesheetsInHtml(html)", start);
     const branch = src.slice(start, end);
     expect(branch).toMatch(/setIframeSrc\(this, normalizedValue\)/);

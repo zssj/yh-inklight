@@ -16752,8 +16752,8 @@ function installFoliateBlobIframePatch(onLoadError) {
       const loadToken = (foliateBlobIframeLoadTokens.get(this) || 0) + 1;
       foliateBlobIframeLoadTokens.set(this, loadToken);
       void readBlobUrlAsText(normalizedValue).then((html) => {
-        if (/<html[^>]*\bxmlns=/i.test(html) || /<!DOCTYPE[^>]*XHTML/i.test(html)) {
-          console.debug("[inklight/epub] iframe blob is XHTML, keep native src");
+        if (!import_obsidian14.Platform.isMobile && (/<html[^>]*\bxmlns=/i.test(html) || /<!DOCTYPE[^>]*XHTML/i.test(html))) {
+          console.debug("[inklight/epub] iframe blob is XHTML on desktop, keep native src");
           this.removeAttribute("srcdoc");
           setIframeSrc(this, normalizedValue);
           return null;
@@ -16949,7 +16949,11 @@ function attachFoliateTransformPipeline(book) {
         return "";
       }
       if (typeof payload !== "string") {
-        console.warn("[inklight/epub] foliate data is not a string, degrade", mediaType, typeof payload);
+        const textual = mediaType.includes("css") || mediaType.includes("html") || mediaType.includes("xml") || mediaType.includes("svg");
+        if (!textual) {
+          return payload;
+        }
+        console.warn("[inklight/epub] foliate text data is not a string, degrade to empty", mediaType, typeof payload);
         return "";
       }
       try {

@@ -288,7 +288,18 @@ function attachFoliateTransformPipeline(book: FoliateBookHandle): void {
         return "";
       }
       if (typeof payload !== "string") {
-        console.warn("[inklight/epub] foliate data is not a string, degrade", mediaType, typeof payload);
+        // 二进制资源（图片、内嵌字体、音视频）原样放行：foliate 自己的 data 监听器
+        // 只在 detail.type === "text/css" 时才调 .replace，非文本资源不受影响。
+        // 若把二进制也降级成 ""，移动端所有插图与内嵌字体会变空（表现为界面错乱）。
+        const textual =
+          mediaType.includes("css") ||
+          mediaType.includes("html") ||
+          mediaType.includes("xml") ||
+          mediaType.includes("svg");
+        if (!textual) {
+          return payload as unknown as string;
+        }
+        console.warn("[inklight/epub] foliate text data is not a string, degrade to empty", mediaType, typeof payload);
         return "";
       }
       try {

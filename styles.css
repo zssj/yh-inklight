@@ -2691,18 +2691,42 @@ a.yh-epub-goto-link:hover {
   color: var(--text-muted);
 }
 
-/* 回顾区的正文：比出处行大一档（15 : 11），改用常规字重并允许两行，
-   让「自己的想法」成为卡片主体，书名只作下方注脚。只作用于回顾区，不动「全部笔记」列表。 */
+/* 回顾区的正文：比出处行大一档（15 : 11），改用常规字重，让「自己的想法」
+   成为卡片主体，书名只作下方注脚。只作用于回顾区，不动「全部笔记」列表。 */
 .md-stats-title.md-stats-review-text {
   font-size: calc(var(--yh-font-md) + 1px);
   font-weight: 500;
   line-height: 1.5;
   white-space: normal;
+  word-break: break-word;
+}
+
+/* 长想法默认限两行 + 「展开」：正文是完整文本（渲染时不再截字符串），
+   所以展开后一定读得到底，不存在「展开还是缺字」。 */
+.md-stats-title.md-stats-review-text.is-collapsible {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
-  word-break: break-word;
+}
+
+.md-stats-title.md-stats-review-text.is-expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
+.md-stats-review-expand {
+  display: inline-block;
+  margin-top: 2px;
+  color: var(--text-accent);
+  font-size: 0.75em;
+  cursor: pointer;
+  user-select: none;
+}
+
+.md-stats-review-expand:hover {
+  text-decoration: underline;
 }
 
 .yh-md-stats-modal-actions {

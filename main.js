@@ -20947,6 +20947,7 @@ var import_obsidian20 = require("obsidian");
 var MARKDOWN_STATS_VIEW_TYPE = "inklight-md-stats";
 var DAY_MS = 864e5;
 var REVIEW_LIMIT = 5;
+var REVIEW_TEXT_COLLAPSE_LENGTH = 60;
 var REVIEW_RULES = [
   { kind: "day1", title: "1 \u5929\u590D\u4E60", hint: "\u53EA\u8BFB\u8FC7 1 \u6B21" },
   { kind: "day7", title: "7 \u5929\u590D\u4E60", hint: "\u5DF2\u590D\u4E60\u8FC7" },
@@ -21208,10 +21209,33 @@ var MarkdownStatsView = class extends import_obsidian20.ItemView {
         row.addClass("is-clickable");
         const info = row.createDiv({ cls: "md-stats-info" });
         const text = (entry.content || entry.quote).replace(/\s+/g, " ").trim();
-        info.createEl("div", {
-          cls: "md-stats-title md-stats-review-text",
-          text: text.length > 60 ? `${text.slice(0, 60)}\u2026` : text
+        const collapsible = text.length > REVIEW_TEXT_COLLAPSE_LENGTH;
+        const textEl = info.createEl("div", {
+          cls: `md-stats-title md-stats-review-text${collapsible ? " is-collapsible" : ""}`,
+          text
         });
+        if (collapsible) {
+          const toggle = info.createEl("span", {
+            cls: "md-stats-review-expand",
+            text: "\u5C55\u5F00",
+            attr: { role: "button", tabindex: "0", "aria-label": "\u5C55\u5F00\u8FD9\u6761\u60F3\u6CD5" }
+          });
+          const flip = (event) => {
+            event.stopPropagation();
+            const expanded = !textEl.hasClass("is-expanded");
+            textEl.toggleClass("is-expanded", expanded);
+            toggle.setText(expanded ? "\u6536\u8D77" : "\u5C55\u5F00");
+            toggle.setAttribute("aria-label", expanded ? "\u6536\u8D77\u8FD9\u6761\u60F3\u6CD5" : "\u5C55\u5F00\u8FD9\u6761\u60F3\u6CD5");
+          };
+          toggle.addEventListener("click", flip);
+          toggle.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" && event.key !== " ") {
+              return;
+            }
+            event.preventDefault();
+            flip(event);
+          });
+        }
         const fileName = entry.filePath.split("/").pop() ?? entry.filePath;
         info.createEl("div", {
           cls: "md-stats-meta",

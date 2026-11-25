@@ -13,6 +13,14 @@ const DAY_MS = 86_400_000;
 /** 每张复习卡片最多展示条数 */
 export const REVIEW_LIMIT = 5;
 
+/**
+ * 回顾区正文超过这个字符数才折叠，并给一个「展开」按钮。
+ * 侧栏两行大约放得下 44–52 个汉字，60 是保守值：宁可多给几个按钮，
+ * 也不要出现「明明溢出却没按钮」。与 relatedBlock 同理，用字符数而不是
+ * 量 DOM 高度——侧栏宽度会变，测出来的溢出不可靠。
+ */
+export const REVIEW_TEXT_COLLAPSE_LENGTH = 60;
+
 /** 四类复习卡：两张间隔卡 + 两张日历追溯卡 */
 export type ReviewKind = "day1" | "day7" | "lastMonth" | "lastYear";
 
@@ -432,11 +440,40 @@ export class MarkdownStatsView extends ItemView {
 
         const info = row.createDiv({ cls: "md-stats-info" });
         const text = (entry.content || entry.quote).replace(/\s+/g, " ").trim();
-        // 正文用 review-text 覆盖 title：允许两行，字号与字重都高于下方出处行
-        info.createEl("div", {
-          cls: "md-stats-title md-stats-review-text",
-          text: text.length > 60 ? `${text.slice(0, 60)}…` : text,
+        // 正文用 review-text 覆盖 title：字号与字重都高于下方出处行。
+        // 完整文本照原样进 DOM，只由 CSS 限两行；超长的补一个「展开」按钮，
+        // 让人不跳原文就能读完（旧实现是在这里 slice(0, 60) 硬切，展开也无内容可显示）。
+        const collapsible = text.length > REVIEW_TEXT_COLLAPSE_LENGTH;
+        const textEl = info.createEl("div", {
+          cls: `md-stats-title md-stats-review-text${collapsible ? " is-collapsible" : ""}`,
+          text,
         });
+        if (collapsible) {
+          const toggle = info.createEl("span", {
+            cls: "md-stats-review-expand",
+            text: "展开",
+            attr: { role: "button", tabindex: "0", "aria-label": "展开这条想法" },
+          });
+          const flip = (event: Event): void => {
+            // 整行是 role=button（点击跳原文），按钮在行内：
+            // 不拦冒泡就会「一点展开就跳走」，等于这个按钮没用
+            event.stopPropagation();
+            const expanded = !textEl.hasClass("is-expanded");
+            textEl.toggleClass("is-expanded", expanded);
+            toggle.setText(expanded ? "收起" : "展开");
+            toggle.setAttribute("aria-label", expanded ? "收起这条想法" : "展开这条想法");
+          };
+          toggle.addEventListener("click", flip);
+          toggle.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" && event.key !== " ") {
+              return;
+            }
+            event.preventDefault();
+            // keydown 同样会冒泡到行的 Enter/Space 处理，一并拦住
+            flip(event);
+          });
+        }
+
         const fileName = entry.filePath.split("/").pop() ?? entry.filePath;
         info.createEl("div", {
           cls: "md-stats-meta",

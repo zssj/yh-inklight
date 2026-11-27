@@ -46,7 +46,8 @@ export interface TagChipOptions {
   /** 最多展示几个 chip，默认 4；超出折叠为 +N */
   max?: number;
   onChipClick?: (tag: string) => void;
-  onOverflowClick?: () => void;
+  /** 点「+N」展开：回传被点的节点，宿主要用它当浮动面板的锚点 */
+  onOverflowClick?: (anchor: HTMLElement) => void;
 }
 
 /** 只读 chip 行。无标签时不渲染任何节点，调用方可据此判断是否占位 */
@@ -85,7 +86,7 @@ export function renderTagChips(parent: HTMLElement, tags: readonly string[], opt
       more.addClass("is-clickable");
       more.addEventListener("click", (event) => {
         event.stopPropagation();
-        options.onOverflowClick?.();
+        options.onOverflowClick?.(more);
       });
     }
   }

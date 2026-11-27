@@ -3,7 +3,9 @@
  *          views/popoverPlacement 的定位算法、调用方传入的划线矩形与动作回调
  * [OUTPUT]: AnnotationCard —— Markdown / PDF / EPUB 三端「点击高亮 → 标注详情」浮层；
  *           本文件只负责浮层外壳（定位、点外关闭、Esc、移动端整屏留白居中），
- *           卡片内容与动作行一律由 views/cardBody 产出，与侧栏列表保持同一套 DOM
+ *           卡片内容与动作行一律由 views/cardBody 产出，与侧栏列表保持同一套 DOM；
+ *           标签行点「+」交给 views/editPanel 的浮动面板（与侧栏同一个），
+ *           所以编辑标签既不会改本卡高度、也不会把它挤离高亮位置
  * [POS]: views 模块唯一的标注详情浮层。三端只负责用 buildCards 取到卡片数据并给回调，
  *        不再各自映射字段——历史教训是两处映射会漂移（noteType 曾在浮层里丢过）
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
@@ -13,6 +15,7 @@ import { App, Component } from "obsidian";
 import { AnnotationRelation } from "../storage/types";
 import { SidebarCard } from "./cardModel";
 import { CardExtraAction, renderCardBody } from "./cardBody";
+import { dismissFloatingPanel, openTagEditorPanel } from "./editPanel";
 import { RelatedBlockHost } from "./relatedBlock";
 import { TagSuggestion } from "./tagInput";
 import {
@@ -73,7 +76,6 @@ export class AnnotationCard {
   private readonly options: AnnotationCardOptions;
 
   // 视图状态一律存类字段，任何重绘都不丢编辑态
-  private tagEditing = false;
   private dismissed = false;
   private anchor: AnnotationCardAnchor | null = null;
 
@@ -98,20 +100,18 @@ export class AnnotationCard {
       ...(this.options.app ? { app: this.options.app } : {}),
       ...(this.options.component ? { component: this.options.component } : {}),
       tags: {
-        isTagEditing: () => this.tagEditing,
-        onStartTagEdit: () => {
-          this.tagEditing = true;
-        },
-        suggestions: () => this.options.tagSuggestions?.() ?? [],
-        ...(this.options.onRequestAiTag ? { requestAi: this.options.onRequestAiTag } : {}),
-        onChange: (tags) => this.options.onTagsChange?.(tags),
-        // 浮层只有一条卡，没有「重绘重建」的场景：进编辑态就聚焦
-        onEditorReady: (row) => {
-          // 标签编辑器比 chip 行高，尺寸变了要重新量一次，否则会撑出 max-height
-          this.schedulePlace();
-          window.requestAnimationFrame(() => {
-            row.querySelector<HTMLInputElement>(".yh-tag-input-field")?.focus();
-            this.schedulePlace();
+        // 与侧栏同一套浮动面板：编辑时不改卡片高度，这张浮层也就不会跳位置
+        onStartTagEdit: (anchor) => {
+          openTagEditorPanel({
+            anchor,
+            tags: this.card.tags,
+            suggestions: this.options.tagSuggestions?.() ?? [],
+            ...(this.options.onRequestAiTag ? { requestAi: this.options.onRequestAiTag } : {}),
+            onChange: (next) => {
+              this.card.tags = next;
+              void Promise.resolve(this.options.onTagsChange?.(next)).catch(() => undefined);
+            },
+            onClose: () => this.refreshBody(),
           });
         },
       },
@@ -289,6 +289,8 @@ export class AnnotationCard {
   dismiss(): void {
     if (this.dismissed) return;
     this.dismissed = true;
+    // 标签面板是独立挂 body 的节点，本卡片收起时把它一起带走
+    dismissFloatingPanel();
     if (this.outsideHandler) document.removeEventListener("pointerdown", this.outsideHandler, true);
     if (this.keydownHandler) document.removeEventListener("keydown", this.keydownHandler, true);
     window.removeEventListener("resize", this.handleViewportChange);

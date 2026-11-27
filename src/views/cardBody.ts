@@ -16,7 +16,7 @@
 import { App, Component, MarkdownRenderer, setIcon } from "obsidian";
 import { AnnotationRelation, COLOR_LABELS } from "../storage/types";
 import { SidebarCard } from "./cardModel";
-import { renderTagChips, renderTagInput, TagSuggestion } from "./tagInput";
+import { renderTagChips } from "./tagInput";
 import { RelatedBlockHost, renderRelatedBlock } from "./relatedBlock";
 
 export type CardHostKind = "list" | "popover";
@@ -64,27 +64,18 @@ export interface CardExtraAction {
   onClick: () => void;
 }
 
-/** 标签编辑器由宿主持有的状态与依赖（侧栏的重绘不丢编辑态靠这个） */
+/** 标签行由宿主持有的能力（侧栏与浮层各给各的） */
 export interface CardTagHost {
-  /** 当前是否处于标签编辑态：宿主存类字段，body 只读 */
-  isTagEditing: () => boolean;
-  /** 用户点了标签行的「+」或已有 chip：宿主置状态，随后 body 重绘标签行 */
-  onStartTagEdit: () => void;
-  suggestions: () => readonly TagSuggestion[];
-  /** 按需 AI 推荐：只有用户点下拉里的 AI 行才会调用；不传则整条入口不出现 */
-  requestAi?: (force: boolean) => Promise<readonly string[]>;
-  onChange: (tags: string[]) => Promise<void> | void;
-  /** 未提交输入的暂存与回填 */
-  initialQuery?: () => string;
-  onQueryChange?: (value: string) => void;
+  /**
+   * 用户点了标签行的「+」或折叠的 +N：宿主自己开编辑面板。
+   * anchor 是被点的那颗按钮（面板贴着它出现），repaint 用于改完标签后原地刷新 chip 行。
+   *
+   * 编辑器**不在卡片里**：历史上把它塞进标签行，卡片高度从 20px 变成 200px，
+   * 下面所有卡片跟着位移，才需要一堆守卫去防「输入框被顶走」。现在由宿主开浮动面板。
+   */
+  onStartTagEdit: (anchor: HTMLElement, repaint: () => void) => void;
   /** 点已存在的 chip（列表用来按标签筛选；浮层不传） */
   onChipClick?: (tag: string) => void;
-  /**
-   * 编辑器挂载完成：宿主在此做聚焦、滚动、键盘避让与外点关闭。
-   * repaint 把标签行原地换回只读 chip——宿主决定何时退出编辑态。
-   */
-  onEditorReady?: (row: HTMLElement, repaint: () => void) => void;
-  quickApply?: () => { label: string; tags: readonly string[] } | undefined;
 }
 
 /**
@@ -110,8 +101,11 @@ export interface CardBodyHost {
   fileName: string;
   /** 只有列表需要：卡片根节点的 data-* 由宿主创建元素时给，body 不碰 */
   tags: CardTagHost;
-  /** 动作回调：没给 = 该动作此刻不可用，不渲染按钮 */
-  actions: Partial<Record<CardActionId, () => void>>;
+  /**
+   * 动作回调：没给 = 该动作此刻不可用，不渲染按钮。
+   * 入参是被点的按钮——需要弹浮层的动作（编辑想法）拿它当锚点。
+   */
+  actions: Partial<Record<CardActionId, (anchor: HTMLElement) => void>>;
   /** 容器专有按钮（Markdown 浮层的「同段另有 N 条批注」） */
   extraActions?: readonly CardExtraAction[];
   /** 关系行：不传回调则整行只读，绝不渲染「点了没反应」的控件 */
@@ -220,7 +214,7 @@ function renderContent(root: HTMLElement, card: SidebarCard, host: CardBodyHost)
   paint();
 }
 
-/** 标签行：只读 chip + 「+」；编辑态原地换成输入组件，两态都由宿主状态驱动 */
+/** 标签行：只读 chip + 「+」。点 + 由宿主开浮动面板，这里不承载任何编辑态 */
 function renderTagRow(root: HTMLElement, card: SidebarCard, host: CardBodyHost): void {
   const row = root.createDiv({ cls: "yh-ov-tags" });
   const paint = (): void => renderTagRowContent(row, card, host, paint);
@@ -234,44 +228,10 @@ function renderTagRowContent(
   repaint: () => void,
 ): void {
   const tags = host.tags;
-  // 已经在编辑且输入框还挂着：这次 repaint 直接跳过。
-  // 否则 row.empty() 会把用户正在用的输入框换回 chip——键盘弹出、外点捕获、
-  // 键盘避让引起的任何一次重绘都会走到这里，表现就是「输入法一出来，标签界面就没了」。
-  // 编辑态内部（chips/候选）由 renderTagInput 自己维护，宿主不需要重建它。
-  if (tags.isTagEditing() && row.querySelector(".yh-tag-input-field")) {
-    return;
-  }
   row.empty();
-
-  if (tags.isTagEditing()) {
-    row.addClass("is-editing");
-    const quickApply = tags.quickApply?.();
-    renderTagInput(row, {
-      tags: card.tags,
-      suggestions: [...(tags.suggestions() ?? [])],
-      ...(tags.requestAi ? { onRequestAi: tags.requestAi } : {}),
-      ...(quickApply ? { quickApply } : {}),
-      // 侧栏点 + 即刻给出候选：空内容也显示，不必先输入一个字符
-      showSuggestionsOnOpen: true,
-      initialQuery: tags.initialQuery?.() ?? "",
-      onQueryChange: (value) => tags.onQueryChange?.(value),
-      onChange: (next) => {
-        card.tags = next;
-        // 宿主自己出 Notice；这里只兜住 reject，避免未处理的 Promise 警告
-        void Promise.resolve(tags.onChange(next)).catch(() => undefined);
-      },
-    });
-    tags.onEditorReady?.(row, repaint);
-    return;
-  }
-
-  row.removeClass("is-editing");
   renderTagChips(row, card.tags, {
     ...(tags.onChipClick ? { onChipClick: tags.onChipClick } : {}),
-    onOverflowClick: () => {
-      tags.onStartTagEdit();
-      repaint();
-    },
+    onOverflowClick: (anchor) => tags.onStartTagEdit(anchor, repaint),
   });
 
   const add = row.createSpan({
@@ -279,14 +239,13 @@ function renderTagRowContent(
     text: "+",
     attr: { role: "button", tabindex: "0", "aria-label": "添加标签", title: "添加标签" },
   });
-  // 阻止 + 抢焦点：否则重绘删掉的是「正持有焦点的节点」，焦点退回 body，输入框立刻失焦
+  // 阻止 + 抢焦点：否则按下的一瞬间焦点从输入框退回 body，移动端会先收键盘再弹键盘
   add.addEventListener("mousedown", (event) => {
     event.preventDefault();
   });
   const open = (event: Event): void => {
     event.stopPropagation();
-    tags.onStartTagEdit();
-    repaint();
+    tags.onStartTagEdit(add, repaint);
   };
   add.addEventListener("click", open);
   add.addEventListener("keydown", (event) => {
@@ -398,7 +357,7 @@ function renderActions(root: HTMLElement, card: SidebarCard, host: CardBodyHost)
     }
     button.addEventListener("click", (event) => {
       event.stopPropagation();
-      run();
+      run(button);
     });
   }
 

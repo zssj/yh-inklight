@@ -28,7 +28,6 @@ settings/settingsTab.ts: 插件设置页，管理默认颜色、便签栏、窄�
 utils/format.ts: 通用格式化工具（时间等），供 sidebarView / stickyNoteView 等共用。
 utils/textTerms.ts: 字面抽词纯函数（中文 2/3-gram + ASCII 词 + 停用 gram 表 + EPUB 文本清洗）、rankTerms（按全库文档频率挑稀有词）、termOverlap、isRelatedOverlap、短文本/代码选区过滤；无依赖、不联网、不做语义；现仅供 views/relationModel 的标签推荐使用，相关批注匹配已改走 utils/textPhrases 的短语级算法。
 utils/textPhrases.ts: 短语级匹配纯函数（相关批注的唯一判定基础）：cleanText（清洗归一）、splitSegments（中文按功能字切词段、拉丁按空白合并成多词段）、expandPhrase（从共同种子向两侧扩展成最长公共短语）、trimPhrase（修剪首尾虚词残段）、isNoisePhrase（套话/元话语/代词/通用字/拉丁常见词过滤）、hasTermSuffix（术语后缀判定）、startsWithWeakToken（数量词或否定词开头判定）、phraseSpecificity；不引分词库、不联网、不做语义。
-utils/keyboardInset.ts: 软键盘可见区域探测（visualViewport + virtualKeyboard + focusin 重测，带 isAlive 自动卸载），只回调遮挡高度、不碰 DOM。
 utils/positioning.ts: 便签避让布局纯函数，保留给后续便签栏实验复用。
 ai/EpubAiClient.ts: OpenAI 兼容聊天客户端，用 requestUrl 绕过安卓 CORS，内置服务商/动作预设与中文错误映射；推理模型固定关闭 thinking。
 epub/: 见 epub/AGENTS.md（19 个文件的完整清单与法则在该目录下维护）。

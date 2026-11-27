@@ -425,16 +425,6 @@
   contain: layout style;
 }
 
-/*
- * 正在编辑标签 / 想法的卡片退出按需绘制。
- * content-visibility: auto 的卡在高度与焦点同时变化时，可能被重新判定为「屏幕外」而整卡不绘，
- * 表现就是输入框出现一帧又消失——首屏卡片不明显，滚到列表深处必现。
- */
-.yh-ov-list > .yh-ov-card.is-tag-editing,
-.yh-ov-list > .yh-ov-card.is-note-editing {
-  content-visibility: visible;
-}
-
 /* 哨兵：列表末尾的 1px 探针，IntersectionObserver 靠它判断「滚到底了」 */
 .yh-ov-sentinel {
   flex: 0 0 auto;
@@ -692,46 +682,7 @@ span.yh-ov-expand-btn:hover {
   color: #cc0000;
 }
 
-.yh-ov-edit {
-  margin-top: 8px;
-}
-
-.yh-ov-edit.hidden {
-  display: none;
-}
-
-.yh-ov-textarea {
-  width: 100%;
-  min-height: 72px;
-  padding: 8px 10px;
-  border-radius: 6px;
-  border: 1.5px solid rgba(0, 0, 0, 0.12);
-  background: rgba(255, 255, 255, 0.7);
-  color: var(--text-normal);
-  font-family: inherit;
-  font-size: 12px;
-  line-height: 1.6;
-  resize: vertical;
-  box-sizing: border-box;
-  outline: none;
-}
-
-.theme-dark .yh-ov-textarea {
-  border-color: rgba(255, 255, 255, 0.14);
-  background: rgba(0, 0, 0, 0.18);
-}
-
-.yh-ov-textarea:focus {
-  border-color: #f5c518;
-  box-shadow: 0 0 0 3px rgba(245, 197, 24, 0.15);
-}
-
-.yh-ov-edit-actions {
-  display: flex;
-  gap: 6px;
-  margin-top: 6px;
-}
-
+/* 浮动编辑面板里的主按钮/次按钮沿用这套配色 */
 .yh-ov-save {
   padding: 4px 14px;
   border-radius: 99px;
@@ -2818,10 +2769,6 @@ a.yh-epub-goto-link:hover {
   min-width: 0;
 }
 
-.yh-ov-tags.is-editing {
-  display: block;
-}
-
 /* 关系区：一行 = 类型 + 目标引文 + 解除；类型用左侧色条区分，不靠文字颜色（暗色主题更稳） */
 .yh-ov-relations {
   display: flex;
@@ -2880,11 +2827,6 @@ a.yh-epub-goto-link:hover {
   background: var(--background-modifier-hover);
 }
 
-/* 编辑态输入框与只读行高度对齐，减少点 + 时卡片高度抖动 */
-.yh-ov-tags.is-editing .yh-tag-input {
-  padding: 2px 4px;
-}
-
 .yh-ov-tag-add {
   position: relative;
   display: inline-flex;
@@ -2911,8 +2853,7 @@ a.yh-epub-goto-link:hover {
 }
 
 .yh-ov-card:hover .yh-ov-tag-add,
-.yh-ov-tags:focus-within .yh-ov-tag-add,
-.yh-ov-tags.is-editing .yh-ov-tag-add {
+.yh-ov-tags:focus-within .yh-ov-tag-add {
   opacity: 1;
 }
 
@@ -3043,17 +2984,127 @@ a.yh-epub-goto-link:hover {
   box-shadow: none;
 }
 
-/* 侧栏标签编辑：下拉进入文档流并独占整行，始终固定在输入框正下方。
-   .yh-tag-input 是 flex-wrap 容器，若不撑满 100% 下拉会被排到输入框右侧、宽度随内容漂移；
-   独占一行后也不再挤压 field 的宽度，输入光标正常显示。 */
-.yh-ov-tags.is-editing .yh-tag-suggest {
+/* ============================================================
+   浮动编辑面板（标签 / 想法）
+   ------------------------------------------------------------
+   挂在 document.body 上的独立节点，**不进列表 DOM**：卡片高度不因开编辑器变化，
+   所以列表不抖、整表重绘也删不掉输入框。定位由 views/editPanel 用内联 left/top/bottom 写。
+   ============================================================ */
+
+.yh-float-panel {
+  position: fixed;
+  z-index: var(--layer-popover, 100000);
+  box-sizing: border-box;
+  padding: 8px;
+  border: 0.5px solid var(--yh-border);
+  border-radius: var(--yh-radius);
+  background: var(--background-primary);
+  box-shadow: var(--yh-shadow-lg);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  cursor: default;
+  /* 只做淡入，不做位移：面板出现在锚点旁边，位移会让人以为列表在动 */
+  opacity: 0;
+  transition: opacity 0.08s ease;
+}
+
+.yh-float-panel.is-visible {
+  opacity: 1;
+}
+
+/* 移动端：边框略粗一点，位置仍由 JS 按可视视口写 left/top（含键盘弹起的情况） */
+.yh-float-panel.is-mobile {
+  border: 1px solid var(--yh-border);
+}
+
+/* 标签编辑面板（.yh-float-panel--tags）：面板本身就是输入框的边框，
+   内部 .yh-tag-input 去掉自己的边框，候选列表进入文档流、由面板整体滚动。 */
+.yh-float-panel--tags {
+  padding: 2px;
+}
+
+.yh-float-panel--tags .yh-tag-input {
+  border: none;
+  padding: 4px 6px;
+  background: transparent;
+}
+
+.yh-float-panel--tags .yh-tag-suggest {
   position: static;
   flex: 0 0 100%;
   width: 100%;
   box-sizing: border-box;
   margin-top: 4px;
-  max-height: 180px;
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+  border: none;
+  border-top: 0.5px solid var(--yh-border);
+  border-radius: 0;
+  background: transparent;
   box-shadow: none;
+}
+
+/* 想法面板：标题行 + 文本域 + 底部按钮 */
+.yh-float-panel--note {
+  padding: 10px;
+}
+
+.yh-float-panel-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: var(--text-muted);
+  font-size: var(--yh-font-xs);
+  letter-spacing: 0.04em;
+}
+
+.yh-float-panel-close {
+  padding: 0 4px;
+  color: var(--text-faint);
+  font-size: var(--yh-font-sm);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.yh-float-panel-close:hover {
+  color: var(--text-normal);
+}
+
+.yh-float-panel-textarea {
+  display: block;
+  width: 100%;
+  min-height: 88px;
+  padding: 8px 10px;
+  box-sizing: border-box;
+  border: 0.5px solid var(--yh-border);
+  border-radius: var(--yh-radius-sm);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-family: inherit;
+  font-size: var(--yh-font-sm);
+  line-height: 1.6;
+  resize: vertical;
+  outline: none;
+}
+
+.yh-float-panel-textarea:focus {
+  border-color: var(--yh-yellow);
+  box-shadow: 0 0 0 3px rgba(245, 197, 24, 0.12);
+}
+
+.yh-float-panel-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.yh-ov-save[disabled] {
+  opacity: 0.6;
+  cursor: default;
 }
 
 /* ===== 标签总览（v0.18.2） ===== */

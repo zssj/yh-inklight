@@ -327,6 +327,69 @@ describe("migrateFilePaths（批量改名 / 文件夹移动）", () => {
   });
 });
 
+describe("索引自愈（sidecar 已搬、索引没落地 / 索引损坏）", () => {
+  const INDEX = `${SIDECAR_DIR}/index.json`;
+
+  it("sidecar 已经在新路径、索引还指旧路径时，迁移补回索引且不丢数据", async () => {
+    const { store, vault } = await setup();
+    await store.addHighlight(vault.fileAt(MD_PATH), highlightOf("h1", "复利效应", 2));
+    const priv = store as unknown as { index: { files: Record<string, Record<string, unknown>> } };
+    priv.index.files[MD_PATH].derivedNotePath = "导出/复利-notes.md";
+
+    // 模拟真机现场：sidecar 已按新路径落盘，index.json 却还是旧路径
+    const moved = "tst/raw/复利.md";
+    const document = vault.readJson<FileAnnotationDocument>(store.toSidecarPath(MD_PATH));
+    vault.writeText(moved, vault.readText(MD_PATH));
+    vault.removeFile(MD_PATH);
+    vault.rawWrite(store.toSidecarPath(moved), JSON.stringify({ ...document, filePath: moved }, null, 2));
+    vault.rawRemove(store.toSidecarPath(MD_PATH));
+
+    await store.migrateFilePath(MD_PATH, vault.fileAt(moved));
+
+    const index = vault.readJson<any>(INDEX);
+    expect(Object.keys(index.files)).toEqual([moved]);
+    expect(index.files[moved].highlightCount).toBe(1);
+    // 反查指针不在 sidecar 里，认领时必须从旧条目带过来
+    expect(index.files[moved].derivedNotePath).toBe("导出/复利-notes.md");
+    expect(vault.readJson<FileAnnotationDocument>(store.toSidecarPath(moved)).highlights).toHaveLength(1);
+    const documents = await store.getIndexedDocuments();
+    expect(documents.map((item) => item.filePath)).toEqual([moved]);
+  });
+
+  it("索引损坏时备份原文并从 sidecar 整体重建", async () => {
+    const { app, vault } = createApp({ files: { [MD_PATH]: "在复利效应的作用下，长期投资会放大收益。" } });
+    const store = new AnnotationStore(app);
+    await store.initialize();
+    await store.addHighlight(vault.fileAt(MD_PATH), highlightOf("h1", "复利效应", 2));
+    vault.writeText(PDF_PATH, "PDF 正文占位");
+    await store.addHighlight(vault.fileAt(PDF_PATH), highlightOf("h2", "PDF", 0));
+
+    vault.rawWrite(INDEX, '{ "files": ');
+
+    const rebuilt = new AnnotationStore(app);
+    await rebuilt.initialize();
+    expect(rebuilt.indexNeedsRebuild).toBe(true);
+    expect(vault.listFiles().some((path) => /index\.corrupt-\d+\.json$/.test(path))).toBe(true);
+
+    const result = await rebuilt.rebuildIndexFromSidecars();
+    expect(result).toEqual({ added: 2, moved: 0 });
+
+    const index = vault.readJson<any>(INDEX);
+    expect(Object.keys(index.files).sort()).toEqual([MD_PATH, PDF_PATH].sort());
+    const documents = await rebuilt.getIndexedDocuments();
+    expect(documents).toHaveLength(2);
+  });
+
+  it("索引完好时重建不读不写任何东西", async () => {
+    const { store, vault } = await setup();
+    await store.addHighlight(vault.fileAt(MD_PATH), highlightOf("h1", "复利效应", 2));
+    const writesBefore = vault.writeLog.length;
+
+    await expect(store.rebuildIndexFromSidecars()).resolves.toEqual({ added: 0, moved: 0 });
+    expect(vault.writeLog.length).toBe(writesBefore);
+  });
+});
+
 describe("findRelocatablePaths（路径失联自愈）", () => {
   it("唯一同名文件视为移动，返回迁移任务", async () => {
     const { store, vault } = await setup();

@@ -163,6 +163,8 @@ export class AnnotationStore {
   private readonly documents = new Map<string, FileAnnotationDocument>();
   private index: AnnotationIndex = EMPTY_INDEX;
   private changeVersion = 0;
+  /** 索引文件损坏/读不出来；下次自愈时整体从 sidecar 重建 */
+  private needsIndexRebuild = false;
   /** 卡片目录扫描缓存（目录 → inklightId → 路径）。卡片被改名/搬走时靠「路径还在不在」自校验重扫 */
   private atomCardScan: { dir: string; paths: Map<string, string> } | null = null;
 
@@ -174,7 +176,51 @@ export class AnnotationStore {
 
   async initialize(): Promise<void> {
     await this.ensureStoreDir();
-    this.index = await this.readJson<AnnotationIndex>(INDEX_PATH, EMPTY_INDEX, { allowCorruptFallback: true });
+    this.index = await this.loadIndexWithRecovery();
+  }
+
+  /** 索引读坏/结构不对时为 true，调用方据此触发「从 sidecar 重建」 */
+  get indexNeedsRebuild(): boolean {
+    return this.needsIndexRebuild;
+  }
+
+  /**
+   * 读索引：损坏时先把原文备份，再退回空索引并置位重建标记。
+   * 不能像以前那样静默 fallback 空索引——那会让「全库」看起来批注全丢
+   * （移动几百个文件时进程被杀，index.json 可能只写了一半），而 sidecar 其实完好。
+   */
+  private async loadIndexWithRecovery(): Promise<AnnotationIndex> {
+    const indexPath = normalizePath(INDEX_PATH);
+    if (!(await this.app.vault.adapter.exists(indexPath))) {
+      return EMPTY_INDEX;
+    }
+
+    let raw = "";
+    try {
+      raw = await this.app.vault.adapter.read(indexPath);
+    } catch (error) {
+      this.needsIndexRebuild = true;
+      console.warn("yh-inklight: 索引读取失败，准备从 sidecar 重建", error);
+      return EMPTY_INDEX;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as AnnotationIndex;
+      if (!parsed || typeof parsed !== "object" || typeof parsed.files !== "object" || parsed.files === null) {
+        throw new Error("index shape invalid");
+      }
+      return parsed;
+    } catch (error) {
+      this.needsIndexRebuild = true;
+      const backupPath = normalizePath(`${STORE_DIR}/index.corrupt-${Date.now()}.json`);
+      try {
+        await this.app.vault.adapter.write(backupPath, raw);
+      } catch {
+        // 备份失败也要继续重建：sidecar 才是权威数据，索引可以从它整体重算
+      }
+      console.warn(`yh-inklight: 索引损坏（已备份到 ${backupPath}），准备从 sidecar 重建`, error);
+      return EMPTY_INDEX;
+    }
   }
 
   getCachedDocument(filePath: string): FileAnnotationDocument | null {
@@ -993,20 +1039,132 @@ export class AnnotationStore {
   }
 
   /**
+   * 从 sidecar 反向重建索引。sidecar 是批注的权威数据，索引只是查找表：
+   * 索引损坏、移动后索引没落地、被同步盘旧快照覆盖，都能靠这一步整体自愈。
+   *
+   * 只读「没有被现存有效索引条目引用」的 sidecar，所以正常库等于零开销；
+   * 产物只补/改索引，不删除任何 sidecar（真删除的文件由设置页手动清理）。
+   */
+  async rebuildIndexFromSidecars(): Promise<{ added: number; moved: number }> {
+    let listing: { files: string[]; folders: string[] };
+    try {
+      listing = await this.app.vault.adapter.list(STORE_DIR);
+    } catch (error) {
+      console.warn("yh-inklight: 无法列出批注目录，跳过索引重建", error);
+      return { added: 0, moved: 0 };
+    }
+
+    const fileExists = (path: string): boolean => this.app.vault.getAbstractFileByPath(path) instanceof TFile;
+
+    // 已经被「有效索引条目」引用的 sidecar 不用再读
+    const referenced = new Set<string>();
+    // sidecar 文件名 → 指向它的失联索引 key（同一份文档在旧路径下的残留条目）
+    const orphanBySidecar = new Map<string, string>();
+    for (const [filePath, entry] of Object.entries(this.index.files)) {
+      const sidecar = entry?.sidecarPath;
+      if (!sidecar) {
+        continue;
+      }
+      if (fileExists(filePath)) {
+        referenced.add(sidecar);
+      } else if (!orphanBySidecar.has(sidecar)) {
+        orphanBySidecar.set(sidecar, filePath);
+      }
+    }
+
+    const nextFiles: AnnotationIndex["files"] = { ...this.index.files };
+    const relocatable: Array<{ oldPath: string; newPath: string; file: TFile }> = [];
+    let added = 0;
+    let changed = false;
+
+    for (const sidecarPath of listing.files) {
+      const lower = sidecarPath.toLowerCase();
+      if (!lower.endsWith(".json") || referenced.has(sidecarPath)) {
+        continue;
+      }
+      // index.json 本身 / 损坏备份 index.corrupt-*.json 不是批注
+      const baseName = sidecarPath.split("/").pop() ?? "";
+      if (/^index(\..*)?\.json$/i.test(baseName)) {
+        continue;
+      }
+
+      let document: FileAnnotationDocument | null = null;
+      try {
+        document = await this.readJson<FileAnnotationDocument | null>(sidecarPath, null);
+      } catch {
+        continue;
+      }
+      if (!document || typeof document.filePath !== "string" || !document.filePath) {
+        continue;
+      }
+
+      const documentPath = this.normalizeVaultPath(document.filePath);
+      const staleKey = orphanBySidecar.get(sidecarPath);
+      const exportSource = (staleKey ? this.index.files[staleKey] : undefined) ?? this.index.files[documentPath];
+
+      if (fileExists(documentPath)) {
+        nextFiles[documentPath] = {
+          ...this.toIndexEntry(document, sidecarPath),
+          ...pickExportFields(exportSource),
+        };
+        if (staleKey && staleKey !== documentPath) {
+          delete nextFiles[staleKey];
+          this.documents.delete(this.toCacheKey(staleKey));
+        }
+        added += 1;
+        changed = true;
+        continue;
+      }
+
+      // sidecar 里的路径已失效、但全库只有一个同名文件：交给 migrateFilePaths 物理搬迁
+      const name = documentPath.split("/").pop();
+      const candidates = name
+        ? this.app.vault.getFiles().filter((file) => file.path.split("/").pop() === name)
+        : [];
+      if (candidates.length === 1) {
+        relocatable.push({ oldPath: documentPath, newPath: candidates[0].path, file: candidates[0] });
+      }
+    }
+
+    if (changed) {
+      this.index = { ...this.index, files: nextFiles };
+      await this.writeIndex();
+      this.changeVersion += 1;
+    }
+    if (relocatable.length > 0) {
+      await this.migrateFilePaths(relocatable);
+    }
+
+    this.needsIndexRebuild = false;
+    return { added, moved: relocatable.length };
+  }
+
+  /**
    * 批量迁移改名/移动后的文件侧数据：sidecar、索引条目、摘录文件。
    * 逐条处理，但只在全部结束后写一次索引——移动整个文件夹可能是几百个文件，
    * 逐条 writeIndex 会把索引重写几百遍。
+   * 单条失败不中断整批：否则前面的 sidecar 已经搬走、索引却一条都没落地，
+   * 「全库」会整片空白（只能靠逐个打开文件把条目补回来）。
    */
   async migrateFilePaths(entries: Array<{ oldPath: string; newPath: string; file?: TFile }>): Promise<void> {
     let changed = false;
+    let failed = 0;
     for (const { oldPath, newPath, file } of entries) {
-      if (await this.migrateOne(oldPath, newPath, file)) {
-        changed = true;
+      try {
+        if (await this.migrateOne(oldPath, newPath, file)) {
+          changed = true;
+        }
+      } catch (error) {
+        failed += 1;
+        console.error("[inklight/rename] 单条迁移失败", oldPath, "->", newPath, error);
       }
     }
     if (changed) {
       await this.writeIndex();
       this.changeVersion += 1;
+    }
+    if (failed > 0) {
+      console.warn(`yh-inklight: ${failed} 个文件的批注路径迁移失败，其余已迁移`);
     }
   }
 
@@ -1015,7 +1173,7 @@ export class AnnotationStore {
     await this.migrateFilePaths([{ oldPath, newPath: file.path, file }]);
   }
 
-  /** 单条迁移；返回是否真的搬了 sidecar。没加过批注的文件（无 sidecar）直接跳过。 */
+  /** 单条迁移；返回索引/侧数据是否真的发生变化。没加过批注的文件（无 sidecar）直接跳过。 */
   private async migrateOne(oldPath: string, newPath: string, _file?: TFile): Promise<boolean> {
     const normalizedOldPath = this.normalizeVaultPath(oldPath);
     const normalizedNewPath = this.normalizeVaultPath(newPath);
@@ -1025,7 +1183,10 @@ export class AnnotationStore {
     const oldSidecar = this.toSidecarPath(normalizedOldPath);
     const oldDocument = await this.readJson<FileAnnotationDocument | null>(oldSidecar, null);
     if (!oldDocument) {
-      return false;
+      // 旧 sidecar 不在，但新路径下已经有 sidecar：说明 sidecar 早就搬完，
+      // 只是索引没跟上（索引写盘丢失、被旧快照覆盖、进程中途被杀）。
+      // 这时按新 sidecar 补索引条目，让迁移幂等、也让「全库」能重新看到它。
+      return this.adoptMigratedSidecar(normalizedOldPath, normalizedNewPath);
     }
 
     const nextDocument: FileAnnotationDocument = {
@@ -1043,6 +1204,41 @@ export class AnnotationStore {
 
     // 同步迁移摘录导出文件（*-notes.md / 《名》摘录.md）：更新内部 source 路径引用 + 重命名文件。
     await this.migrateExcerptFile(normalizedOldPath, normalizedNewPath);
+    return true;
+  }
+
+  /**
+   * 旧路径 sidecar 已不存在时，尝试认领新路径上的 sidecar：
+   * 文件内容不动（已经是对的），只把索引条目从旧路径搬过来，并带上反查指针。
+   */
+  private async adoptMigratedSidecar(oldPath: string, newPath: string): Promise<boolean> {
+    const newSidecar = this.toSidecarPath(newPath);
+    if (newSidecar === this.toSidecarPath(oldPath)) {
+      return false;
+    }
+    const existing = await this.readJson<FileAnnotationDocument | null>(newSidecar, null);
+    if (!existing) {
+      return false;
+    }
+    if (existing.filePath !== newPath) {
+      await this.saveDocument(
+        { ...existing, filePath: newPath },
+        { writeIndex: false, carryExportFrom: oldPath },
+      );
+    } else {
+      this.index = {
+        ...this.index,
+        files: {
+          ...this.index.files,
+          [newPath]: {
+            ...this.toIndexEntry(existing, newSidecar),
+            ...pickExportFields(this.index.files[oldPath] ?? this.index.files[newPath]),
+          },
+        },
+      };
+    }
+    delete this.index.files[oldPath];
+    this.documents.delete(this.toCacheKey(oldPath));
     return true;
   }
 

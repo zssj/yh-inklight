@@ -505,23 +505,23 @@ export class AnnotationSettingsTab extends PluginSettingTab {
     containerEl.createEl("h3", { text: "批注数据" });
 
     const relocatable = this.plugin.store.findRelocatablePaths();
+    const orphanCount = this.plugin.store.countOrphanedDocuments();
 
     new Setting(containerEl)
-      .setName("修复移动文件的批注路径")
+      .setName("修复批注索引")
       .setDesc(
-        relocatable.length > 0
-          ? `检测到 ${relocatable.length} 个文件的路径已变化（整目录移动、同步盘替换等），批注仍指向旧路径。会按唯一同名文件恢复，找不到唯一同名文件的条目保持不动。`
-          : "没有路径失联的批注条目。",
+        relocatable.length > 0 || orphanCount > 0 || this.plugin.store.indexNeedsRebuild
+          ? `检测到 ${relocatable.length} 个文件的路径已变化、${orphanCount} 个条目的源文件找不到。会先按批注 sidecar 重建索引，再按唯一同名文件恢复移动过的文件；找不到唯一同名文件的条目保持不动（数据不删）。`
+          : "索引与批注 sidecar 一致，无需修复。",
       )
       .addButton((button) => {
         button
           .setButtonText("修复")
-          .setDisabled(relocatable.length === 0)
           .onClick(async () => {
             button.setDisabled(true);
             button.setButtonText("修复中…");
             try {
-              await this.plugin.repairMovedAnnotations();
+              await this.plugin.recoverAnnotationIndex();
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error);
               new Notice(`修复失败：${message}`, 8000);
@@ -530,8 +530,6 @@ export class AnnotationSettingsTab extends PluginSettingTab {
             }
           });
       });
-
-    const orphanCount = this.plugin.store.countOrphanedDocuments();
 
     new Setting(containerEl)
       .setName("清理已删除文件的批注")

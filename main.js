@@ -11821,14 +11821,15 @@ var AnnotationSettingsTab = class extends import_obsidian8.PluginSettingTab {
     const { containerEl } = this;
     containerEl.createEl("h3", { text: "\u6279\u6CE8\u6570\u636E" });
     const relocatable = this.plugin.store.findRelocatablePaths();
-    new import_obsidian8.Setting(containerEl).setName("\u4FEE\u590D\u79FB\u52A8\u6587\u4EF6\u7684\u6279\u6CE8\u8DEF\u5F84").setDesc(
-      relocatable.length > 0 ? `\u68C0\u6D4B\u5230 ${relocatable.length} \u4E2A\u6587\u4EF6\u7684\u8DEF\u5F84\u5DF2\u53D8\u5316\uFF08\u6574\u76EE\u5F55\u79FB\u52A8\u3001\u540C\u6B65\u76D8\u66FF\u6362\u7B49\uFF09\uFF0C\u6279\u6CE8\u4ECD\u6307\u5411\u65E7\u8DEF\u5F84\u3002\u4F1A\u6309\u552F\u4E00\u540C\u540D\u6587\u4EF6\u6062\u590D\uFF0C\u627E\u4E0D\u5230\u552F\u4E00\u540C\u540D\u6587\u4EF6\u7684\u6761\u76EE\u4FDD\u6301\u4E0D\u52A8\u3002` : "\u6CA1\u6709\u8DEF\u5F84\u5931\u8054\u7684\u6279\u6CE8\u6761\u76EE\u3002"
+    const orphanCount = this.plugin.store.countOrphanedDocuments();
+    new import_obsidian8.Setting(containerEl).setName("\u4FEE\u590D\u6279\u6CE8\u7D22\u5F15").setDesc(
+      relocatable.length > 0 || orphanCount > 0 || this.plugin.store.indexNeedsRebuild ? `\u68C0\u6D4B\u5230 ${relocatable.length} \u4E2A\u6587\u4EF6\u7684\u8DEF\u5F84\u5DF2\u53D8\u5316\u3001${orphanCount} \u4E2A\u6761\u76EE\u7684\u6E90\u6587\u4EF6\u627E\u4E0D\u5230\u3002\u4F1A\u5148\u6309\u6279\u6CE8 sidecar \u91CD\u5EFA\u7D22\u5F15\uFF0C\u518D\u6309\u552F\u4E00\u540C\u540D\u6587\u4EF6\u6062\u590D\u79FB\u52A8\u8FC7\u7684\u6587\u4EF6\uFF1B\u627E\u4E0D\u5230\u552F\u4E00\u540C\u540D\u6587\u4EF6\u7684\u6761\u76EE\u4FDD\u6301\u4E0D\u52A8\uFF08\u6570\u636E\u4E0D\u5220\uFF09\u3002` : "\u7D22\u5F15\u4E0E\u6279\u6CE8 sidecar \u4E00\u81F4\uFF0C\u65E0\u9700\u4FEE\u590D\u3002"
     ).addButton((button) => {
-      button.setButtonText("\u4FEE\u590D").setDisabled(relocatable.length === 0).onClick(async () => {
+      button.setButtonText("\u4FEE\u590D").onClick(async () => {
         button.setDisabled(true);
         button.setButtonText("\u4FEE\u590D\u4E2D\u2026");
         try {
-          await this.plugin.repairMovedAnnotations();
+          await this.plugin.recoverAnnotationIndex();
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           new import_obsidian8.Notice(`\u4FEE\u590D\u5931\u8D25\uFF1A${message}`, 8e3);
@@ -11837,7 +11838,6 @@ var AnnotationSettingsTab = class extends import_obsidian8.PluginSettingTab {
         }
       });
     });
-    const orphanCount = this.plugin.store.countOrphanedDocuments();
     new import_obsidian8.Setting(containerEl).setName("\u6E05\u7406\u5DF2\u5220\u9664\u6587\u4EF6\u7684\u6279\u6CE8").setDesc(
       orphanCount > 0 ? `\u5DF2\u5220\u9664\u7684 Markdown / PDF / EPUB \u6587\u4EF6\uFF0C\u5176\u6279\u6CE8\u4ECD\u4FDD\u5B58\u5728 .obsidian-annotations \u4E2D\uFF0C\u5F53\u524D\u6709 ${orphanCount} \u4E2A\u53EF\u6E05\u7406\u3002\u53EA\u5220\u9664\u8FD9\u4E9B\u5B64\u7ACB\u6279\u6CE8\uFF0C\u4E0D\u5F71\u54CD\u73B0\u5B58\u6587\u4EF6\u3002` : "\u6CA1\u6709\u53EF\u6E05\u7406\u7684\u6761\u76EE\u3002\u5220\u9664\u6E90\u6587\u4EF6\u540E\u5176\u6279\u6CE8\u4E0D\u4F1A\u81EA\u52A8\u5220\u9664\uFF0C\u7559\u5728\u6B64\u5904\u624B\u52A8\u6E05\u7406\uFF08\u9632\u6B62\u8BEF\u5220\u6E90\u6587\u4EF6\u540E\u6279\u6CE8\u8DDF\u7740\u4E22\u5931\uFF09\u3002"
     ).addButton((button) => {
@@ -12017,6 +12017,8 @@ var AnnotationStore = class {
     this.documents = /* @__PURE__ */ new Map();
     this.index = EMPTY_INDEX;
     this.changeVersion = 0;
+    /** 索引文件损坏/读不出来；下次自愈时整体从 sidecar 重建 */
+    this.needsIndexRebuild = false;
     /** 卡片目录扫描缓存（目录 → inklightId → 路径）。卡片被改名/搬走时靠「路径还在不在」自校验重扫 */
     this.atomCardScan = null;
     /** 关系渲染用：目标源文件 → 它的导出笔记路径；没有导出过就返回 null（走协议链接兜底） */
@@ -12027,7 +12029,46 @@ var AnnotationStore = class {
   }
   async initialize() {
     await this.ensureStoreDir();
-    this.index = await this.readJson(INDEX_PATH, EMPTY_INDEX, { allowCorruptFallback: true });
+    this.index = await this.loadIndexWithRecovery();
+  }
+  /** 索引读坏/结构不对时为 true，调用方据此触发「从 sidecar 重建」 */
+  get indexNeedsRebuild() {
+    return this.needsIndexRebuild;
+  }
+  /**
+   * 读索引：损坏时先把原文备份，再退回空索引并置位重建标记。
+   * 不能像以前那样静默 fallback 空索引——那会让「全库」看起来批注全丢
+   * （移动几百个文件时进程被杀，index.json 可能只写了一半），而 sidecar 其实完好。
+   */
+  async loadIndexWithRecovery() {
+    const indexPath = (0, import_obsidian9.normalizePath)(INDEX_PATH);
+    if (!await this.app.vault.adapter.exists(indexPath)) {
+      return EMPTY_INDEX;
+    }
+    let raw = "";
+    try {
+      raw = await this.app.vault.adapter.read(indexPath);
+    } catch (error) {
+      this.needsIndexRebuild = true;
+      console.warn("yh-inklight: \u7D22\u5F15\u8BFB\u53D6\u5931\u8D25\uFF0C\u51C6\u5907\u4ECE sidecar \u91CD\u5EFA", error);
+      return EMPTY_INDEX;
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || typeof parsed.files !== "object" || parsed.files === null) {
+        throw new Error("index shape invalid");
+      }
+      return parsed;
+    } catch (error) {
+      this.needsIndexRebuild = true;
+      const backupPath = (0, import_obsidian9.normalizePath)(`${STORE_DIR}/index.corrupt-${Date.now()}.json`);
+      try {
+        await this.app.vault.adapter.write(backupPath, raw);
+      } catch {
+      }
+      console.warn(`yh-inklight: \u7D22\u5F15\u635F\u574F\uFF08\u5DF2\u5907\u4EFD\u5230 ${backupPath}\uFF09\uFF0C\u51C6\u5907\u4ECE sidecar \u91CD\u5EFA`, error);
+      return EMPTY_INDEX;
+    }
   }
   getCachedDocument(filePath) {
     return this.documents.get(this.toCacheKey(filePath)) ?? null;
@@ -12716,27 +12757,122 @@ var AnnotationStore = class {
     return result;
   }
   /**
+   * 从 sidecar 反向重建索引。sidecar 是批注的权威数据，索引只是查找表：
+   * 索引损坏、移动后索引没落地、被同步盘旧快照覆盖，都能靠这一步整体自愈。
+   *
+   * 只读「没有被现存有效索引条目引用」的 sidecar，所以正常库等于零开销；
+   * 产物只补/改索引，不删除任何 sidecar（真删除的文件由设置页手动清理）。
+   */
+  async rebuildIndexFromSidecars() {
+    let listing;
+    try {
+      listing = await this.app.vault.adapter.list(STORE_DIR);
+    } catch (error) {
+      console.warn("yh-inklight: \u65E0\u6CD5\u5217\u51FA\u6279\u6CE8\u76EE\u5F55\uFF0C\u8DF3\u8FC7\u7D22\u5F15\u91CD\u5EFA", error);
+      return { added: 0, moved: 0 };
+    }
+    const fileExists = (path) => this.app.vault.getAbstractFileByPath(path) instanceof import_obsidian9.TFile;
+    const referenced = /* @__PURE__ */ new Set();
+    const orphanBySidecar = /* @__PURE__ */ new Map();
+    for (const [filePath, entry] of Object.entries(this.index.files)) {
+      const sidecar = entry?.sidecarPath;
+      if (!sidecar) {
+        continue;
+      }
+      if (fileExists(filePath)) {
+        referenced.add(sidecar);
+      } else if (!orphanBySidecar.has(sidecar)) {
+        orphanBySidecar.set(sidecar, filePath);
+      }
+    }
+    const nextFiles = { ...this.index.files };
+    const relocatable = [];
+    let added = 0;
+    let changed = false;
+    for (const sidecarPath of listing.files) {
+      const lower = sidecarPath.toLowerCase();
+      if (!lower.endsWith(".json") || referenced.has(sidecarPath)) {
+        continue;
+      }
+      const baseName = sidecarPath.split("/").pop() ?? "";
+      if (/^index(\..*)?\.json$/i.test(baseName)) {
+        continue;
+      }
+      let document2 = null;
+      try {
+        document2 = await this.readJson(sidecarPath, null);
+      } catch {
+        continue;
+      }
+      if (!document2 || typeof document2.filePath !== "string" || !document2.filePath) {
+        continue;
+      }
+      const documentPath = this.normalizeVaultPath(document2.filePath);
+      const staleKey = orphanBySidecar.get(sidecarPath);
+      const exportSource = (staleKey ? this.index.files[staleKey] : void 0) ?? this.index.files[documentPath];
+      if (fileExists(documentPath)) {
+        nextFiles[documentPath] = {
+          ...this.toIndexEntry(document2, sidecarPath),
+          ...pickExportFields(exportSource)
+        };
+        if (staleKey && staleKey !== documentPath) {
+          delete nextFiles[staleKey];
+          this.documents.delete(this.toCacheKey(staleKey));
+        }
+        added += 1;
+        changed = true;
+        continue;
+      }
+      const name = documentPath.split("/").pop();
+      const candidates = name ? this.app.vault.getFiles().filter((file) => file.path.split("/").pop() === name) : [];
+      if (candidates.length === 1) {
+        relocatable.push({ oldPath: documentPath, newPath: candidates[0].path, file: candidates[0] });
+      }
+    }
+    if (changed) {
+      this.index = { ...this.index, files: nextFiles };
+      await this.writeIndex();
+      this.changeVersion += 1;
+    }
+    if (relocatable.length > 0) {
+      await this.migrateFilePaths(relocatable);
+    }
+    this.needsIndexRebuild = false;
+    return { added, moved: relocatable.length };
+  }
+  /**
    * 批量迁移改名/移动后的文件侧数据：sidecar、索引条目、摘录文件。
    * 逐条处理，但只在全部结束后写一次索引——移动整个文件夹可能是几百个文件，
    * 逐条 writeIndex 会把索引重写几百遍。
+   * 单条失败不中断整批：否则前面的 sidecar 已经搬走、索引却一条都没落地，
+   * 「全库」会整片空白（只能靠逐个打开文件把条目补回来）。
    */
   async migrateFilePaths(entries) {
     let changed = false;
+    let failed = 0;
     for (const { oldPath, newPath, file } of entries) {
-      if (await this.migrateOne(oldPath, newPath, file)) {
-        changed = true;
+      try {
+        if (await this.migrateOne(oldPath, newPath, file)) {
+          changed = true;
+        }
+      } catch (error) {
+        failed += 1;
+        console.error("[inklight/rename] \u5355\u6761\u8FC1\u79FB\u5931\u8D25", oldPath, "->", newPath, error);
       }
     }
     if (changed) {
       await this.writeIndex();
       this.changeVersion += 1;
     }
+    if (failed > 0) {
+      console.warn(`yh-inklight: ${failed} \u4E2A\u6587\u4EF6\u7684\u6279\u6CE8\u8DEF\u5F84\u8FC1\u79FB\u5931\u8D25\uFF0C\u5176\u4F59\u5DF2\u8FC1\u79FB`);
+    }
   }
   /** 单文件改名的便捷入口（等价于一条批量迁移）。 */
   async migrateFilePath(oldPath, file) {
     await this.migrateFilePaths([{ oldPath, newPath: file.path, file }]);
   }
-  /** 单条迁移；返回是否真的搬了 sidecar。没加过批注的文件（无 sidecar）直接跳过。 */
+  /** 单条迁移；返回索引/侧数据是否真的发生变化。没加过批注的文件（无 sidecar）直接跳过。 */
   async migrateOne(oldPath, newPath, _file2) {
     const normalizedOldPath = this.normalizeVaultPath(oldPath);
     const normalizedNewPath = this.normalizeVaultPath(newPath);
@@ -12746,7 +12882,7 @@ var AnnotationStore = class {
     const oldSidecar = this.toSidecarPath(normalizedOldPath);
     const oldDocument = await this.readJson(oldSidecar, null);
     if (!oldDocument) {
-      return false;
+      return this.adoptMigratedSidecar(normalizedOldPath, normalizedNewPath);
     }
     const nextDocument = {
       ...oldDocument,
@@ -12760,6 +12896,40 @@ var AnnotationStore = class {
     delete this.index.files[normalizedOldPath];
     this.documents.delete(this.toCacheKey(normalizedOldPath));
     await this.migrateExcerptFile(normalizedOldPath, normalizedNewPath);
+    return true;
+  }
+  /**
+   * 旧路径 sidecar 已不存在时，尝试认领新路径上的 sidecar：
+   * 文件内容不动（已经是对的），只把索引条目从旧路径搬过来，并带上反查指针。
+   */
+  async adoptMigratedSidecar(oldPath, newPath) {
+    const newSidecar = this.toSidecarPath(newPath);
+    if (newSidecar === this.toSidecarPath(oldPath)) {
+      return false;
+    }
+    const existing = await this.readJson(newSidecar, null);
+    if (!existing) {
+      return false;
+    }
+    if (existing.filePath !== newPath) {
+      await this.saveDocument(
+        { ...existing, filePath: newPath },
+        { writeIndex: false, carryExportFrom: oldPath }
+      );
+    } else {
+      this.index = {
+        ...this.index,
+        files: {
+          ...this.index.files,
+          [newPath]: {
+            ...this.toIndexEntry(existing, newSidecar),
+            ...pickExportFields(this.index.files[oldPath] ?? this.index.files[newPath])
+          }
+        }
+      };
+    }
+    delete this.index.files[oldPath];
+    this.documents.delete(this.toCacheKey(oldPath));
     return true;
   }
   /**
@@ -22224,7 +22394,7 @@ var OverlayAnnotationsPlugin = class extends import_obsidian22.Plugin {
     this.registerEvents();
     this.pdfLayer.register();
     const repairTimer = window.setTimeout(() => {
-      void this.repairMovedAnnotations({ silent: true });
+      void this.recoverAnnotationIndex({ silent: true });
     }, 3e3);
     this.register(() => window.clearTimeout(repairTimer));
     const gotoPageHandler = (event) => {
@@ -22672,6 +22842,33 @@ ${lines.slice(0, 8).join("\n")}`);
     return true;
   }
   /**
+   * 索引自愈总入口：先按 sidecar 重建索引（索引损坏 / 移动后索引没落地 / 旧快照覆盖），
+   * 再处理「sidecar 还在旧路径、源文件已移动」的情况。两步都只认唯一同名文件，不猜内容。
+   * 启动后自动跑一次，设置页也可手动触发。
+   */
+  async recoverAnnotationIndex(options = {}) {
+    let rebuilt = 0;
+    if (this.store.indexNeedsRebuild || this.store.countOrphanedDocuments() > 0) {
+      try {
+        rebuilt = (await this.store.rebuildIndexFromSidecars()).added;
+      } catch (error) {
+        console.error("[inklight/repair] \u7D22\u5F15\u91CD\u5EFA\u5931\u8D25", error);
+      }
+    }
+    const moved = await this.repairMovedAnnotations({ silent: true });
+    if (rebuilt > 0 || moved > 0) {
+      await this.refreshAnnotations();
+    }
+    if (!options.silent) {
+      if (rebuilt > 0 || moved > 0) {
+        new import_obsidian22.Notice(`\u58A8\u5149\u6279\u6CE8\uFF1A\u5DF2\u6062\u590D ${rebuilt + moved} \u4E2A\u6587\u4EF6\u7684\u6279\u6CE8\u7D22\u5F15`);
+      } else {
+        new import_obsidian22.Notice("\u58A8\u5149\u6279\u6CE8\uFF1A\u7D22\u5F15\u4E0E\u6279\u6CE8\u6587\u4EF6\u4E00\u81F4\uFF0C\u65E0\u9700\u4FEE\u590D");
+      }
+    }
+    return { rebuilt, moved };
+  }
+  /**
    * 路径自愈：索引里的路径在库中已不存在、但能按唯一同名文件找到新位置时，把批注迁回去。
    * 用于 Obsidian 未发 rename 事件的外部移动 / 同步盘整体替换；启动后自动跑一次，设置页也可手动触发。
    * 只处理唯一同名文件，零候选或多候选一律跳过。
@@ -22704,7 +22901,9 @@ ${lines.slice(0, 8).join("\n")}`);
       this.refreshMarkdownStatsViews();
     }
     await this.refreshAnnotations();
-    new import_obsidian22.Notice(`\u58A8\u5149\u6279\u6CE8\uFF1A\u5DF2\u6062\u590D ${moves.length} \u4E2A\u79FB\u52A8\u6587\u4EF6\u7684\u6279\u6CE8\u8DEF\u5F84`);
+    if (!options.silent) {
+      new import_obsidian22.Notice(`\u58A8\u5149\u6279\u6CE8\uFF1A\u5DF2\u6062\u590D ${moves.length} \u4E2A\u79FB\u52A8\u6587\u4EF6\u7684\u6279\u6CE8\u8DEF\u5F84`);
+    }
     return moves.length;
   }
   /** 加载 Markdown 打开次数统计（独立 sidecar），并迁移 data.json 中的旧数据。 */

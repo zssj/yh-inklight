@@ -364,9 +364,9 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     this.registerCommands();
     this.registerEvents();
     this.pdfLayer.register();
-    // 外部移动 / 同步盘整体替换可能不发 rename 事件：启动后补一次路径自愈（只认唯一同名文件）
+    // 外部移动 / 同步盘整体替换 / 进程被杀导致索引没落地：启动后补一次自愈
     const repairTimer = window.setTimeout(() => {
-      void this.repairMovedAnnotations({ silent: true });
+      void this.recoverAnnotationIndex({ silent: true });
     }, 3000);
     this.register(() => window.clearTimeout(repairTimer));
     // Phase 5：保留批注卡片跳页桥接；侧栏 PDF 工具按钮直接调用插件公开方法。
@@ -877,6 +877,36 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   }
 
   /**
+   * 索引自愈总入口：先按 sidecar 重建索引（索引损坏 / 移动后索引没落地 / 旧快照覆盖），
+   * 再处理「sidecar 还在旧路径、源文件已移动」的情况。两步都只认唯一同名文件，不猜内容。
+   * 启动后自动跑一次，设置页也可手动触发。
+   */
+  async recoverAnnotationIndex(options: { silent?: boolean } = {}): Promise<{ rebuilt: number; moved: number }> {
+    let rebuilt = 0;
+    // 正常库：没有失联条目、索引也没读坏 → 一次 IO 都不做
+    if (this.store.indexNeedsRebuild || this.store.countOrphanedDocuments() > 0) {
+      try {
+        rebuilt = (await this.store.rebuildIndexFromSidecars()).added;
+      } catch (error) {
+        console.error("[inklight/repair] 索引重建失败", error);
+      }
+    }
+
+    const moved = await this.repairMovedAnnotations({ silent: true });
+    if (rebuilt > 0 || moved > 0) {
+      await this.refreshAnnotations();
+    }
+    if (!options.silent) {
+      if (rebuilt > 0 || moved > 0) {
+        new Notice(`墨光批注：已恢复 ${rebuilt + moved} 个文件的批注索引`);
+      } else {
+        new Notice("墨光批注：索引与批注文件一致，无需修复");
+      }
+    }
+    return { rebuilt, moved };
+  }
+
+  /**
    * 路径自愈：索引里的路径在库中已不存在、但能按唯一同名文件找到新位置时，把批注迁回去。
    * 用于 Obsidian 未发 rename 事件的外部移动 / 同步盘整体替换；启动后自动跑一次，设置页也可手动触发。
    * 只处理唯一同名文件，零候选或多候选一律跳过。
@@ -912,7 +942,9 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     }
 
     await this.refreshAnnotations();
-    new Notice(`墨光批注：已恢复 ${moves.length} 个移动文件的批注路径`);
+    if (!options.silent) {
+      new Notice(`墨光批注：已恢复 ${moves.length} 个移动文件的批注路径`);
+    }
     return moves.length;
   }
 

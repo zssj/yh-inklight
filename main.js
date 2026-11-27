@@ -15382,6 +15382,9 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
    *
    * 返回 false = 没法就地更新（列表还没建、卡片被当前筛选筛掉、或不在已渲染的那一段），
    * 此时**不同步 renderedKey**，让随后的 requestRender 整表重建兜底。
+   *
+   * 「最新/最早优先」排序下，这张卡的新排名要等下一次整表重建才生效——刻意如此：
+   * 保存一下就把它挪到列表另一头、还要连带重排滚动位置，比顺序晚一步更让人意外。
    */
   async refreshCardInPlace(previous) {
     const list = this.containerEl.querySelector(".yh-ov-list");

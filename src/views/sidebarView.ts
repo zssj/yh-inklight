@@ -340,10 +340,7 @@ export class AnnotationSidebarView extends ItemView {
     }
     const rawCards = scope.cards;
     const cards = this.filterCards(rawCards);
-    const highlightCount = rawCards.filter((card) => card.kind === "highlight" && !card.orphaned).length;
-    const noteCount = rawCards.filter((card) => card.note && !card.orphaned).length;
-    const scopeLabel = this.annotationScope === "all" ? `${documents.length} files` : "current file";
-    container.createDiv({ cls: "yh-ov-count", text: `${scopeLabel} · ${highlightCount} highlights · ${noteCount} notes` });
+    this.renderCountLine(container, rawCards, documents.length);
 
     const list = container.createDiv({ cls: "yh-ov-list" });
     this.renderCardList(list, cards, listToken, restore);
@@ -400,6 +397,23 @@ export class AnnotationSidebarView extends ItemView {
     }
     this.renderedKey = key;
     this.renderedIdentity = identity;
+  }
+
+  /**
+   * 顶部计数行。重建时新建、就地更新时只改文字：口径只有这一处，
+   * 别在 saveCardContent 那条路上另算一份，否则两处数出来的数会慢慢漂开。
+   */
+  private renderCountLine(container: Element, cards: SidebarCard[], documentCount: number): void {
+    const highlightCount = cards.filter((card) => card.kind === "highlight" && !card.orphaned).length;
+    const noteCount = cards.filter((card) => card.note && !card.orphaned).length;
+    const scopeLabel = this.annotationScope === "all" ? `${documentCount} files` : "current file";
+    const text = `${scopeLabel} · ${highlightCount} highlights · ${noteCount} notes`;
+    const existing = container.querySelector<HTMLElement>(".yh-ov-count");
+    if (existing) {
+      existing.setText(text);
+      return;
+    }
+    container.createDiv({ cls: "yh-ov-count", text });
   }
 
   /**
@@ -1082,10 +1096,53 @@ export class AnnotationSidebarView extends ItemView {
           new Notice("保存失败，请检查写入权限或同步状态");
           throw error;
         }
-        await this.plugin.refreshAnnotations();
+        // 只换这一张卡：不重建列表，滚动位置一个像素都不动。
+        // 以前这里走 refreshAnnotations() → requestRender() 整表重建，恢复滚动位置时
+        // 视口上方的卡按 contain-intrinsic-size 估算高度，锚点校正把列表甩到别处
+        // ——就是用户说的「保存后进度条跳到别的地方」。
+        await this.refreshCardInPlace(cardData);
+        // 阅读区高亮 / 书架 / 标签总览照旧刷新；侧栏与 updateOptions 跳过，它们都会重排列表
+        await this.plugin.refreshAnnotations({ lightweight: true });
       },
       onClose: () => this.requestRender(),
     });
+  }
+
+  /**
+   * 就地换掉列表里的那一张卡（保存想法后用）。
+   *
+   * 返回 false = 没法就地更新（列表还没建、卡片被当前筛选筛掉、或不在已渲染的那一段），
+   * 此时**不同步 renderedKey**，让随后的 requestRender 整表重建兜底。
+   *
+   * 「最新/最早优先」排序下，这张卡的新排名要等下一次整表重建才生效——刻意如此：
+   * 保存一下就把它挪到列表另一头、还要连带重排滚动位置，比顺序晚一步更让人意外。
+   */
+  private async refreshCardInPlace(previous: SidebarCard): Promise<boolean> {
+    const list = this.containerEl.querySelector<HTMLElement>(".yh-ov-list");
+    if (!list) {
+      return false;
+    }
+    // store.version 已变：这里会重算拍平结果并刷新 scopeCache，但不碰任何 DOM
+    const scope = await this.loadScope();
+    if (!scope) {
+      return false;
+    }
+    const next = scope.cards.find((card) => card.id === previous.id);
+    const target = Array.from(list.querySelectorAll<HTMLElement>(".yh-ov-card")).find(
+      (card) => card.dataset.id === previous.id,
+    );
+    if (!next || !target) {
+      return false;
+    }
+    if (this.plugin.settings.contentRelations) {
+      // 卡片里的相关区取 prepared 快照，快照随 store.version 失效：不预热就会显示旧关系
+      await this.plugin.prepareRelations(scope.documents);
+    }
+    target.replaceWith(this.buildCardElement(next));
+    this.renderCountLine(this.containerEl.children[1] ?? this.containerEl, scope.cards, scope.documents.length);
+    // 列表已与当前数据对齐：把指纹对上，面板关闭时的 requestRender 就不会白重建一次
+    this.renderedKey = this.currentKey();
+    return true;
   }
   private async saveCardContent(file: TFile, card: SidebarCard, content: string): Promise<void> {
     if (card.note && card.mode === "pdf") {

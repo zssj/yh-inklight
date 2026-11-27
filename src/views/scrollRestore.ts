@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 只依赖调用方注入的量测/写入回调，不直接碰 DOM API
- * [OUTPUT]: 对外提供 applyScrollRestore 与 RESTORE_MAX_CARDS，供侧栏列表重建后回到原位置
+ * [OUTPUT]: 对外提供 applyScrollRestore 与 RESTORE_MAX_CARDS / RESTORE_MAX_ADJUST_RATIO，供侧栏列表重建后回到原位置
  * [POS]: views 模块的纯逻辑层（与 cardModel 同层），不读写存储、不持状态；
  *        量测与写入由 sidebarView 注入，因此可以在 jsdom 里直接测。
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
@@ -37,6 +37,19 @@ export interface ScrollRestoreTarget {
 export const RESTORE_MAX_CARDS = 400;
 
 /**
+ * 锚点校正的合理上限，单位是「视口高度的倍数」。
+ *
+ * 卡片高度靠 CSS `contain-intrinsic-size: auto 160px` 估算：重建后，视口上方那些
+ * **没有重新绘制**的卡片一律按 160px 报高度，而重建前它们是按真实高度（可能 300~800px）
+ * 参与布局的。于是同一个 `anchorId` 在两次量测里根本不在同一坐标系里，差值能到几千像素；
+ * 照着这个差值 adjust，用户看到的就是「保存一下，进度条跳到别处」。
+ *
+ * 真正的内容变化不会让同一张卡在一屏之外挪位（在视口上方新增/删除一条批注是几十到几百像素）。
+ * 超过一屏只可能是估算噪声——宁可按像素落位，也不要甩走。
+ */
+export const RESTORE_MAX_ADJUST_RATIO = 1;
+
+/**
  * 把列表滚动位置放回重建前的位置。
  *
  * 列表是「滚到才建」的，重建后一开始只有首屏那么高，直接写 scrollTop 会被浏览器夹到
@@ -56,7 +69,10 @@ export function applyScrollRestore(
   if (offset !== null) {
     // 内容高度变化后锚点会偏：按差值补偿，让同一张卡落在重建前的位置
     const delta = offset - restore.anchorOffset;
-    if (Math.abs(delta) > 0.5) {
+    // 但差值超过一屏就只能是估算高度造成的量测噪声（见 RESTORE_MAX_ADJUST_RATIO），
+    // 这时按像素落位反而是对的；照差值校正会把列表甩到几千像素之外
+    const limit = Math.max(1, target.viewportHeight()) * RESTORE_MAX_ADJUST_RATIO;
+    if (Math.abs(delta) > 0.5 && Math.abs(delta) <= limit) {
       target.adjust(delta);
     }
   }

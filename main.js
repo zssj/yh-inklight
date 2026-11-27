@@ -14341,13 +14341,15 @@ var import_obsidian12 = require("obsidian");
 
 // src/views/scrollRestore.ts
 var RESTORE_MAX_CARDS = 400;
+var RESTORE_MAX_ADJUST_RATIO = 1;
 function applyScrollRestore(target, restore, fill) {
   const finished = fill(restore.top + target.viewportHeight());
   target.setTop(restore.top);
   const offset = restore.anchorId ? target.anchorOffsetIn(restore.anchorId) : null;
   if (offset !== null) {
     const delta = offset - restore.anchorOffset;
-    if (Math.abs(delta) > 0.5) {
+    const limit = Math.max(1, target.viewportHeight()) * RESTORE_MAX_ADJUST_RATIO;
+    if (Math.abs(delta) > 0.5 && Math.abs(delta) <= limit) {
       target.adjust(delta);
     }
   }
@@ -14731,10 +14733,7 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
     }
     const rawCards = scope.cards;
     const cards = this.filterCards(rawCards);
-    const highlightCount = rawCards.filter((card) => card.kind === "highlight" && !card.orphaned).length;
-    const noteCount = rawCards.filter((card) => card.note && !card.orphaned).length;
-    const scopeLabel = this.annotationScope === "all" ? `${documents.length} files` : "current file";
-    container.createDiv({ cls: "yh-ov-count", text: `${scopeLabel} \xB7 ${highlightCount} highlights \xB7 ${noteCount} notes` });
+    this.renderCountLine(container, rawCards, documents.length);
     const list = container.createDiv({ cls: "yh-ov-list" });
     this.renderCardList(list, cards, listToken, restore);
     this.renderedKey = key;
@@ -14785,6 +14784,22 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
     }
     this.renderedKey = key;
     this.renderedIdentity = identity;
+  }
+  /**
+   * 顶部计数行。重建时新建、就地更新时只改文字：口径只有这一处，
+   * 别在 saveCardContent 那条路上另算一份，否则两处数出来的数会慢慢漂开。
+   */
+  renderCountLine(container, cards, documentCount) {
+    const highlightCount = cards.filter((card) => card.kind === "highlight" && !card.orphaned).length;
+    const noteCount = cards.filter((card) => card.note && !card.orphaned).length;
+    const scopeLabel = this.annotationScope === "all" ? `${documentCount} files` : "current file";
+    const text = `${scopeLabel} \xB7 ${highlightCount} highlights \xB7 ${noteCount} notes`;
+    const existing = container.querySelector(".yh-ov-count");
+    if (existing) {
+      existing.setText(text);
+      return;
+    }
+    container.createDiv({ cls: "yh-ov-count", text });
   }
   /**
    * 列表按需渲染：先同步铺首屏，剩余卡片等哨兵滚到附近再追加。
@@ -15356,10 +15371,41 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
           new import_obsidian12.Notice("\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u5199\u5165\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001");
           throw error;
         }
-        await this.plugin.refreshAnnotations();
+        await this.refreshCardInPlace(cardData);
+        await this.plugin.refreshAnnotations({ lightweight: true });
       },
       onClose: () => this.requestRender()
     });
+  }
+  /**
+   * 就地换掉列表里的那一张卡（保存想法后用）。
+   *
+   * 返回 false = 没法就地更新（列表还没建、卡片被当前筛选筛掉、或不在已渲染的那一段），
+   * 此时**不同步 renderedKey**，让随后的 requestRender 整表重建兜底。
+   */
+  async refreshCardInPlace(previous) {
+    const list = this.containerEl.querySelector(".yh-ov-list");
+    if (!list) {
+      return false;
+    }
+    const scope = await this.loadScope();
+    if (!scope) {
+      return false;
+    }
+    const next = scope.cards.find((card) => card.id === previous.id);
+    const target = Array.from(list.querySelectorAll(".yh-ov-card")).find(
+      (card) => card.dataset.id === previous.id
+    );
+    if (!next || !target) {
+      return false;
+    }
+    if (this.plugin.settings.contentRelations) {
+      await this.plugin.prepareRelations(scope.documents);
+    }
+    target.replaceWith(this.buildCardElement(next));
+    this.renderCountLine(this.containerEl.children[1] ?? this.containerEl, scope.cards, scope.documents.length);
+    this.renderedKey = this.currentKey();
+    return true;
   }
   async saveCardContent(file, card, content) {
     if (card.note && card.mode === "pdf") {
@@ -22560,12 +22606,21 @@ var OverlayAnnotationsPlugin = class extends import_obsidian23.Plugin {
     await this.saveData(this.settings);
     this.aiTagCache.clear();
   }
-  async refreshAnnotations() {
-    this.app.workspace.updateOptions();
-    for (const leaf of this.app.workspace.getLeavesOfType(ANNOTATION_SIDEBAR_VIEW)) {
-      const view = leaf.view;
-      if (view instanceof AnnotationSidebarView) {
-        view.requestRender();
+  /**
+   * 刷新各处视图。
+   *
+   * `lightweight` 给「侧栏卡片就地更新」用（保存标签/想法）：调用方已经把眼前那张卡换好了，
+   * 此时再让侧栏整表重建、再跑一次 workspace.updateOptions()，都是白白重排一遍列表
+   * ——用户看到的就是「保存一下，进度条跳到别处」。阅读区高亮、书架、标签总览照旧刷新。
+   */
+  async refreshAnnotations(options = {}) {
+    if (!options.lightweight) {
+      this.app.workspace.updateOptions();
+      for (const leaf of this.app.workspace.getLeavesOfType(ANNOTATION_SIDEBAR_VIEW)) {
+        const view = leaf.view;
+        if (view instanceof AnnotationSidebarView) {
+          view.requestRender();
+        }
       }
     }
     for (const leaf of this.app.workspace.getLeavesOfType(EPUB_BOOKSHELF_VIEW_TYPE)) {

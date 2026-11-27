@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 被测 src/views/scrollRestore.ts 的纯函数（量测/写入通过 target 注入）
- * [OUTPUT]: 覆盖「重建后回到原滚动位置」的判定：先补高度再落位、锚点校正、无锚点时退像素
+ * [OUTPUT]: 覆盖「重建后回到原滚动位置」的判定：先补高度再落位、锚点校正（含一屏上限）、无锚点时退像素
  * [POS]: L1 纯逻辑测试——DOM 量测在真机验证，这里只锁住恢复顺序与补偿算法
  */
 
@@ -82,6 +82,24 @@ describe("applyScrollRestore", () => {
 
     expect(state.adjustCalls).toEqual([]);
     expect(state.top).toBe(12000);
+  });
+
+  it("锚点位移超过一屏就不校正：那是 contain-intrinsic-size 的估算噪声，照做会把列表甩走", () => {
+    // 重建后视口上方的卡一律按 160px 估算，锚点量出来的偏移比真机小几千像素；
+    // 保存想法后「进度条跳到别处」就是照这个差值 adjust 造成的
+    const { target, state } = makeHarness({ height: 20_000, anchorOffset: 10 - 3800 });
+    applyScrollRestore(target, { top: 12_000, anchorId: "card-40", anchorOffset: 10 }, () => false);
+
+    expect(state.adjustCalls).toEqual([]);
+    expect(state.top).toBe(12_000);
+  });
+
+  it("一屏之内的位移仍然校正：在视口上方新增一条批注是这种量级", () => {
+    const { target, state } = makeHarness({ height: 20_000, anchorOffset: 10 - 240 });
+    applyScrollRestore(target, { top: 12_000, anchorId: "card-40", anchorOffset: 10 }, () => false);
+
+    expect(state.adjustCalls).toEqual([-240]);
+    expect(state.top).toBe(11_760);
   });
 
   it("卡片已全部渲染完时返回 true，调用方据此移除底部哨兵", () => {

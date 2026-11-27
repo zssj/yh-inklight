@@ -458,12 +458,21 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     this.aiTagCache.clear();
   }
 
-  async refreshAnnotations(): Promise<void> {
-    this.app.workspace.updateOptions();
-    for (const leaf of this.app.workspace.getLeavesOfType(ANNOTATION_SIDEBAR_VIEW)) {
-      const view = leaf.view;
-      if (view instanceof AnnotationSidebarView) {
-        view.requestRender();
+  /**
+   * 刷新各处视图。
+   *
+   * `lightweight` 给「侧栏卡片就地更新」用（保存标签/想法）：调用方已经把眼前那张卡换好了，
+   * 此时再让侧栏整表重建、再跑一次 workspace.updateOptions()，都是白白重排一遍列表
+   * ——用户看到的就是「保存一下，进度条跳到别处」。阅读区高亮、书架、标签总览照旧刷新。
+   */
+  async refreshAnnotations(options: { lightweight?: boolean } = {}): Promise<void> {
+    if (!options.lightweight) {
+      this.app.workspace.updateOptions();
+      for (const leaf of this.app.workspace.getLeavesOfType(ANNOTATION_SIDEBAR_VIEW)) {
+        const view = leaf.view;
+        if (view instanceof AnnotationSidebarView) {
+          view.requestRender();
+        }
       }
     }
     for (const leaf of this.app.workspace.getLeavesOfType(EPUB_BOOKSHELF_VIEW_TYPE)) {

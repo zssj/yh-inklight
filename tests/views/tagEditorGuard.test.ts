@@ -46,7 +46,7 @@ describe("侧栏标签编辑态守卫", () => {
 
   it("挂载新编辑器前先收口旧编辑器，close 后清自身句柄", () => {
     const body = methodBody("private wireTagEditor(", "private tagRefs(");
-    const guard = body.indexOf("this.tagEditorCleanup?.()");
+    const guard = body.indexOf("previous?.()");
     expect(guard, "wireTagEditor 必须先收掉旧编辑器").toBeGreaterThan(-1);
     expect(guard).toBeLessThan(body.indexOf("document.addEventListener("));
     expect(body, "close 后必须清 tagEditorCleanup，否则同卡重开时旧 close 会删掉新输入框")
@@ -57,5 +57,59 @@ describe("侧栏标签编辑态守卫", () => {
     const body = methodBody("async onClose(): Promise<void> {", "requestRender(force = false): void");
     expect(body).toContain("this.tagEditorCleanup?.()");
     expect(body).toMatch(/this\.editingTagCardId = null/);
+  });
+
+  it("挂载新编辑器先自增代次再收口旧编辑器，旧 close 不再 repaint 新输入框", () => {
+    const body = methodBody("private wireTagEditor(", "private tagRefs(");
+    const bump = body.indexOf("++this.tagEditorMount");
+    const previous = body.indexOf("previous?.()");
+    expect(bump, "wireTagEditor 缺少挂载代次").toBeGreaterThan(-1);
+    expect(previous, "wireTagEditor 必须先收口旧编辑器").toBeGreaterThan(-1);
+    expect(bump, "代次必须在收口旧编辑器之前自增，否则旧 close 判不出已被接管").toBeLessThan(previous);
+    // 旧 close：代次不一致时只解绑监听，不碰共享状态
+    expect(body).toMatch(/mount !== this\.tagEditorMount\)\s*\{\s*return;/);
+  });
+});
+
+/**
+ * 行内「想法」编辑框：编辑态同样必须记在视图上。
+ * 早先它只活在 DOM 里，任何一次刷新（切回前台、数据变化、后台自愈）都会把输入框
+ * 连同没保存的内容一起删掉——用户看到的就是「点添加想法，一闪就没了」。
+ */
+describe("行内想法编辑态守卫", () => {
+  it("重建卡片时按 editingNoteCardId 把输入框连同草稿挂回来", () => {
+    const body = methodBody("private buildCardElement(", "private buildCardHost(");
+    expect(body).toMatch(/this\.editingNoteCardId === cardData\.id/);
+    expect(body, "重建后必须重挂编辑器，否则一次刷新就丢内容").toContain("this.openInlineEditor(");
+    // 重建不抢焦点：否则输入法自己弹起来
+    expect(body).toMatch(/focus:\s*false/);
+  });
+
+  it("openInlineEditor 登记编辑态、记草稿、退出时清干净", () => {
+    const body = methodBody("private openInlineEditor(", "private async saveCardContent(");
+    expect(body).toMatch(/this\.editingNoteCardId = cardData\.id/);
+    expect(body).toMatch(/this\.noteDraft = initialValue/);
+    expect(body, "输入必须实时记草稿，否则重建会回填旧的空串").toMatch(/textarea\.oninput/);
+    expect(body).toMatch(/this\.editingNoteCardId = null/);
+    expect(body).toMatch(/this\.noteDraft = ""/);
+  });
+
+  it("保存前先退编辑态，别把随后的刷新挡在守卫外", () => {
+    const body = methodBody("private openInlineEditor(", "private async saveCardContent(");
+    const exit = body.indexOf("exitEditor();");
+    const save = body.indexOf("await this.saveCardContent(");
+    expect(exit).toBeGreaterThan(-1);
+    expect(save).toBeGreaterThan(-1);
+    expect(exit, "必须先退编辑态再保存：保存会触发 refreshAnnotations").toBeLessThan(save);
+  });
+
+  it("视图不可见时不重建（隐藏状态下量不到滚动位置）", () => {
+    const body = methodBody("async render(): Promise<void> {", "private async refreshList");
+    const guard = body.indexOf("!this.isVisible()");
+    const capture = body.indexOf("this.captureScroll()");
+    expect(guard, "render() 缺少不可见守卫").toBeGreaterThan(-1);
+    expect(capture).toBeGreaterThan(-1);
+    expect(guard, "守卫必须在 captureScroll 之前").toBeLessThan(capture);
+    expect(body).toMatch(/this\.pendingVisibleRender = true/);
   });
 });

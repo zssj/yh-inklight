@@ -129,4 +129,33 @@ describe("openAnnotationTarget — Markdown", () => {
     expect(getLeaf).toHaveBeenCalledWith("tab");
     expect(leaf.openFile).toHaveBeenCalledWith(file, { active: true });
   });
+
+  // 主区域模式下批注总览自己就是 rootSplit 里「最近活跃」的 leaf：拿它 openFile
+  // 会把总览整个替换成文档（视图销毁、滚动位置与未提交编辑一起丢），
+  // 用户「切回来」时只能看到一份从顶部重开的新列表。
+  it("最近 leaf 是插件自己的视图：另开标签页，不把总览顶掉", async () => {
+    const file = new TFile("笔记/复利.md");
+    const own = { view: { getViewType: () => "yh-inklight-sidebar" }, openFile: vi.fn(async () => undefined) };
+    const { leaf } = mdLeaf(file);
+    const { app, getLeaf, revealLeaf } = fakeApp([], { mostRecent: own, fallbackLeaf: leaf });
+
+    await openAnnotationTarget(app, { file, offset: 0, pageNumber: null, mode: "md" }, vi.fn());
+
+    expect(own.openFile).not.toHaveBeenCalled();
+    expect(getLeaf).toHaveBeenCalledWith("tab");
+    expect(leaf.openFile).toHaveBeenCalledWith(file, { active: true });
+    expect(revealLeaf).toHaveBeenCalledTimes(1);
+  });
+
+  it("标签总览同理：不把标签总览的 leaf 当落点", async () => {
+    const file = new TFile("笔记/复利.md");
+    const own = { view: { getViewType: () => "inklight-tag-board" }, openFile: vi.fn(async () => undefined) };
+    const { leaf } = mdLeaf(file);
+    const { app, getLeaf } = fakeApp([], { mostRecent: own, fallbackLeaf: leaf });
+
+    await openAnnotationTarget(app, { file, offset: 0, pageNumber: null, mode: "md" }, vi.fn());
+
+    expect(own.openFile).not.toHaveBeenCalled();
+    expect(getLeaf).toHaveBeenCalledWith("tab");
+  });
 });

@@ -1,6 +1,7 @@
 /**
  * [INPUT]: 依赖 Obsidian App/WorkspaceLeaf/MarkdownView 与 cardModel 的 AnnotationMode
- * [OUTPUT]: 对外提供 openAnnotationTarget，统一处理 Markdown 偏移定位、PDF 翻页、EPUB CFI 三类跳转
+ * [OUTPUT]: 对外提供 openAnnotationTarget，统一处理 Markdown 偏移定位、PDF 翻页、EPUB CFI 三类跳转；
+ *           选 leaf 时排除插件自己的视图（OWN_VIEW_TYPES），宁可另开标签页也不把总览/书架顶掉
  * [POS]: views 模块的跳转单点，被 sidebarView 与 tagBoardView 共用，避免两份实现漂移
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
@@ -14,6 +15,26 @@ const EPUB_READER_VIEW_TYPE = "inklight-epub-reader";
 
 /** Obsidian 内置 Markdown 视图类型 */
 const MARKDOWN_VIEW_TYPE = "markdown";
+
+/**
+ * 插件自己的视图类型（与各视图文件里的常量保持一致，不从 views 反向 import）。
+ * 跳转绝不能把这些 leaf 当落点：主区域模式下批注总览自己就是 rootSplit 里「最近活跃」的 leaf，
+ * 对它 openFile 会把总览整个替换成文档 —— 视图被销毁，滚动位置与正在编辑的输入一起丢失。
+ */
+const OWN_VIEW_TYPES = new Set([
+  "yh-inklight-sidebar",
+  "inklight-tag-board",
+  "inklight-epub-reader",
+  "inklight-epub-bookshelf",
+  "inklight-epub-toc",
+]);
+
+/** 该 leaf 里装的是不是插件自己的视图 */
+function isOwnLeaf(leaf: WorkspaceLeaf): boolean {
+  const view = leaf.view as { getViewType?: () => string } | undefined;
+  const type = typeof view?.getViewType === "function" ? view.getViewType() : "";
+  return typeof type === "string" && OWN_VIEW_TYPES.has(type);
+}
 
 export interface AnnotationTarget {
   file: TFile;
@@ -132,7 +153,13 @@ function pickNavigationLeaf(app: App, newTab: boolean): WorkspaceLeaf {
   if (newTab) {
     return app.workspace.getLeaf("tab");
   }
-  return app.workspace.getMostRecentLeaf() ?? app.workspace.getLeaf("tab");
+  const recent = app.workspace.getMostRecentLeaf();
+  // 最近 leaf 就是插件自己的视图（主区域模式下的批注总览最典型）：宁可另开一个标签页，
+  // 也不能拿它 openFile——那会把总览顶掉，用户「切回来」时看到的是一份从顶部重开的新列表。
+  if (recent && !isOwnLeaf(recent)) {
+    return recent;
+  }
+  return app.workspace.getLeaf("tab");
 }
 
 /** 找出已经显示该文件的标签页（不区分视图类型；epub 有自己的 findOpenEpubLeaf） */

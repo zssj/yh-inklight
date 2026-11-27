@@ -14166,6 +14166,18 @@ function pickScrollAnchor(cards, listTop) {
 var import_obsidian10 = require("obsidian");
 var EPUB_READER_VIEW_TYPE = "inklight-epub-reader";
 var MARKDOWN_VIEW_TYPE = "markdown";
+var OWN_VIEW_TYPES = /* @__PURE__ */ new Set([
+  "yh-inklight-sidebar",
+  "inklight-tag-board",
+  "inklight-epub-reader",
+  "inklight-epub-bookshelf",
+  "inklight-epub-toc"
+]);
+function isOwnLeaf(leaf) {
+  const view = leaf.view;
+  const type = typeof view?.getViewType === "function" ? view.getViewType() : "";
+  return typeof type === "string" && OWN_VIEW_TYPES.has(type);
+}
 async function openAnnotationTarget(app, target, openEpubAt, options) {
   if (target.mode === "epub") {
     if (target.cfiRange) {
@@ -14224,7 +14236,11 @@ function pickNavigationLeaf(app, newTab) {
   if (newTab) {
     return app.workspace.getLeaf("tab");
   }
-  return app.workspace.getMostRecentLeaf() ?? app.workspace.getLeaf("tab");
+  const recent = app.workspace.getMostRecentLeaf();
+  if (recent && !isOwnLeaf(recent)) {
+    return recent;
+  }
+  return app.workspace.getLeaf("tab");
 }
 function findLeafShowingFile(app, file) {
   const matches = [];
@@ -14355,6 +14371,25 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.tagEditorCleanup = null;
     /** 标签编辑期间被挡下的重绘请求，编辑结束后补一次 */
     this.pendingRender = false;
+    /**
+     * 当前处于「想法/笔记」行内编辑态的卡片 id 与未提交草稿。
+     * 和标签编辑同理：状态必须记在视图上，DOM 只是投影——任何一次重绘（刷新、跳转回来、
+     * 后台数据变化）都会把输入框连同没保存的内容一起删掉，用户看到的就是「点开一闪就没了」。
+     * 这里不挡重绘，而是重建时按这个字段把编辑框连同草稿重新挂回去。
+     */
+    this.editingNoteCardId = null;
+    this.noteDraft = "";
+    /**
+     * 标签编辑器挂载代次：新编辑器接管后，旧 close 只收监听、不再 repaint。
+     * 少了这道判定，一次「重绘后重建编辑器」会让旧 close 把刚挂上的新输入框换回 chip。
+     */
+    this.tagEditorMount = 0;
+    /**
+     * 视图不可见（主区域标签页切走 / 侧栏折叠）时被挡下的重绘。
+     * 隐藏元素量不到滚动位置（scrollTop 恒 0、卡片 rect 全零），此时重建等于把用户
+     * 正在读的位置丢成顶部；等重新可见（layout-change）再补一次。
+     */
+    this.pendingVisibleRender = false;
     /** 只有用户主动点「+」进入编辑态时才抢焦点；重绘重建不抢，否则输入法会自动弹起 */
     this.tagEditorAutoFocus = false;
     /** 编辑态里尚未提交的输入，重绘回填用，避免一次刷新吞掉正在打的标签 */
@@ -14376,6 +14411,15 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.renderedKey = "";
     this.renderedIdentity = "";
     this.registerDomEvent(this.containerEl, "click", (event) => this.handleViewClick(event));
+    const flushVisible = () => {
+      if (!this.pendingVisibleRender || !this.isVisible()) {
+        return;
+      }
+      this.pendingVisibleRender = false;
+      void this.render();
+    };
+    this.registerEvent(this.app.workspace.on("layout-change", flushVisible));
+    this.registerEvent(this.app.workspace.on("active-leaf-change", flushVisible));
     await this.render();
   }
   async onClose() {
@@ -14396,6 +14440,9 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.pendingRender = false;
     this.pendingTagQuery = "";
     this.tagEditorAutoFocus = false;
+    this.editingNoteCardId = null;
+    this.noteDraft = "";
+    this.pendingVisibleRender = false;
     this.openRelated.clear();
     if (this.renderTimer !== null) {
       window.clearTimeout(this.renderTimer);
@@ -14438,6 +14485,14 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
    */
   currentKey() {
     return [this.listIdentity(), this.plugin.store.version, this.plugin.settings.contentRelations ? 1 : 0].join("");
+  }
+  /**
+   * 视图此刻是否真的可见。取不到 Obsidian 的 isShown（测试环境）时按可见处理，
+   * 宁可多绘一次，也不要因为判不出来把列表冻在旧数据上。
+   */
+  isVisible() {
+    const el = this.containerEl;
+    return typeof el.isShown === "function" ? el.isShown() : true;
   }
   /**
    * 重建前记下滚动位置：像素位置 + 列表顶端第一张可见卡片。
@@ -14494,7 +14549,15 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     if (!force && key === this.renderedKey && container.querySelector(".yh-ov-list")) {
       return;
     }
+    if (!this.isVisible() && container.querySelector(".yh-ov-list")) {
+      this.pendingVisibleRender = true;
+      return;
+    }
     const restore = this.renderedIdentity === identity ? this.captureScroll() : null;
+    if (this.renderedIdentity !== identity) {
+      this.editingNoteCardId = null;
+      this.noteDraft = "";
+    }
     this.listObserver?.disconnect();
     this.listObserver = null;
     this.resetDeferredContent();
@@ -14530,6 +14593,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.renderCardList(list, cards, listToken, restore);
     this.renderedKey = key;
     this.renderedIdentity = identity;
+    this.pendingVisibleRender = false;
   }
   /**
    * 只刷新卡片列表（不重建搜索框等控件），用于搜索输入时保持焦点。
@@ -14556,6 +14620,10 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     }
     const identity = this.listIdentity();
     const restore = this.renderedIdentity === identity ? this.captureScroll(list) : null;
+    if (this.renderedIdentity !== identity) {
+      this.editingNoteCardId = null;
+      this.noteDraft = "";
+    }
     const scope = await this.loadScope();
     if (!scope) {
       await this.render();
@@ -14983,6 +15051,9 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
         )
       );
     }
+    if (this.editingNoteCardId === cardData.id && file) {
+      this.openInlineEditor(card, file, cardData, this.noteDraft, { focus: false });
+    }
     return card;
   }
   /**
@@ -15032,10 +15103,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
         // 三端浮层共用同一函数，避免这里拦了、浮层又漏出空卡
         "atom-card": file && canExtractAtomCard(cardData) ? () => void this.plugin.createAtomCardFor(cardData) : void 0,
         "edit-note": file && cardData.note ? () => this.openInlineEditor(root, file, cardData, cardData.content) : void 0,
-        "add-note": file && !cardData.note ? () => {
-          root.querySelector('[data-action="add-note"]')?.addClass("hidden");
-          this.openInlineEditor(root, file, cardData, "");
-        } : void 0,
+        "add-note": file && !cardData.note ? () => this.openInlineEditor(root, file, cardData, "") : void 0,
         jump: file ? () => this.jumpTo(file, cardData.startOffset, cardData.pageNumber, cardData.mode, cardData.cfiRange) : void 0,
         delete: file ? () => void this.deleteCardWithNotice(file, cardData) : void 0
       },
@@ -15088,8 +15156,10 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
    * 编辑态存于 this.editingTagCardId，重绘不丢；退出后 repaint 把标签行换回 chip。
    */
   wireTagEditor(row, cardData, repaint) {
-    this.tagEditorCleanup?.();
+    const mount = ++this.tagEditorMount;
+    const previous = this.tagEditorCleanup;
     this.tagEditorCleanup = null;
+    previous?.();
     const shouldFocus = this.tagEditorAutoFocus;
     this.tagEditorAutoFocus = false;
     const field = row.querySelector(".yh-tag-input-field");
@@ -15130,6 +15200,9 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     });
     const close = () => {
       abort();
+      if (mount !== this.tagEditorMount) {
+        return;
+      }
       if (this.tagEditorCleanup === close) {
         this.tagEditorCleanup = null;
       }
@@ -15220,7 +15293,12 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     }
     return attrs;
   }
-  openInlineEditor(card, file, cardData, initialValue) {
+  /**
+   * 行内「想法」编辑框。状态（editingNoteCardId + noteDraft）存在视图上：
+   * 重建时按状态重新挂载，用户写到一半的内容不会因为一次刷新消失。
+   * focus:false 用于重建后的恢复——不抢焦点，避免输入法自己弹起。
+   */
+  openInlineEditor(card, file, cardData, initialValue, options = {}) {
     let edit = card.querySelector(".yh-ov-edit");
     if (!edit) {
       edit = document.createElement("div");
@@ -15251,12 +15329,42 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     if (!edit || !textarea || !save || !cancel) {
       return;
     }
+    this.editingNoteCardId = cardData.id;
+    this.noteDraft = initialValue;
     textarea.value = initialValue;
     edit.removeClass("hidden");
-    textarea.focus();
-    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    addNote?.addClass("hidden");
+    if (options.focus !== false) {
+      textarea.focus();
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    }
+    textarea.oninput = () => {
+      if (this.editingNoteCardId === cardData.id) {
+        this.noteDraft = textarea.value;
+      }
+    };
+    const exitEditor = () => {
+      if (this.editingNoteCardId === cardData.id) {
+        this.editingNoteCardId = null;
+        this.noteDraft = "";
+      }
+      edit.addClass("hidden");
+      addNote?.removeClass("hidden");
+      if (this.pendingRender) {
+        this.pendingRender = false;
+        this.requestRender();
+      }
+    };
     const saveContent = async () => {
-      await this.saveCardContent(file, cardData, textarea.value);
+      const content = textarea.value;
+      exitEditor();
+      try {
+        await this.saveCardContent(file, cardData, content);
+      } catch (error) {
+        console.warn("yh-inklight: \u4FDD\u5B58\u60F3\u6CD5\u5931\u8D25", error);
+        new import_obsidian11.Notice("\u4FDD\u5B58\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u5199\u5165\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001");
+        return;
+      }
       await this.plugin.refreshAnnotations();
     };
     save.onclick = () => {
@@ -15264,8 +15372,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     };
     cancel.onclick = () => {
       textarea.value = initialValue;
-      edit.addClass("hidden");
-      addNote?.removeClass("hidden");
+      exitEditor();
     };
     textarea.onkeydown = (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -15274,8 +15381,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       }
       if (event.key === "Escape") {
         textarea.value = initialValue;
-        edit.addClass("hidden");
-        addNote?.removeClass("hidden");
+        exitEditor();
       }
     };
   }

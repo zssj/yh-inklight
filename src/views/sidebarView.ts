@@ -9,7 +9,10 @@
  *        顶部搜索/范围/筛选/排序/导出统一收进单一折叠菜单（默认收起，展开态记在视图字段上），列表区域常驻不被菜单挤压；
  *        移动端标签编辑态额外处理软键盘遮挡（列表补底部留白 + 输入框滚入可视区），不触碰阅读区；
  *        标签编辑期间 requestRender / refreshList / render 本体都挡重绘（排队中的定时器也会走到 render），
- *        只登记 pendingRender、退出编辑后才补；挂载新编辑器先收口旧的，避免双监听误关；
+ *        只登记 pendingRender、退出编辑后才补；挂载新编辑器先自增代次再收口旧的，旧 close 只解绑不复绘；
+ *        行内「想法」编辑态记在视图上（editingNoteCardId + noteDraft），重建时连同草稿重挂，不抢焦点；
+ *        视图不可见时（切走标签页/侧栏折叠）不重建，置 pendingVisibleRender 等重新可见再补
+ *        ——隐藏元素量不到滚动位置，此时的清空重建会把用户正在读的位置丢成顶部；
  *        全库列表按需渲染：首屏 60 张，之后由列表底部哨兵的 IntersectionObserver 驱动，
  *        用户滚到附近才追加下一批（不再定时把全库铺完），listToken 作废旧批次；
  *        渲染前已预热关联快照时，卡片相关区直接同步取命中，不再逐卡 await prepare；
@@ -139,6 +142,25 @@ export class AnnotationSidebarView extends ItemView {
   private tagEditorCleanup: (() => void) | null = null;
   /** 标签编辑期间被挡下的重绘请求，编辑结束后补一次 */
   private pendingRender = false;
+  /**
+   * 当前处于「想法/笔记」行内编辑态的卡片 id 与未提交草稿。
+   * 和标签编辑同理：状态必须记在视图上，DOM 只是投影——任何一次重绘（刷新、跳转回来、
+   * 后台数据变化）都会把输入框连同没保存的内容一起删掉，用户看到的就是「点开一闪就没了」。
+   * 这里不挡重绘，而是重建时按这个字段把编辑框连同草稿重新挂回去。
+   */
+  private editingNoteCardId: string | null = null;
+  private noteDraft = "";
+  /**
+   * 标签编辑器挂载代次：新编辑器接管后，旧 close 只收监听、不再 repaint。
+   * 少了这道判定，一次「重绘后重建编辑器」会让旧 close 把刚挂上的新输入框换回 chip。
+   */
+  private tagEditorMount = 0;
+  /**
+   * 视图不可见（主区域标签页切走 / 侧栏折叠）时被挡下的重绘。
+   * 隐藏元素量不到滚动位置（scrollTop 恒 0、卡片 rect 全零），此时重建等于把用户
+   * 正在读的位置丢成顶部；等重新可见（layout-change）再补一次。
+   */
+  private pendingVisibleRender = false;
   /** 只有用户主动点「+」进入编辑态时才抢焦点；重绘重建不抢，否则输入法会自动弹起 */
   private tagEditorAutoFocus = false;
   /** 编辑态里尚未提交的输入，重绘回填用，避免一次刷新吞掉正在打的标签 */
@@ -170,6 +192,17 @@ export class AnnotationSidebarView extends ItemView {
     // 点击委托挂在视图根节点上：header 每次重绘都会重建按钮，
     // 绑在按钮自身上的监听会随节点一起消失，委托则始终有效。
     this.registerDomEvent(this.containerEl, "click", (event) => this.handleViewClick(event));
+    // 后台被挡下的重绘：切回前台再补，此时才量得到真实滚动位置。
+    // layout-change 覆盖标签页切换/侧栏展开，active-leaf-change 兜住部分移动端切回路径。
+    const flushVisible = (): void => {
+      if (!this.pendingVisibleRender || !this.isVisible()) {
+        return;
+      }
+      this.pendingVisibleRender = false;
+      void this.render();
+    };
+    this.registerEvent(this.app.workspace.on("layout-change", flushVisible));
+    this.registerEvent(this.app.workspace.on("active-leaf-change", flushVisible));
     await this.render();
   }
 
@@ -191,6 +224,9 @@ export class AnnotationSidebarView extends ItemView {
     this.pendingRender = false;
     this.pendingTagQuery = "";
     this.tagEditorAutoFocus = false;
+    this.editingNoteCardId = null;
+    this.noteDraft = "";
+    this.pendingVisibleRender = false;
     this.openRelated.clear();
     if (this.renderTimer !== null) {
       window.clearTimeout(this.renderTimer);
@@ -238,6 +274,15 @@ export class AnnotationSidebarView extends ItemView {
    */
   private currentKey(): string {
     return [this.listIdentity(), this.plugin.store.version, this.plugin.settings.contentRelations ? 1 : 0].join("\u0002");
+  }
+
+  /**
+   * 视图此刻是否真的可见。取不到 Obsidian 的 isShown（测试环境）时按可见处理，
+   * 宁可多绘一次，也不要因为判不出来把列表冻在旧数据上。
+   */
+  private isVisible(): boolean {
+    const el = this.containerEl as HTMLElement & { isShown?: () => boolean };
+    return typeof el.isShown === "function" ? el.isShown() : true;
   }
 
   /**
@@ -308,8 +353,20 @@ export class AnnotationSidebarView extends ItemView {
     if (!force && key === this.renderedKey && container.querySelector(".yh-ov-list")) {
       return;
     }
+    // 视图在后台时不要重建：隐藏元素量不到滚动位置（scrollTop 恒 0），清空重建等于
+    // 把用户正在读的位置丢成顶部。先记下请求，重新可见时由 layout-change 补一次；
+    // 首次绘制（容器里还没有 .yh-ov-list）不走这条，免得一直空着。
+    if (!this.isVisible() && container.querySelector(".yh-ov-list")) {
+      this.pendingVisibleRender = true;
+      return;
+    }
     // 视角没变、只是数据变了 → 重建后回到原位；视角变了 → 从顶部开始
     const restore = this.renderedIdentity === identity ? this.captureScroll() : null;
+    // 换范围/换筛选是整表换内容：行内「想法」编辑框跟着作废，别把草稿挂到另一批卡片上
+    if (this.renderedIdentity !== identity) {
+      this.editingNoteCardId = null;
+      this.noteDraft = "";
+    }
     this.listObserver?.disconnect();
     this.listObserver = null;
     this.resetDeferredContent();
@@ -350,6 +407,7 @@ export class AnnotationSidebarView extends ItemView {
     this.renderCardList(list, cards, listToken, restore);
     this.renderedKey = key;
     this.renderedIdentity = identity;
+    this.pendingVisibleRender = false;
   }
 
   /**
@@ -381,6 +439,10 @@ export class AnnotationSidebarView extends ItemView {
     const identity = this.listIdentity();
     // 位置必须在清空之前取：清空后列表里已经没有卡片可量
     const restore = this.renderedIdentity === identity ? this.captureScroll(list) : null;
+    if (this.renderedIdentity !== identity) {
+      this.editingNoteCardId = null;
+      this.noteDraft = "";
+    }
     const scope = await this.loadScope();
     if (!scope) {
       await this.render();
@@ -883,7 +945,14 @@ export class AnnotationSidebarView extends ItemView {
     }
 
     // 行内编辑区不预建：全库上千张卡各带一个 textarea 是纯内存浪费，
-    // 点「添加/编辑笔记」时由 openInlineEditor 现建
+    // 点「添加/编辑笔记」时由 openInlineEditor 现建。
+    // 正在编辑的那张卡例外：编辑态记在视图上，重建必须把输入框连同草稿挂回来，
+    // 否则一次刷新就把用户写到一半的内容删掉了。重建不抢焦点（focus:false），
+    // 免得输入法自己弹起来。
+    if (this.editingNoteCardId === cardData.id && file) {
+      this.openInlineEditor(card, file, cardData, this.noteDraft, { focus: false });
+    }
+
     return card;
   }
 
@@ -947,10 +1016,7 @@ export class AnnotationSidebarView extends ItemView {
           ? () => this.openInlineEditor(root, file, cardData, cardData.content)
           : undefined,
         "add-note": file && !cardData.note
-          ? () => {
-              root.querySelector<HTMLElement>('[data-action="add-note"]')?.addClass("hidden");
-              this.openInlineEditor(root, file, cardData, "");
-            }
+          ? () => this.openInlineEditor(root, file, cardData, "")
           : undefined,
         jump: file
           ? () => this.jumpTo(file, cardData.startOffset, cardData.pageNumber, cardData.mode, cardData.cfiRange)
@@ -1017,10 +1083,12 @@ export class AnnotationSidebarView extends ItemView {
    */
   private wireTagEditor(row: HTMLElement, cardData: SidebarCard, repaint: () => void): void {
     // 新编辑器挂载前先收掉上一个（键盘激活「+」不先触发 pointerdown，旧监听与旧输入框会残留）。
-    // 此刻 onStartTagEdit 已把 editingTagCardId 指向新卡，旧 close 不会清掉新状态；
-    // 它对旧行 repaint 时 isTagEditing() 为 false，只会换回 chip，不会递归重挂编辑器。
-    this.tagEditorCleanup?.();
+    // 代次必须先自增再收口：旧 close 看到自己已被接管，就只解绑监听、不再 repaint——
+    // 否则它会把这一刻刚挂上的新输入框换回 chip，表现就是「点开一闪就没了」。
+    const mount = ++this.tagEditorMount;
+    const previous = this.tagEditorCleanup;
     this.tagEditorCleanup = null;
+    previous?.();
 
     // 本次挂载是否由用户主动触发；重绘重建时为 false，不抢焦点、不弹输入法
     const shouldFocus = this.tagEditorAutoFocus;
@@ -1073,6 +1141,10 @@ export class AnnotationSidebarView extends ItemView {
 
     const close = (): void => {
       abort();
+      // 已被新编辑器接管：只解绑自己的监听就退出，不碰共享状态、更不 repaint
+      if (mount !== this.tagEditorMount) {
+        return;
+      }
       // 先卸掉自身句柄：否则同一张卡再次点「+」时，新 wireTagEditor 开头的
       // tagEditorCleanup 会拿到这个旧 close，把刚挂上的输入框 repaint 掉。
       if (this.tagEditorCleanup === close) {
@@ -1178,7 +1250,18 @@ export class AnnotationSidebarView extends ItemView {
     return attrs;
   }
 
-  private openInlineEditor(card: HTMLElement, file: TFile, cardData: SidebarCard, initialValue: string): void {
+  /**
+   * 行内「想法」编辑框。状态（editingNoteCardId + noteDraft）存在视图上：
+   * 重建时按状态重新挂载，用户写到一半的内容不会因为一次刷新消失。
+   * focus:false 用于重建后的恢复——不抢焦点，避免输入法自己弹起。
+   */
+  private openInlineEditor(
+    card: HTMLElement,
+    file: TFile,
+    cardData: SidebarCard,
+    initialValue: string,
+    options: { focus?: boolean } = {},
+  ): void {
     // 编辑区按需创建（列表渲染时不再为每张卡预建 textarea + 两个按钮）
     let edit = card.querySelector<HTMLElement>(".yh-ov-edit");
     if (!edit) {
@@ -1211,13 +1294,49 @@ export class AnnotationSidebarView extends ItemView {
       return;
     }
 
+    // 登记编辑态：重建时 buildCardElement 据此把输入框挂回来
+    this.editingNoteCardId = cardData.id;
+    this.noteDraft = initialValue;
+
     textarea.value = initialValue;
     edit.removeClass("hidden");
-    textarea.focus();
-    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    // 编辑态下「添加笔记」按钮让位给输入框（重建后也要补这一次隐藏）
+    addNote?.addClass("hidden");
+    if (options.focus !== false) {
+      textarea.focus();
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    }
+    textarea.oninput = () => {
+      if (this.editingNoteCardId === cardData.id) {
+        this.noteDraft = textarea.value;
+      }
+    };
+
+    /** 退出编辑态：状态先清、DOM 复原；攒下的重绘请求补一次 */
+    const exitEditor = (): void => {
+      if (this.editingNoteCardId === cardData.id) {
+        this.editingNoteCardId = null;
+        this.noteDraft = "";
+      }
+      edit.addClass("hidden");
+      addNote?.removeClass("hidden");
+      if (this.pendingRender) {
+        this.pendingRender = false;
+        this.requestRender();
+      }
+    };
 
     const saveContent = async (): Promise<void> => {
-      await this.saveCardContent(file, cardData, textarea.value);
+      // 先退编辑态：保存会触发 refreshAnnotations，守卫不该把这次刷新挡掉
+      const content = textarea.value;
+      exitEditor();
+      try {
+        await this.saveCardContent(file, cardData, content);
+      } catch (error) {
+        console.warn("yh-inklight: 保存想法失败", error);
+        new Notice("保存失败，请检查写入权限或同步状态");
+        return;
+      }
       await this.plugin.refreshAnnotations();
     };
 
@@ -1226,8 +1345,7 @@ export class AnnotationSidebarView extends ItemView {
     };
     cancel.onclick = () => {
       textarea.value = initialValue;
-      edit.addClass("hidden");
-      addNote?.removeClass("hidden");
+      exitEditor();
     };
     textarea.onkeydown = (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -1236,8 +1354,7 @@ export class AnnotationSidebarView extends ItemView {
       }
       if (event.key === "Escape") {
         textarea.value = initialValue;
-        edit.addClass("hidden");
-        addNote?.removeClass("hidden");
+        exitEditor();
       }
     };
   }

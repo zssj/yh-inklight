@@ -9554,6 +9554,9 @@ function renderTagRow(root, card, host) {
 }
 function renderTagRowContent(row, card, host, repaint) {
   const tags = host.tags;
+  if (tags.isTagEditing() && row.querySelector(".yh-tag-input-field")) {
+    return;
+  }
   row.empty();
   if (tags.isTagEditing()) {
     row.addClass("is-editing");
@@ -14438,7 +14441,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.scopeCache = null;
     this.menuPanel = null;
     this.menuButton = null;
-    this.tagEditorCleanup?.();
+    this.tagEditorCleanup?.("view-close");
     this.tagEditorCleanup = null;
     this.keyboardCleanup?.();
     this.keyboardCleanup = null;
@@ -14514,7 +14517,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.tagEditorCleanup = null;
     this.tagEditingCardEl?.removeClass("is-tag-editing");
     this.tagEditingCardEl = null;
-    previous?.();
+    previous?.("abandon");
     this.keyboardCleanup?.();
     this.keyboardCleanup = null;
     this.editingTagCardId = null;
@@ -15226,7 +15229,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.tagEditorCleanup = null;
     this.tagEditingCardEl?.removeClass("is-tag-editing");
     this.tagEditingCardEl = null;
-    previous?.();
+    previous?.("remount");
     const shouldFocus = this.tagEditorAutoFocus;
     this.tagEditorAutoFocus = false;
     const field = row.querySelector(".yh-tag-input-field");
@@ -15247,7 +15250,19 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
           return;
         }
       }
-      field.scrollIntoView({ block: "center" });
+      field.scrollIntoView({ block: "nearest" });
+    };
+    const keepFieldAboveKeyboard = () => {
+      if (!row.isConnected || !field?.isConnected) {
+        return;
+      }
+      const vv = window.visualViewport;
+      const visibleBottom = vv ? vv.height + vv.offsetTop : window.innerHeight;
+      const rect = field.getBoundingClientRect();
+      if (rect.top >= 0 && rect.bottom <= visibleBottom - 8) {
+        return;
+      }
+      field.scrollIntoView({ block: "nearest" });
     };
     const listeners = new AbortController();
     const { signal } = listeners;
@@ -15260,7 +15275,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       const stop = observeKeyboardInset((inset) => {
         list.style.paddingBottom = inset > 0 ? `${inset + 24}px` : "";
         if (inset > 0) {
-          window.setTimeout(revealField, 80);
+          window.setTimeout(keepFieldAboveKeyboard, 80);
         }
       }, () => row.isConnected);
       this.keyboardCleanup = () => {
@@ -15278,7 +15293,11 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
         revealField();
       }
     });
-    const close = () => {
+    const openedAt = Date.now();
+    const close = (reason = "unknown") => {
+      if (Date.now() - openedAt < 1500 && reason !== "outside" && reason !== "remount" && reason !== "view-close" && reason !== "abandon") {
+        console.warn("[inklight/tag] \u7F16\u8F91\u5668\u5728\u805A\u7126\u540E 1.5s \u5185\u88AB\u5173\u95ED\uFF0C\u6765\u6E90:", reason);
+      }
       abort();
       if (mount !== this.tagEditorMount) {
         return;
@@ -15315,7 +15334,10 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
         if (event.target instanceof Node && row.contains(event.target)) {
           return;
         }
-        close();
+        if (Date.now() - openedAt < 700) {
+          return;
+        }
+        close("outside");
       },
       { capture: true, signal }
     );
@@ -15325,8 +15347,11 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
         if (event.key !== "Escape" || event.defaultPrevented) {
           return;
         }
+        if (import_obsidian11.Platform.isMobile) {
+          return;
+        }
         event.preventDefault();
-        close();
+        close("escape");
       },
       { signal }
     );
@@ -15429,12 +15454,41 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
         this.noteDraft = textarea.value;
       }
     };
+    let stopKeyboard = null;
+    if (import_obsidian11.Platform.isMobile) {
+      const list = card.closest(".yh-ov-list");
+      if (list) {
+        stopKeyboard = observeKeyboardInset((inset) => {
+          list.style.paddingBottom = inset > 0 ? `${inset + 24}px` : "";
+          if (inset <= 0) {
+            return;
+          }
+          window.setTimeout(() => {
+            if (!textarea.isConnected) {
+              return;
+            }
+            const vv = window.visualViewport;
+            const visibleBottom = vv ? vv.height + vv.offsetTop : window.innerHeight;
+            const rect = textarea.getBoundingClientRect();
+            if (rect.top < 0 || rect.bottom > visibleBottom - 8) {
+              textarea.scrollIntoView({ block: "nearest" });
+            }
+          }, 80);
+        }, () => textarea.isConnected && this.editingNoteCardId === cardData.id);
+      }
+    }
+    const releaseKeyboard = () => {
+      stopKeyboard?.();
+      stopKeyboard = null;
+      card.closest(".yh-ov-list")?.style.removeProperty("padding-bottom");
+    };
     const exitEditor = () => {
       if (this.editingNoteCardId === cardData.id) {
         this.editingNoteCardId = null;
         this.noteDraft = "";
       }
       card.removeClass("is-note-editing");
+      releaseKeyboard();
       edit.addClass("hidden");
       addNote?.removeClass("hidden");
       window.requestAnimationFrame(() => this.flushDeferredContent());
@@ -15467,7 +15521,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
         event.preventDefault();
         void saveContent();
       }
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !import_obsidian11.Platform.isMobile) {
         textarea.value = initialValue;
         exitEditor();
       }

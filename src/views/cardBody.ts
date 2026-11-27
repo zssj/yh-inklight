@@ -234,6 +234,13 @@ function renderTagRowContent(
   repaint: () => void,
 ): void {
   const tags = host.tags;
+  // 已经在编辑且输入框还挂着：这次 repaint 直接跳过。
+  // 否则 row.empty() 会把用户正在用的输入框换回 chip——键盘弹出、外点捕获、
+  // 键盘避让引起的任何一次重绘都会走到这里，表现就是「输入法一出来，标签界面就没了」。
+  // 编辑态内部（chips/候选）由 renderTagInput 自己维护，宿主不需要重建它。
+  if (tags.isTagEditing() && row.querySelector(".yh-tag-input-field")) {
+    return;
+  }
   row.empty();
 
   if (tags.isTagEditing()) {

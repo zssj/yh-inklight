@@ -13,6 +13,8 @@
  *        视角变了（换范围/筛选）是例外，作废编辑态后照常重建；
  *        编辑期间压住延迟正文绘制（paint 会清空正文重渲染，卡片高度一变就把输入框顶走），
  *        退出编辑后由 flushDeferredContent 按视口补绘；正在编辑的卡退出 content-visibility 按需绘制；
+ *        移动端编辑态忽略 Escape（输入法收起键盘会发它），聚焦后 700ms 内的 pointerdown 不判外点
+ *        （部分 WebView 在软键盘弹出时补发 target=body 的 pointerdown）；
  *        挂载新编辑器先自增代次再收口旧的，旧 close 只解绑不复绘；
  *        视图不可见时（切走标签页/侧栏折叠）不重建，置 pendingVisibleRender 等重新可见再补
  *        ——隐藏元素量不到滚动位置，此时的清空重建会把用户正在读的位置丢成顶部；
@@ -142,7 +144,7 @@ export class AnnotationSidebarView extends ItemView {
    * 挂载新编辑器前先调它：键盘激活「+」不先触发 pointerdown，旧监听与旧输入框会残留，
    * 结果就是两张卡同时显示输入框、点一次外面两个一起关。
    */
-  private tagEditorCleanup: (() => void) | null = null;
+  private tagEditorCleanup: ((reason?: string) => void) | null = null;
   /** 标签编辑期间被挡下的重绘请求，编辑结束后补一次 */
   private pendingRender = false;
   /**
@@ -225,7 +227,7 @@ export class AnnotationSidebarView extends ItemView {
     this.scopeCache = null;
     this.menuPanel = null;
     this.menuButton = null;
-    this.tagEditorCleanup?.();
+    this.tagEditorCleanup?.("view-close");
     this.tagEditorCleanup = null;
     this.keyboardCleanup?.();
     this.keyboardCleanup = null;
@@ -310,7 +312,7 @@ export class AnnotationSidebarView extends ItemView {
     this.tagEditorCleanup = null;
     this.tagEditingCardEl?.removeClass("is-tag-editing");
     this.tagEditingCardEl = null;
-    previous?.();
+    previous?.("abandon");
     this.keyboardCleanup?.();
     this.keyboardCleanup = null;
     this.editingTagCardId = null;
@@ -1168,7 +1170,7 @@ export class AnnotationSidebarView extends ItemView {
     // 上一张卡的按需绘制豁免要收回：新编辑器可能挂在另一张卡上，旧卡的类不能留着
     this.tagEditingCardEl?.removeClass("is-tag-editing");
     this.tagEditingCardEl = null;
-    previous?.();
+    previous?.("remount");
 
     // 本次挂载是否由用户主动触发；重绘重建时为 false，不抢焦点、不弹输入法
     const shouldFocus = this.tagEditorAutoFocus;
@@ -1182,7 +1184,7 @@ export class AnnotationSidebarView extends ItemView {
       this.tagEditingCardEl = cardEl;
     }
 
-    /** 把输入框滚进可视区；侧栏列表是唯一滚动容器，不触碰阅读区与编辑器 */
+    /** 输入行被软键盘/列表边缘挡到时才滚动；侧栏列表是唯一滚动容器，不触碰阅读区与编辑器 */
     const revealField = (): void => {
       if (!row.isConnected || !field?.isConnected) {
         return;
@@ -1196,7 +1198,26 @@ export class AnnotationSidebarView extends ItemView {
           return;
         }
       }
-      field.scrollIntoView({ block: "center" });
+      // nearest 而不是 center：center 会把整行往上甩一大段，视觉上就是「界面刷了一下」
+      field.scrollIntoView({ block: "nearest" });
+    };
+
+    /**
+     * 键盘弹出后把输入行拉回可见区。
+     * 只补 padding 不滚是不行的：留白让列表内容整体位移，浏览器滚动锚定会把这一行顶出视口；
+     * 反过来无条件滚动也不行，会把本来好好的位置甩走。所以只在真的被遮挡时才滚。
+     */
+    const keepFieldAboveKeyboard = (): void => {
+      if (!row.isConnected || !field?.isConnected) {
+        return;
+      }
+      const vv = window.visualViewport;
+      const visibleBottom = vv ? vv.height + vv.offsetTop : window.innerHeight;
+      const rect = field.getBoundingClientRect();
+      if (rect.top >= 0 && rect.bottom <= visibleBottom - 8) {
+        return;
+      }
+      field.scrollIntoView({ block: "nearest" });
     };
 
     const listeners = new AbortController();
@@ -1210,10 +1231,12 @@ export class AnnotationSidebarView extends ItemView {
 
     if (Platform.isMobile && list) {
       const stop = observeKeyboardInset((inset) => {
-        // 软键盘 + 中文候选栏会压缩视觉视口；补一段可滚动留白，底部卡片才滚得上来
+        // 软键盘 + 中文候选栏会压缩视觉视口；补一段可滚动留白，底部卡片才滚得上来。
+        // 注意留白会改变列表内容高度，必须先补高度、再把被挡住的输入行拉回视口，
+        // 否则滚动锚定会把这一行顶到屏幕外，用户看到的就是「输入法一出来界面就没了」。
         list.style.paddingBottom = inset > 0 ? `${inset + 24}px` : "";
         if (inset > 0) {
-          window.setTimeout(revealField, 80);
+          window.setTimeout(keepFieldAboveKeyboard, 80);
         }
       }, () => row.isConnected);
       this.keyboardCleanup = () => {
@@ -1234,7 +1257,15 @@ export class AnnotationSidebarView extends ItemView {
       }
     });
 
-    const close = (): void => {
+    const openedAt = Date.now();
+    const close = (reason = "unknown"): void => {
+      // 移动端输入法在键盘弹出/收起、切换输入法时会发 Escape 等按键事件。
+      // 若把它当「取消编辑」，现象正是「一点加号、键盘一出来，标签框就没了」。
+      // 这里只留痕（真机上可经远程调试看到），真正的忽略在下面的 keydown 里。
+      if (Date.now() - openedAt < 1500 && reason !== "outside" && reason !== "remount"
+        && reason !== "view-close" && reason !== "abandon") {
+        console.warn("[inklight/tag] 编辑器在聚焦后 1.5s 内被关闭，来源:", reason);
+      }
       abort();
       // 已被新编辑器接管：只解绑自己的监听就退出，不碰共享状态、更不 repaint
       if (mount !== this.tagEditorMount) {
@@ -1277,7 +1308,13 @@ export class AnnotationSidebarView extends ItemView {
         if (event.target instanceof Node && row.contains(event.target)) {
           return;
         }
-        close();
+        // 刚聚焦的一小段时间内不判「点外面」：软键盘弹出时部分移动端 WebView 会补发一次
+        // pointerdown（target 是 body），照收就会把刚打开的编辑器立刻关掉——
+        // 用户看到的就是「输入法一出来，标签框就消失了」。
+        if (Date.now() - openedAt < 700) {
+          return;
+        }
+        close("outside");
       },
       { capture: true, signal },
     );
@@ -1289,8 +1326,14 @@ export class AnnotationSidebarView extends ItemView {
         if (event.key !== "Escape" || event.defaultPrevented) {
           return;
         }
+        // 移动端没有 Esc 键：这个 Escape 来自输入法的「收起键盘」/切换输入法，
+        // 不是「取消编辑」。照收的话，点开加号、键盘一弹出编辑框就消失。
+        // 退出编辑的入口在移动端是「点卡片外」，不依赖这个键。
+        if (Platform.isMobile) {
+          return;
+        }
         event.preventDefault();
-        close();
+        close("escape");
       },
       { signal },
     );
@@ -1416,6 +1459,37 @@ export class AnnotationSidebarView extends ItemView {
       }
     };
 
+    // 移动端键盘避让：留白让列表能滚起来，再把被挡住的光标行拉回视口。
+    // 只补 padding 不滚，滚动锚定会把输入框顶到键盘下面；无条件滚又会把位置甩走。
+    let stopKeyboard: (() => void) | null = null;
+    if (Platform.isMobile) {
+      const list = card.closest<HTMLElement>(".yh-ov-list");
+      if (list) {
+        stopKeyboard = observeKeyboardInset((inset) => {
+          list.style.paddingBottom = inset > 0 ? `${inset + 24}px` : "";
+          if (inset <= 0) {
+            return;
+          }
+          window.setTimeout(() => {
+            if (!textarea.isConnected) {
+              return;
+            }
+            const vv = window.visualViewport;
+            const visibleBottom = vv ? vv.height + vv.offsetTop : window.innerHeight;
+            const rect = textarea.getBoundingClientRect();
+            if (rect.top < 0 || rect.bottom > visibleBottom - 8) {
+              textarea.scrollIntoView({ block: "nearest" });
+            }
+          }, 80);
+        }, () => textarea.isConnected && this.editingNoteCardId === cardData.id);
+      }
+    }
+    const releaseKeyboard = (): void => {
+      stopKeyboard?.();
+      stopKeyboard = null;
+      card.closest<HTMLElement>(".yh-ov-list")?.style.removeProperty("padding-bottom");
+    };
+
     /** 退出编辑态：状态先清、DOM 复原；攒下的重绘请求补一次 */
     const exitEditor = (): void => {
       if (this.editingNoteCardId === cardData.id) {
@@ -1423,6 +1497,7 @@ export class AnnotationSidebarView extends ItemView {
         this.noteDraft = "";
       }
       card.removeClass("is-note-editing");
+      releaseKeyboard();
       edit.addClass("hidden");
       addNote?.removeClass("hidden");
       window.requestAnimationFrame(() => this.flushDeferredContent());
@@ -1458,7 +1533,9 @@ export class AnnotationSidebarView extends ItemView {
         event.preventDefault();
         void saveContent();
       }
-      if (event.key === "Escape") {
+      // 移动端没有 Esc 键：这个 Escape 来自输入法收起键盘/切换输入法，
+      // 不是「取消编辑」。照收的话，点开想法框、键盘一弹出输入框就退出。
+      if (event.key === "Escape" && !Platform.isMobile) {
         textarea.value = initialValue;
         exitEditor();
       }

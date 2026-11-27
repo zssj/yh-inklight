@@ -50,7 +50,7 @@ describe("侧栏标签编辑态守卫", () => {
 
   it("挂载新编辑器前先收口旧编辑器，close 后清自身句柄", () => {
     const body = methodBody("private wireTagEditor(", "private tagRefs(");
-    const guard = body.indexOf("previous?.()");
+    const guard = body.indexOf('previous?.("remount")');
     expect(guard, "wireTagEditor 必须先收掉旧编辑器").toBeGreaterThan(-1);
     expect(guard).toBeLessThan(body.indexOf("document.addEventListener("));
     expect(body, "close 后必须清 tagEditorCleanup，否则同卡重开时旧 close 会删掉新输入框")
@@ -59,14 +59,14 @@ describe("侧栏标签编辑态守卫", () => {
 
   it("onClose 清掉编辑态字段，避免重开视图时被守卫永久挡住", () => {
     const body = methodBody("async onClose(): Promise<void> {", "requestRender(force = false): void");
-    expect(body).toContain("this.tagEditorCleanup?.()");
+    expect(body).toContain('this.tagEditorCleanup?.("view-close")');
     expect(body).toMatch(/this\.editingTagCardId = null/);
   });
 
   it("挂载新编辑器先自增代次再收口旧编辑器，旧 close 不再 repaint 新输入框", () => {
     const body = methodBody("private wireTagEditor(", "private tagRefs(");
     const bump = body.indexOf("++this.tagEditorMount");
-    const previous = body.indexOf("previous?.()");
+    const previous = body.indexOf('previous?.("remount")');
     expect(bump, "wireTagEditor 缺少挂载代次").toBeGreaterThan(-1);
     expect(previous, "wireTagEditor 必须先收口旧编辑器").toBeGreaterThan(-1);
     expect(bump, "代次必须在收口旧编辑器之前自增，否则旧 close 判不出已被接管").toBeLessThan(previous);
@@ -157,5 +157,35 @@ describe("延迟正文绘制与编辑态", () => {
     expect(guard, "revealField 必须先判断是否已完整可见").toBeGreaterThan(-1);
     expect(scroll).toBeGreaterThan(-1);
     expect(guard, "判断必须在 scrollIntoView 之前，否则白滚一次触发连锁重排").toBeLessThan(scroll);
+  });
+
+  it("键盘弹出只把被挡住的输入行拉回视口，不再无条件居中", () => {
+    const body = methodBody("private wireTagEditor(", "private tagRefs(");
+    expect(body).toContain("keepFieldAboveKeyboard");
+    expect(body, "必须以 visualViewport 底边判断是否被键盘遮挡").toMatch(
+      /vv\.height \+ vv\.offsetTop/,
+    );
+    expect(body, "只有被挡住才滚").toMatch(/rect\.top >= 0 && rect\.bottom <= visibleBottom - 8/);
+    // 键盘回调里不许再无条件下发 revealField（center 会把整行甩走）
+    expect(body).not.toMatch(/window\.setTimeout\(revealField/);
+    expect(body, "滚动用 nearest，别用 center").toContain('block: "nearest"');
+  });
+
+  it("移动端不把输入法发出的 Escape 当成取消编辑", () => {
+    const tag = methodBody("private wireTagEditor(", "private tagRefs(");
+    const guard = tag.indexOf("if (Platform.isMobile) {");
+    expect(guard, "标签编辑：移动端必须忽略 Escape").toBeGreaterThan(-1);
+    expect(guard, "忽略必须发生在 close 之前").toBeLessThan(tag.indexOf('close("escape")'));
+    const note = methodBody("private openInlineEditor(", "private async saveCardContent(");
+    expect(note, "想法框同样忽略移动端 Escape").toContain(
+      'event.key === "Escape" && !Platform.isMobile',
+    );
+  });
+
+  it("重复 repaint 不把已挂载的输入框换回 chip", () => {
+    const cardBody = readFileSync(join(ROOT, "src/views/cardBody.ts"), "utf8");
+    expect(cardBody, "编辑态且输入框已挂载时必须直接返回，否则一次重绘就闪").toMatch(
+      /if \(tags\.isTagEditing\(\) && row\.querySelector\("\.yh-tag-input-field"\)\) \{\s*return;/,
+    );
   });
 });

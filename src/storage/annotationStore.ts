@@ -324,14 +324,20 @@ export class AnnotationStore {
     return relocated;
   }
 
-  async saveDocument(document: FileAnnotationDocument): Promise<void> {
+  async saveDocument(
+    document: FileAnnotationDocument,
+    options: { writeIndex?: boolean; carryExportFrom?: string } = {},
+  ): Promise<void> {
     const filePath = this.normalizeVaultPath(document.filePath);
     const sidecarPath = this.toSidecarPath(filePath);
     const normalized = this.normalizeDocument(document, filePath);
+    // 改名迁移时新路径还没有索引条目，反查指针要从旧路径条目带过来，否则「导出笔记 → 批注」回跳会断链
+    const exportSource = this.index.files[normalized.filePath]
+      ?? (options.carryExportFrom ? this.index.files[options.carryExportFrom] : undefined);
     const entry: AnnotationIndexEntry = {
       ...this.toIndexEntry(normalized, sidecarPath),
       // 反查指针不在 sidecar 里，只活在索引：保存批注时必须原样带过去，否则每改一次就丢一次
-      ...pickExportFields(this.index.files[normalized.filePath]),
+      ...pickExportFields(exportSource),
     };
     const nextIndex: AnnotationIndex = {
       version: 3,
@@ -347,7 +353,9 @@ export class AnnotationStore {
       await this.app.vault.adapter.write(sidecarPath, JSON.stringify(normalized, null, 2));
       const persisted = await this.readExistingJson<FileAnnotationDocument>(sidecarPath);
       this.verifyPersistedDocument(normalized, persisted, sidecarPath);
-      await this.writeIndex(nextIndex);
+      if (options.writeIndex !== false) {
+        await this.writeIndex(nextIndex);
+      }
     } catch (error) {
       new Notice(`墨光批注未保存，请检查写入权限或同步状态：${sidecarPath}`);
       throw new AnnotationStoreWriteError(sidecarPath, error);
@@ -936,29 +944,63 @@ export class AnnotationStore {
     return true;
   }
 
+  /** 索引里有批注的文件路径快照。文件夹改名时用它按旧前缀反查整棵子树，不依赖逐文件 rename 事件。 */
+  listIndexedPaths(): string[] {
+    return Object.keys(this.index.files);
+  }
+
+  /**
+   * 批量迁移改名/移动后的文件侧数据：sidecar、索引条目、摘录文件。
+   * 逐条处理，但只在全部结束后写一次索引——移动整个文件夹可能是几百个文件，
+   * 逐条 writeIndex 会把索引重写几百遍。
+   */
+  async migrateFilePaths(entries: Array<{ oldPath: string; newPath: string; file?: TFile }>): Promise<void> {
+    let changed = false;
+    for (const { oldPath, newPath, file } of entries) {
+      if (await this.migrateOne(oldPath, newPath, file)) {
+        changed = true;
+      }
+    }
+    if (changed) {
+      await this.writeIndex();
+      this.changeVersion += 1;
+    }
+  }
+
+  /** 单文件改名的便捷入口（等价于一条批量迁移）。 */
   async migrateFilePath(oldPath: string, file: TFile): Promise<void> {
+    await this.migrateFilePaths([{ oldPath, newPath: file.path, file }]);
+  }
+
+  /** 单条迁移；返回是否真的搬了 sidecar。没加过批注的文件（无 sidecar）直接跳过。 */
+  private async migrateOne(oldPath: string, newPath: string, _file?: TFile): Promise<boolean> {
     const normalizedOldPath = this.normalizeVaultPath(oldPath);
+    const normalizedNewPath = this.normalizeVaultPath(newPath);
+    if (normalizedOldPath === normalizedNewPath) {
+      return false;
+    }
     const oldSidecar = this.toSidecarPath(normalizedOldPath);
     const oldDocument = await this.readJson<FileAnnotationDocument | null>(oldSidecar, null);
     if (!oldDocument) {
-      return;
+      return false;
     }
 
     const nextDocument: FileAnnotationDocument = {
       ...oldDocument,
-      filePath: this.normalizeVaultPath(file.path),
-      fileHash: await this.hashFile(file),
+      filePath: normalizedNewPath,
+      // 改名/移动不改变内容，沿用旧哈希：批量移动整个文件夹时逐个重算会把每本书整读一遍
+      fileHash: oldDocument.fileHash,
       lastModified: new Date().toISOString(),
     };
 
-    await this.saveDocument(nextDocument);
+    await this.saveDocument(nextDocument, { writeIndex: false, carryExportFrom: normalizedOldPath });
     await this.deleteIfExists(oldSidecar);
     delete this.index.files[normalizedOldPath];
-    await this.writeIndex();
     this.documents.delete(this.toCacheKey(normalizedOldPath));
 
     // 同步迁移摘录导出文件（*-notes.md / 《名》摘录.md）：更新内部 source 路径引用 + 重命名文件。
-    await this.migrateExcerptFile(normalizedOldPath, this.normalizeVaultPath(file.path));
+    await this.migrateExcerptFile(normalizedOldPath, normalizedNewPath);
+    return true;
   }
 
   /**

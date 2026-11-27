@@ -12129,14 +12129,15 @@ var AnnotationStore = class {
     }
     return relocated;
   }
-  async saveDocument(document2) {
+  async saveDocument(document2, options = {}) {
     const filePath = this.normalizeVaultPath(document2.filePath);
     const sidecarPath = this.toSidecarPath(filePath);
     const normalized = this.normalizeDocument(document2, filePath);
+    const exportSource = this.index.files[normalized.filePath] ?? (options.carryExportFrom ? this.index.files[options.carryExportFrom] : void 0);
     const entry = {
       ...this.toIndexEntry(normalized, sidecarPath),
       // 反查指针不在 sidecar 里，只活在索引：保存批注时必须原样带过去，否则每改一次就丢一次
-      ...pickExportFields(this.index.files[normalized.filePath])
+      ...pickExportFields(exportSource)
     };
     const nextIndex = {
       version: 3,
@@ -12151,7 +12152,9 @@ var AnnotationStore = class {
       await this.app.vault.adapter.write(sidecarPath, JSON.stringify(normalized, null, 2));
       const persisted = await this.readExistingJson(sidecarPath);
       this.verifyPersistedDocument(normalized, persisted, sidecarPath);
-      await this.writeIndex(nextIndex);
+      if (options.writeIndex !== false) {
+        await this.writeIndex(nextIndex);
+      }
     } catch (error) {
       new import_obsidian9.Notice(`\u58A8\u5149\u6279\u6CE8\u672A\u4FDD\u5B58\uFF0C\u8BF7\u68C0\u67E5\u5199\u5165\u6743\u9650\u6216\u540C\u6B65\u72B6\u6001\uFF1A${sidecarPath}`);
       throw new AnnotationStoreWriteError(sidecarPath, error);
@@ -12650,25 +12653,56 @@ var AnnotationStore = class {
     await this.writeIndex(this.index);
     return true;
   }
+  /** 索引里有批注的文件路径快照。文件夹改名时用它按旧前缀反查整棵子树，不依赖逐文件 rename 事件。 */
+  listIndexedPaths() {
+    return Object.keys(this.index.files);
+  }
+  /**
+   * 批量迁移改名/移动后的文件侧数据：sidecar、索引条目、摘录文件。
+   * 逐条处理，但只在全部结束后写一次索引——移动整个文件夹可能是几百个文件，
+   * 逐条 writeIndex 会把索引重写几百遍。
+   */
+  async migrateFilePaths(entries) {
+    let changed = false;
+    for (const { oldPath, newPath, file } of entries) {
+      if (await this.migrateOne(oldPath, newPath, file)) {
+        changed = true;
+      }
+    }
+    if (changed) {
+      await this.writeIndex();
+      this.changeVersion += 1;
+    }
+  }
+  /** 单文件改名的便捷入口（等价于一条批量迁移）。 */
   async migrateFilePath(oldPath, file) {
+    await this.migrateFilePaths([{ oldPath, newPath: file.path, file }]);
+  }
+  /** 单条迁移；返回是否真的搬了 sidecar。没加过批注的文件（无 sidecar）直接跳过。 */
+  async migrateOne(oldPath, newPath, _file2) {
     const normalizedOldPath = this.normalizeVaultPath(oldPath);
+    const normalizedNewPath = this.normalizeVaultPath(newPath);
+    if (normalizedOldPath === normalizedNewPath) {
+      return false;
+    }
     const oldSidecar = this.toSidecarPath(normalizedOldPath);
     const oldDocument = await this.readJson(oldSidecar, null);
     if (!oldDocument) {
-      return;
+      return false;
     }
     const nextDocument = {
       ...oldDocument,
-      filePath: this.normalizeVaultPath(file.path),
-      fileHash: await this.hashFile(file),
+      filePath: normalizedNewPath,
+      // 改名/移动不改变内容，沿用旧哈希：批量移动整个文件夹时逐个重算会把每本书整读一遍
+      fileHash: oldDocument.fileHash,
       lastModified: (/* @__PURE__ */ new Date()).toISOString()
     };
-    await this.saveDocument(nextDocument);
+    await this.saveDocument(nextDocument, { writeIndex: false, carryExportFrom: normalizedOldPath });
     await this.deleteIfExists(oldSidecar);
     delete this.index.files[normalizedOldPath];
-    await this.writeIndex();
     this.documents.delete(this.toCacheKey(normalizedOldPath));
-    await this.migrateExcerptFile(normalizedOldPath, this.normalizeVaultPath(file.path));
+    await this.migrateExcerptFile(normalizedOldPath, normalizedNewPath);
+    return true;
   }
   /**
    * 重命名/移动源文件后，把对应的摘录导出文件一并迁移：
@@ -21888,6 +21922,7 @@ var ANNOTATION_REVIEW_STATE_PATH = ".obsidian-annotations/annotation-review.json
 var REVIEW_STATE_TTL_DAYS = 90;
 var MAX_AI_TAG_CANDIDATES = 80;
 var MD_MODIFY_DEBOUNCE_MS = 300;
+var RENAME_MIGRATION_DEBOUNCE_MS = 100;
 function anchorsUnchanged(before, after) {
   const same = (left, right) => left.anchor.startOffset === right.anchor.startOffset && left.anchor.endOffset === right.anchor.endOffset && left.anchor.selectedText === right.anchor.selectedText && Boolean(left.orphaned) === Boolean(right.orphaned);
   return before.highlights.length === after.highlights.length && before.comments.length === after.comments.length && before.highlights.every((item, index) => same(item, after.highlights[index])) && before.comments.every((item, index) => same(item, after.comments[index]));
@@ -21919,6 +21954,12 @@ var OverlayAnnotationsPlugin = class extends import_obsidian22.Plugin {
     this.popoverRelatedOpen = /* @__PURE__ */ new Set();
     this.lastSelection = null;
     this.renameMigrationTimer = null;
+    this.renameMigrationRunning = false;
+    /**
+     * 待迁移的改名任务：oldPath → 新路径。TFile 事件与文件夹前缀反查都汇到这里，
+     * 按 oldPath 去重；定时器到点一次性批量迁移。
+     */
+    this.pendingRenames = /* @__PURE__ */ new Map();
     /** 每个 Markdown 文件一个 modify 防抖计时器，避免同步盘连续写入触发重复迁移 */
     this.mdModifyTimers = /* @__PURE__ */ new Map();
     this.settingsSaveTimer = null;
@@ -22444,33 +22485,24 @@ ${lines.slice(0, 8).join("\n")}`);
       })
     );
     this.registerEvent(
-      this.app.vault.on("rename", async (file, oldPath) => {
-        if (!this.settings.migrateOnRename || !(file instanceof import_obsidian22.TFile)) {
+      this.app.vault.on("rename", (file, oldPath) => {
+        if (!this.settings.migrateOnRename) {
           return;
         }
-        const ext = file.extension.toLowerCase();
-        const isMarkdown = ext === "md";
-        const isBook = SUPPORTED_BOOK_EXTENSIONS.includes(ext);
-        if (!isMarkdown && !isBook) {
-          return;
-        }
-        if (this.renameMigrationTimer !== null) {
-          window.clearTimeout(this.renameMigrationTimer);
-        }
-        this.renameMigrationTimer = window.setTimeout(async () => {
-          await this.store.migrateFilePath(oldPath, file);
-          if (isMarkdown) {
-            const stats = this.mdOpenStats;
-            if (stats[oldPath] && file.path !== oldPath) {
-              stats[file.path] = stats[oldPath];
-              delete stats[oldPath];
-              this.debouncedSaveMdOpenStats();
-            }
-            this.refreshMarkdownStatsViews();
+        if (file instanceof import_obsidian22.TFile) {
+          const ext = file.extension.toLowerCase();
+          const isMarkdown = ext === "md";
+          const isBook = SUPPORTED_BOOK_EXTENSIONS.includes(ext);
+          if (!isMarkdown && !isBook) {
+            return;
           }
-          await this.refreshAnnotations();
-          this.renameMigrationTimer = null;
-        }, 100);
+          this.pendingRenames.set(oldPath, { newPath: file.path, file });
+        } else if (file instanceof import_obsidian22.TFolder) {
+          this.collectFolderRenames(oldPath, file.path);
+        } else {
+          return;
+        }
+        this.scheduleRenameMigration();
       })
     );
     this.registerEvent(
@@ -22500,6 +22532,82 @@ ${lines.slice(0, 8).join("\n")}`);
       })
     );
     this.registerEvent(this.app.workspace.on("layout-change", () => this.scheduleEpubTocSync()));
+  }
+  /**
+   * 文件夹改名/移动：Obsidian 是否给每个子文件发 rename 事件随版本与操作方式而异。
+   * 这里直接用旧/新前缀反查索引里落在旧子树下的文件，补齐迁移任务；
+   * 子文件事件已入队的按 oldPath 跳过，避免重复迁移。
+   */
+  collectFolderRenames(oldPath, newPath) {
+    const oldPrefix = oldPath.endsWith("/") ? oldPath : `${oldPath}/`;
+    const newPrefix = newPath.endsWith("/") ? newPath : `${newPath}/`;
+    for (const filePath of this.store.listIndexedPaths()) {
+      if (!filePath.startsWith(oldPrefix) || this.pendingRenames.has(filePath)) {
+        continue;
+      }
+      this.pendingRenames.set(filePath, { newPath: `${newPrefix}${filePath.slice(oldPrefix.length)}` });
+    }
+  }
+  scheduleRenameMigration() {
+    if (this.renameMigrationTimer !== null) {
+      window.clearTimeout(this.renameMigrationTimer);
+    }
+    this.renameMigrationTimer = window.setTimeout(() => {
+      this.renameMigrationTimer = null;
+      void this.flushRenameMigration();
+    }, RENAME_MIGRATION_DEBOUNCE_MS);
+  }
+  /** 批量迁移队列里的改名任务。运行期间新到的事件留在队列，由本轮 while 继续消费。 */
+  async flushRenameMigration() {
+    if (this.renameMigrationRunning) {
+      return;
+    }
+    this.renameMigrationRunning = true;
+    try {
+      while (this.pendingRenames.size > 0) {
+        const entries = [...this.pendingRenames.entries()].map(([oldPath, target]) => ({
+          oldPath,
+          newPath: target.newPath,
+          file: target.file
+        }));
+        this.pendingRenames.clear();
+        try {
+          await this.store.migrateFilePaths(entries);
+        } catch (error) {
+          console.error("[inklight/rename] \u6279\u91CF\u8FC1\u79FB\u5931\u8D25", error);
+          new import_obsidian22.Notice("\u58A8\u5149\u6279\u6CE8\uFF1A\u6587\u4EF6\u6539\u540D\u540E\u8FC1\u79FB\u6279\u6CE8\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u540C\u6B65\u72B6\u6001\u540E\u91CD\u8BD5");
+        }
+        let statsChanged = false;
+        for (const entry of entries) {
+          if (entry.newPath.toLowerCase().endsWith(".md")) {
+            statsChanged = this.migrateMdOpenStats(entry.oldPath, entry.newPath) || statsChanged;
+          }
+        }
+        if (statsChanged) {
+          this.debouncedSaveMdOpenStats();
+          this.refreshMarkdownStatsViews();
+        }
+      }
+      await this.refreshAnnotations();
+    } finally {
+      this.renameMigrationRunning = false;
+      if (this.pendingRenames.size > 0) {
+        this.scheduleRenameMigration();
+      }
+    }
+  }
+  /** 把 mdOpenStats 里旧路径的计数搬到新路径；返回是否发生变化。 */
+  migrateMdOpenStats(oldPath, newPath) {
+    if (oldPath === newPath) {
+      return false;
+    }
+    const stats = this.mdOpenStats;
+    if (!Object.prototype.hasOwnProperty.call(stats, oldPath)) {
+      return false;
+    }
+    stats[newPath] = stats[oldPath];
+    delete stats[oldPath];
+    return true;
   }
   /** 加载 Markdown 打开次数统计（独立 sidecar），并迁移 data.json 中的旧数据。 */
   async loadMdOpenStats() {

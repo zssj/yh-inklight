@@ -248,6 +248,85 @@ describe("migrateFilePath", () => {
   });
 });
 
+describe("migrateFilePaths（批量改名 / 文件夹移动）", () => {
+  const OTHER = "wiki1/另一篇.md";
+  const INDEX = `${SIDECAR_DIR}/index.json`;
+
+  async function setupTwo(): Promise<{ store: AnnotationStore; vault: FakeVault }> {
+    const { store, vault } = await setup();
+    vault.writeText(OTHER, "另一篇的内容。");
+    await store.addHighlight(vault.fileAt(MD_PATH), highlightOf("h1", "复利效应", 2));
+    await store.addHighlight(vault.fileAt(OTHER), highlightOf("h2", "另一篇", 0));
+    return { store, vault };
+  }
+
+  it("整批迁移：sidecar 全部跟到新路径，索引只写一次", async () => {
+    const { store, vault } = await setupTwo();
+    const moves = [
+      { oldPath: MD_PATH, newPath: "wiki2/复利.md" },
+      { oldPath: OTHER, newPath: "wiki2/另一篇.md" },
+    ];
+    for (const move of moves) {
+      vault.writeText(move.newPath, vault.readText(move.oldPath));
+      vault.removeFile(move.oldPath);
+    }
+    const writesBefore = vault.writeLog.filter((path) => path === INDEX).length;
+
+    await store.migrateFilePaths(moves);
+
+    const writesAfter = vault.writeLog.filter((path) => path === INDEX).length;
+    expect(writesAfter - writesBefore).toBe(1);
+
+    const index = vault.readJson<any>(INDEX);
+    expect(Object.keys(index.files).sort()).toEqual(["wiki2/另一篇.md", "wiki2/复利.md"]);
+    expect(vault.has(store.toSidecarPath(MD_PATH))).toBe(false);
+    expect(vault.has(store.toSidecarPath(OTHER))).toBe(false);
+    expect(vault.readJson<FileAnnotationDocument>(store.toSidecarPath("wiki2/复利.md")).highlights).toHaveLength(1);
+  });
+
+  it("没有 sidecar 的文件跳过，不影响同批其他文件", async () => {
+    const { store, vault } = await setup();
+    await store.addHighlight(vault.fileAt(MD_PATH), highlightOf("h1", "复利效应", 2));
+    vault.writeText("无批注.md", "没有加过批注");
+    vault.writeText("新位置/复利.md", vault.readText(MD_PATH));
+    vault.removeFile(MD_PATH);
+
+    await store.migrateFilePaths([
+      { oldPath: "无批注.md", newPath: "新位置/无批注.md" },
+      { oldPath: MD_PATH, newPath: "新位置/复利.md" },
+    ]);
+
+    const index = vault.readJson<any>(INDEX);
+    expect(Object.keys(index.files)).toEqual(["新位置/复利.md"]);
+    expect(vault.readJson<FileAnnotationDocument>(store.toSidecarPath("新位置/复利.md")).highlights).toHaveLength(1);
+  });
+
+  it("空批量与同路径条目都不写盘", async () => {
+    const { store, vault } = await setup();
+    await store.addHighlight(vault.fileAt(MD_PATH), highlightOf("h1", "复利效应", 2));
+    const writesBefore = vault.writeLog.length;
+
+    await store.migrateFilePaths([]);
+    await store.migrateFilePaths([{ oldPath: MD_PATH, newPath: MD_PATH }]);
+
+    expect(vault.writeLog.length).toBe(writesBefore);
+  });
+
+  it("迁移保留索引反查指针（导出笔记 → 批注回跳不断链）", async () => {
+    const { store, vault } = await setup();
+    await store.addHighlight(vault.fileAt(MD_PATH), highlightOf("h1", "复利效应", 2));
+    const priv = store as unknown as { index: { files: Record<string, Record<string, unknown>> } };
+    priv.index.files[MD_PATH].derivedNotePath = "导出/复利-notes.md";
+
+    vault.writeText("wiki2/复利.md", vault.readText(MD_PATH));
+    vault.removeFile(MD_PATH);
+    await store.migrateFilePaths([{ oldPath: MD_PATH, newPath: "wiki2/复利.md" }]);
+
+    const index = vault.readJson<any>(INDEX);
+    expect(index.files["wiki2/复利.md"].derivedNotePath).toBe("导出/复利-notes.md");
+  });
+});
+
 describe("hash 校验与锚点自愈", () => {
   it("文件被外部改动后重新定位锚点并写回新哈希", async () => {
     const { store, vault, file } = await setup();

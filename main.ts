@@ -5,7 +5,7 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
  */
 
-import { addIcon, Editor, MarkdownPostProcessorContext, MarkdownView, Modal, Notice, Platform, Plugin, TFile, WorkspaceLeaf } from "obsidian";
+import { addIcon, Editor, MarkdownPostProcessorContext, MarkdownView, Modal, Notice, Platform, Plugin, TFile, TFolder, WorkspaceLeaf } from "obsidian";
 
 import { createTextAnchor, relocateDocumentAnchors } from "./src/anchor/textAnchor";
 import { foldWhitespaceWithMap, stripWithMap, strippedScore } from "./src/anchor/textStrip";
@@ -89,6 +89,12 @@ const MAX_AI_TAG_CANDIDATES = 80;
 const MD_MODIFY_DEBOUNCE_MS = 300;
 
 /**
+ * 改名/移动事件的合并窗口。文件夹移动时 Obsidian 会连发「文件夹本身 + 每个子项」的 rename，
+ * 窗口必须收集全部事件后再批量迁移，不能像旧实现那样只留最后一次。
+ */
+const RENAME_MIGRATION_DEBOUNCE_MS = 100;
+
+/**
  * 只比较锚点是否真的漂移。relocateDocumentAnchors 每次都返回新对象，
  * 不能用引用判断；用偏移与选中文本比较才能避免「文件一保存就重写 sidecar」。
  */
@@ -142,6 +148,12 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   private stickyLane!: StickyNoteLane;
   private lastSelection: SelectionSnapshot | null = null;
   private renameMigrationTimer: number | null = null;
+  private renameMigrationRunning = false;
+  /**
+   * 待迁移的改名任务：oldPath → 新路径。TFile 事件与文件夹前缀反查都汇到这里，
+   * 按 oldPath 去重；定时器到点一次性批量迁移。
+   */
+  private readonly pendingRenames = new Map<string, { newPath: string; file?: TFile }>();
   /** 每个 Markdown 文件一个 modify 防抖计时器，避免同步盘连续写入触发重复迁移 */
   private readonly mdModifyTimers = new Map<string, number>();
   private settingsSaveTimer: number | null = null;
@@ -717,38 +729,26 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     );
 
     this.registerEvent(
-      this.app.vault.on("rename", async (file, oldPath) => {
-        if (!this.settings.migrateOnRename || !(file instanceof TFile)) {
+      this.app.vault.on("rename", (file, oldPath) => {
+        if (!this.settings.migrateOnRename) {
           return;
         }
 
-        const ext = file.extension.toLowerCase();
-        const isMarkdown = ext === "md";
-        const isBook = (SUPPORTED_BOOK_EXTENSIONS as readonly string[]).includes(ext);
-        if (!isMarkdown && !isBook) {
-          return;
-        }
-
-        if (this.renameMigrationTimer !== null) {
-          window.clearTimeout(this.renameMigrationTimer);
-        }
-
-        this.renameMigrationTimer = window.setTimeout(async () => {
-          await this.store.migrateFilePath(oldPath, file);
-          // 迁移 Markdown 打开次数统计：key 跟随路径
-          if (isMarkdown) {
-            const stats = this.mdOpenStats;
-            if (stats[oldPath] && file.path !== oldPath) {
-              stats[file.path] = stats[oldPath];
-              delete stats[oldPath];
-              this.debouncedSaveMdOpenStats();
-            }
-            // 统计视图展示路径，即使该文件无统计记录也要刷新
-            this.refreshMarkdownStatsViews();
+        if (file instanceof TFile) {
+          const ext = file.extension.toLowerCase();
+          const isMarkdown = ext === "md";
+          const isBook = (SUPPORTED_BOOK_EXTENSIONS as readonly string[]).includes(ext);
+          if (!isMarkdown && !isBook) {
+            return;
           }
-          await this.refreshAnnotations();
-          this.renameMigrationTimer = null;
-        }, 100);
+          this.pendingRenames.set(oldPath, { newPath: file.path, file });
+        } else if (file instanceof TFolder) {
+          this.collectFolderRenames(oldPath, file.path);
+        } else {
+          return;
+        }
+
+        this.scheduleRenameMigration();
       }),
     );
 
@@ -784,6 +784,91 @@ export default class OverlayAnnotationsPlugin extends Plugin {
 
     // 手机端：EPUB 打开/关闭时同步左侧栏目录视图（打开 EPUB 需左滑可见，关完最后一本则摘除）
     this.registerEvent(this.app.workspace.on("layout-change", () => this.scheduleEpubTocSync()));
+  }
+
+  /**
+   * 文件夹改名/移动：Obsidian 是否给每个子文件发 rename 事件随版本与操作方式而异。
+   * 这里直接用旧/新前缀反查索引里落在旧子树下的文件，补齐迁移任务；
+   * 子文件事件已入队的按 oldPath 跳过，避免重复迁移。
+   */
+  private collectFolderRenames(oldPath: string, newPath: string): void {
+    const oldPrefix = oldPath.endsWith("/") ? oldPath : `${oldPath}/`;
+    const newPrefix = newPath.endsWith("/") ? newPath : `${newPath}/`;
+    for (const filePath of this.store.listIndexedPaths()) {
+      if (!filePath.startsWith(oldPrefix) || this.pendingRenames.has(filePath)) {
+        continue;
+      }
+      this.pendingRenames.set(filePath, { newPath: `${newPrefix}${filePath.slice(oldPrefix.length)}` });
+    }
+  }
+
+  private scheduleRenameMigration(): void {
+    if (this.renameMigrationTimer !== null) {
+      window.clearTimeout(this.renameMigrationTimer);
+    }
+    this.renameMigrationTimer = window.setTimeout(() => {
+      this.renameMigrationTimer = null;
+      void this.flushRenameMigration();
+    }, RENAME_MIGRATION_DEBOUNCE_MS);
+  }
+
+  /** 批量迁移队列里的改名任务。运行期间新到的事件留在队列，由本轮 while 继续消费。 */
+  private async flushRenameMigration(): Promise<void> {
+    if (this.renameMigrationRunning) {
+      return;
+    }
+    this.renameMigrationRunning = true;
+    try {
+      while (this.pendingRenames.size > 0) {
+        const entries = [...this.pendingRenames.entries()].map(([oldPath, target]) => ({
+          oldPath,
+          newPath: target.newPath,
+          file: target.file,
+        }));
+        this.pendingRenames.clear();
+
+        try {
+          await this.store.migrateFilePaths(entries);
+        } catch (error) {
+          console.error("[inklight/rename] 批量迁移失败", error);
+          new Notice("墨光批注：文件改名后迁移批注失败，请检查同步状态后重试");
+        }
+
+        // 迁移 Markdown 打开次数统计：key 跟随路径
+        let statsChanged = false;
+        for (const entry of entries) {
+          if (entry.newPath.toLowerCase().endsWith(".md")) {
+            statsChanged = this.migrateMdOpenStats(entry.oldPath, entry.newPath) || statsChanged;
+          }
+        }
+        if (statsChanged) {
+          this.debouncedSaveMdOpenStats();
+          // 统计视图展示路径，即使该文件无统计记录也要刷新
+          this.refreshMarkdownStatsViews();
+        }
+      }
+      await this.refreshAnnotations();
+    } finally {
+      this.renameMigrationRunning = false;
+      // 收尾瞬间入队的任务没有存活的定时器，补排一轮
+      if (this.pendingRenames.size > 0) {
+        this.scheduleRenameMigration();
+      }
+    }
+  }
+
+  /** 把 mdOpenStats 里旧路径的计数搬到新路径；返回是否发生变化。 */
+  private migrateMdOpenStats(oldPath: string, newPath: string): boolean {
+    if (oldPath === newPath) {
+      return false;
+    }
+    const stats = this.mdOpenStats;
+    if (!Object.prototype.hasOwnProperty.call(stats, oldPath)) {
+      return false;
+    }
+    stats[newPath] = stats[oldPath];
+    delete stats[oldPath];
+    return true;
   }
 
   /** 加载 Markdown 打开次数统计（独立 sidecar），并迁移 data.json 中的旧数据。 */

@@ -327,6 +327,52 @@ describe("migrateFilePaths（批量改名 / 文件夹移动）", () => {
   });
 });
 
+describe("findRelocatablePaths（路径失联自愈）", () => {
+  it("唯一同名文件视为移动，返回迁移任务", async () => {
+    const { store, vault } = await setup();
+    await store.addHighlight(vault.fileAt(MD_PATH), highlightOf("h1", "复利效应", 2));
+    const moved = "tst/raw/复利.md";
+    vault.writeText(moved, vault.readText(MD_PATH));
+    vault.removeFile(MD_PATH);
+
+    const moves = store.findRelocatablePaths();
+    expect(moves).toHaveLength(1);
+    expect(moves[0].oldPath).toBe(MD_PATH);
+    expect(moves[0].newPath).toBe(moved);
+  });
+
+  it("别处有同名文件时不猜（多候选一律跳过）", async () => {
+    const { store, vault } = await setup();
+    await store.addHighlight(vault.fileAt(MD_PATH), highlightOf("h1", "复利效应", 2));
+    vault.writeText("a/复利.md", vault.readText(MD_PATH));
+    vault.writeText("b/复利.md", vault.readText(MD_PATH));
+    vault.removeFile(MD_PATH);
+
+    expect(store.findRelocatablePaths()).toHaveLength(0);
+  });
+
+  it("文件仍在原位时不算失联", async () => {
+    const { store, vault } = await setup();
+    await store.addHighlight(vault.fileAt(MD_PATH), highlightOf("h1", "复利效应", 2));
+    expect(store.findRelocatablePaths()).toHaveLength(0);
+  });
+
+  it("按候选迁移后全库能重新读到批注，旧 sidecar 清掉", async () => {
+    const { store, vault } = await setup();
+    await store.addHighlight(vault.fileAt(MD_PATH), highlightOf("h1", "复利效应", 2));
+    const moved = "tst/raw/复利.md";
+    vault.writeText(moved, vault.readText(MD_PATH));
+    vault.removeFile(MD_PATH);
+
+    await store.migrateFilePaths(store.findRelocatablePaths());
+
+    const documents = await store.getIndexedDocuments();
+    expect(documents.map((document) => document.filePath)).toEqual([moved]);
+    expect(documents[0].highlights).toHaveLength(1);
+    expect(vault.has(store.toSidecarPath(MD_PATH))).toBe(false);
+  });
+});
+
 describe("hash 校验与锚点自愈", () => {
   it("文件被外部改动后重新定位锚点并写回新哈希", async () => {
     const { store, vault, file } = await setup();

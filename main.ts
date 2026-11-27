@@ -364,6 +364,11 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     this.registerCommands();
     this.registerEvents();
     this.pdfLayer.register();
+    // 外部移动 / 同步盘整体替换可能不发 rename 事件：启动后补一次路径自愈（只认唯一同名文件）
+    const repairTimer = window.setTimeout(() => {
+      void this.repairMovedAnnotations({ silent: true });
+    }, 3000);
+    this.register(() => window.clearTimeout(repairTimer));
     // Phase 5：保留批注卡片跳页桥接；侧栏 PDF 工具按钮直接调用插件公开方法。
     // 用 register 注册解绑，避免热重载/启用循环时监听器累积泄漏。
     const gotoPageHandler = (event: Event): void => {
@@ -869,6 +874,46 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     stats[newPath] = stats[oldPath];
     delete stats[oldPath];
     return true;
+  }
+
+  /**
+   * 路径自愈：索引里的路径在库中已不存在、但能按唯一同名文件找到新位置时，把批注迁回去。
+   * 用于 Obsidian 未发 rename 事件的外部移动 / 同步盘整体替换；启动后自动跑一次，设置页也可手动触发。
+   * 只处理唯一同名文件，零候选或多候选一律跳过。
+   */
+  async repairMovedAnnotations(options: { silent?: boolean } = {}): Promise<number> {
+    const moves = this.store.findRelocatablePaths();
+    if (moves.length === 0) {
+      if (!options.silent) {
+        new Notice("墨光批注：没有发现可以修复的移动文件");
+      }
+      return 0;
+    }
+
+    try {
+      await this.store.migrateFilePaths(moves);
+    } catch (error) {
+      console.error("[inklight/repair] 迁移失败", error);
+      if (!options.silent) {
+        new Notice("墨光批注：修复失败，请检查同步状态后重试");
+      }
+      return 0;
+    }
+
+    let statsChanged = false;
+    for (const move of moves) {
+      if (move.newPath.toLowerCase().endsWith(".md")) {
+        statsChanged = this.migrateMdOpenStats(move.oldPath, move.newPath) || statsChanged;
+      }
+    }
+    if (statsChanged) {
+      this.debouncedSaveMdOpenStats();
+      this.refreshMarkdownStatsViews();
+    }
+
+    await this.refreshAnnotations();
+    new Notice(`墨光批注：已恢复 ${moves.length} 个移动文件的批注路径`);
+    return moves.length;
   }
 
   /** 加载 Markdown 打开次数统计（独立 sidecar），并迁移 data.json 中的旧数据。 */

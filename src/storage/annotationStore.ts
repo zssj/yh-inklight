@@ -950,6 +950,49 @@ export class AnnotationStore {
   }
 
   /**
+   * 找出「索引记录的路径在库中已不存在、但能按唯一同名文件找到新位置」的条目。
+   * 用于修复 Obsidian 没发 rename 事件（外部移动、同步盘整体替换、目录被外部搬运）导致的索引失联。
+   * 只返回唯一匹配：零候选（真删除）或多候选（别处有同名文件）一律不碰，
+   * 避免把批注挂到不相干的文件上。
+   */
+  findRelocatablePaths(): Array<{ oldPath: string; newPath: string; file: TFile }> {
+    const byName = new Map<string, TFile[]>();
+    for (const file of this.app.vault.getFiles()) {
+      const name = file.path.split("/").pop();
+      if (!name) {
+        continue;
+      }
+      const bucket = byName.get(name);
+      if (bucket) {
+        bucket.push(file);
+      } else {
+        byName.set(name, [file]);
+      }
+    }
+
+    const result: Array<{ oldPath: string; newPath: string; file: TFile }> = [];
+    for (const oldPath of Object.keys(this.index.files)) {
+      if (this.app.vault.getAbstractFileByPath(oldPath) instanceof TFile) {
+        continue;
+      }
+      const name = oldPath.split("/").pop();
+      if (!name) {
+        continue;
+      }
+      const candidates = byName.get(name);
+      if (!candidates || candidates.length !== 1) {
+        continue;
+      }
+      const file = candidates[0];
+      if (file.path === oldPath) {
+        continue;
+      }
+      result.push({ oldPath, newPath: file.path, file });
+    }
+    return result;
+  }
+
+  /**
    * 批量迁移改名/移动后的文件侧数据：sidecar、索引条目、摘录文件。
    * 逐条处理，但只在全部结束后写一次索引——移动整个文件夹可能是几百个文件，
    * 逐条 writeIndex 会把索引重写几百遍。

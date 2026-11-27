@@ -11820,6 +11820,23 @@ var AnnotationSettingsTab = class extends import_obsidian8.PluginSettingTab {
   renderDataMaintenanceSettings() {
     const { containerEl } = this;
     containerEl.createEl("h3", { text: "\u6279\u6CE8\u6570\u636E" });
+    const relocatable = this.plugin.store.findRelocatablePaths();
+    new import_obsidian8.Setting(containerEl).setName("\u4FEE\u590D\u79FB\u52A8\u6587\u4EF6\u7684\u6279\u6CE8\u8DEF\u5F84").setDesc(
+      relocatable.length > 0 ? `\u68C0\u6D4B\u5230 ${relocatable.length} \u4E2A\u6587\u4EF6\u7684\u8DEF\u5F84\u5DF2\u53D8\u5316\uFF08\u6574\u76EE\u5F55\u79FB\u52A8\u3001\u540C\u6B65\u76D8\u66FF\u6362\u7B49\uFF09\uFF0C\u6279\u6CE8\u4ECD\u6307\u5411\u65E7\u8DEF\u5F84\u3002\u4F1A\u6309\u552F\u4E00\u540C\u540D\u6587\u4EF6\u6062\u590D\uFF0C\u627E\u4E0D\u5230\u552F\u4E00\u540C\u540D\u6587\u4EF6\u7684\u6761\u76EE\u4FDD\u6301\u4E0D\u52A8\u3002` : "\u6CA1\u6709\u8DEF\u5F84\u5931\u8054\u7684\u6279\u6CE8\u6761\u76EE\u3002"
+    ).addButton((button) => {
+      button.setButtonText("\u4FEE\u590D").setDisabled(relocatable.length === 0).onClick(async () => {
+        button.setDisabled(true);
+        button.setButtonText("\u4FEE\u590D\u4E2D\u2026");
+        try {
+          await this.plugin.repairMovedAnnotations();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          new import_obsidian8.Notice(`\u4FEE\u590D\u5931\u8D25\uFF1A${message}`, 8e3);
+        } finally {
+          this.display();
+        }
+      });
+    });
     const orphanCount = this.plugin.store.countOrphanedDocuments();
     new import_obsidian8.Setting(containerEl).setName("\u6E05\u7406\u5DF2\u5220\u9664\u6587\u4EF6\u7684\u6279\u6CE8").setDesc(
       orphanCount > 0 ? `\u5DF2\u5220\u9664\u7684 Markdown / PDF / EPUB \u6587\u4EF6\uFF0C\u5176\u6279\u6CE8\u4ECD\u4FDD\u5B58\u5728 .obsidian-annotations \u4E2D\uFF0C\u5F53\u524D\u6709 ${orphanCount} \u4E2A\u53EF\u6E05\u7406\u3002\u53EA\u5220\u9664\u8FD9\u4E9B\u5B64\u7ACB\u6279\u6CE8\uFF0C\u4E0D\u5F71\u54CD\u73B0\u5B58\u6587\u4EF6\u3002` : "\u6CA1\u6709\u53EF\u6E05\u7406\u7684\u6761\u76EE\u3002\u5220\u9664\u6E90\u6587\u4EF6\u540E\u5176\u6279\u6CE8\u4E0D\u4F1A\u81EA\u52A8\u5220\u9664\uFF0C\u7559\u5728\u6B64\u5904\u624B\u52A8\u6E05\u7406\uFF08\u9632\u6B62\u8BEF\u5220\u6E90\u6587\u4EF6\u540E\u6279\u6CE8\u8DDF\u7740\u4E22\u5931\uFF09\u3002"
@@ -12656,6 +12673,47 @@ var AnnotationStore = class {
   /** 索引里有批注的文件路径快照。文件夹改名时用它按旧前缀反查整棵子树，不依赖逐文件 rename 事件。 */
   listIndexedPaths() {
     return Object.keys(this.index.files);
+  }
+  /**
+   * 找出「索引记录的路径在库中已不存在、但能按唯一同名文件找到新位置」的条目。
+   * 用于修复 Obsidian 没发 rename 事件（外部移动、同步盘整体替换、目录被外部搬运）导致的索引失联。
+   * 只返回唯一匹配：零候选（真删除）或多候选（别处有同名文件）一律不碰，
+   * 避免把批注挂到不相干的文件上。
+   */
+  findRelocatablePaths() {
+    const byName = /* @__PURE__ */ new Map();
+    for (const file of this.app.vault.getFiles()) {
+      const name = file.path.split("/").pop();
+      if (!name) {
+        continue;
+      }
+      const bucket = byName.get(name);
+      if (bucket) {
+        bucket.push(file);
+      } else {
+        byName.set(name, [file]);
+      }
+    }
+    const result = [];
+    for (const oldPath of Object.keys(this.index.files)) {
+      if (this.app.vault.getAbstractFileByPath(oldPath) instanceof import_obsidian9.TFile) {
+        continue;
+      }
+      const name = oldPath.split("/").pop();
+      if (!name) {
+        continue;
+      }
+      const candidates = byName.get(name);
+      if (!candidates || candidates.length !== 1) {
+        continue;
+      }
+      const file = candidates[0];
+      if (file.path === oldPath) {
+        continue;
+      }
+      result.push({ oldPath, newPath: file.path, file });
+    }
+    return result;
   }
   /**
    * 批量迁移改名/移动后的文件侧数据：sidecar、索引条目、摘录文件。
@@ -22165,6 +22223,10 @@ var OverlayAnnotationsPlugin = class extends import_obsidian22.Plugin {
     this.registerCommands();
     this.registerEvents();
     this.pdfLayer.register();
+    const repairTimer = window.setTimeout(() => {
+      void this.repairMovedAnnotations({ silent: true });
+    }, 3e3);
+    this.register(() => window.clearTimeout(repairTimer));
     const gotoPageHandler = (event) => {
       const detail = event.detail;
       if (!detail?.page || detail.page < 1) return;
@@ -22608,6 +22670,42 @@ ${lines.slice(0, 8).join("\n")}`);
     stats[newPath] = stats[oldPath];
     delete stats[oldPath];
     return true;
+  }
+  /**
+   * 路径自愈：索引里的路径在库中已不存在、但能按唯一同名文件找到新位置时，把批注迁回去。
+   * 用于 Obsidian 未发 rename 事件的外部移动 / 同步盘整体替换；启动后自动跑一次，设置页也可手动触发。
+   * 只处理唯一同名文件，零候选或多候选一律跳过。
+   */
+  async repairMovedAnnotations(options = {}) {
+    const moves = this.store.findRelocatablePaths();
+    if (moves.length === 0) {
+      if (!options.silent) {
+        new import_obsidian22.Notice("\u58A8\u5149\u6279\u6CE8\uFF1A\u6CA1\u6709\u53D1\u73B0\u53EF\u4EE5\u4FEE\u590D\u7684\u79FB\u52A8\u6587\u4EF6");
+      }
+      return 0;
+    }
+    try {
+      await this.store.migrateFilePaths(moves);
+    } catch (error) {
+      console.error("[inklight/repair] \u8FC1\u79FB\u5931\u8D25", error);
+      if (!options.silent) {
+        new import_obsidian22.Notice("\u58A8\u5149\u6279\u6CE8\uFF1A\u4FEE\u590D\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u540C\u6B65\u72B6\u6001\u540E\u91CD\u8BD5");
+      }
+      return 0;
+    }
+    let statsChanged = false;
+    for (const move of moves) {
+      if (move.newPath.toLowerCase().endsWith(".md")) {
+        statsChanged = this.migrateMdOpenStats(move.oldPath, move.newPath) || statsChanged;
+      }
+    }
+    if (statsChanged) {
+      this.debouncedSaveMdOpenStats();
+      this.refreshMarkdownStatsViews();
+    }
+    await this.refreshAnnotations();
+    new import_obsidian22.Notice(`\u58A8\u5149\u6279\u6CE8\uFF1A\u5DF2\u6062\u590D ${moves.length} \u4E2A\u79FB\u52A8\u6587\u4EF6\u7684\u6279\u6CE8\u8DEF\u5F84`);
+    return moves.length;
   }
   /** 加载 Markdown 打开次数统计（独立 sidecar），并迁移 data.json 中的旧数据。 */
   async loadMdOpenStats() {

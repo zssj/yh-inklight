@@ -135,6 +135,11 @@ export class FakeVault {
     return Array.from(this.contents.keys()).sort();
   }
 
+  /** 真实 Obsidian 的 Vault.getFiles()：返回库内全部文件（不含文件夹） */
+  getFiles(): TFile[] {
+    return this.listFiles().map((path) => this.fileAt(path));
+  }
+
   /** 测试专用：直接给定文件对象的 mtime，绕过写入时间 */
   setMtime(path: string, mtime: number): void {
     const normalized = normalizePath(path);

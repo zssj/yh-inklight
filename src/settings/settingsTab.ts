@@ -504,6 +504,33 @@ export class AnnotationSettingsTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.createEl("h3", { text: "批注数据" });
 
+    const relocatable = this.plugin.store.findRelocatablePaths();
+
+    new Setting(containerEl)
+      .setName("修复移动文件的批注路径")
+      .setDesc(
+        relocatable.length > 0
+          ? `检测到 ${relocatable.length} 个文件的路径已变化（整目录移动、同步盘替换等），批注仍指向旧路径。会按唯一同名文件恢复，找不到唯一同名文件的条目保持不动。`
+          : "没有路径失联的批注条目。",
+      )
+      .addButton((button) => {
+        button
+          .setButtonText("修复")
+          .setDisabled(relocatable.length === 0)
+          .onClick(async () => {
+            button.setDisabled(true);
+            button.setButtonText("修复中…");
+            try {
+              await this.plugin.repairMovedAnnotations();
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              new Notice(`修复失败：${message}`, 8000);
+            } finally {
+              this.display();
+            }
+          });
+      });
+
     const orphanCount = this.plugin.store.countOrphanedDocuments();
 
     new Setting(containerEl)

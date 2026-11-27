@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 被测 src/views/scrollRestore.ts 的纯函数（量测/写入通过 target 注入）
- * [OUTPUT]: 覆盖「重建后回到原滚动位置」的判定：先补高度再落位、锚点校正（含一屏上限）、无锚点时退像素
- * [POS]: L1 纯逻辑测试——DOM 量测在真机验证，这里只锁住恢复顺序与补偿算法
+ * [OUTPUT]: 覆盖「重建后回到原滚动位置」的判定：先补高度再落位、按锚点内容偏移对齐（认卡不认像素）、无锚点退像素
+ * [POS]: L1 纯逻辑测试——DOM 量测在真机验证，这里只锁住恢复顺序与落位算法
  */
 
 import { describe, expect, it } from "vitest";
@@ -12,31 +12,28 @@ interface Harness {
   target: {
     contentHeight: () => number;
     viewportHeight: () => number;
-    anchorOffsetIn: (anchorId: string) => number | null;
+    anchorContentOffset: (anchorId: string) => number | null;
     setTop: (top: number) => void;
-    adjust: (delta: number) => void;
   };
-  state: { height: number; top: number; adjustCalls: number[] };
+  state: { height: number; top: number };
 }
 
-function makeHarness(options: { height: number; viewport?: number; anchorOffset?: number | null }): Harness {
+function makeHarness(
+  options: { height: number; viewport?: number; anchorContentOffset?: number | null } = { height: 0 },
+): Harness {
   const state = {
     height: options.height,
     top: 0,
-    adjustCalls: [] as number[],
   };
   return {
     state,
     target: {
       contentHeight: () => state.height,
       viewportHeight: () => options.viewport ?? 600,
-      anchorOffsetIn: () => (options.anchorOffset === undefined ? null : options.anchorOffset),
+      anchorContentOffset: () =>
+        options.anchorContentOffset === undefined ? null : options.anchorContentOffset,
       setTop: (top) => {
         state.top = top;
-      },
-      adjust: (delta) => {
-        state.adjustCalls.push(delta);
-        state.top += delta;
       },
     },
   };
@@ -58,48 +55,42 @@ describe("applyScrollRestore", () => {
     expect(finished).toBe(false);
   });
 
-  it("按锚点卡校正：卡片高度变化后同一张卡仍落在原位", () => {
-    const { target, state } = makeHarness({ height: 9000, anchorOffset: 40 });
-    applyScrollRestore(target, { top: 3000, anchorId: "card-7", anchorOffset: 10 }, () => false);
+  it("按锚点内容偏移落位：像素坐标错位（估算高度噪声）也落回同一张卡", () => {
+    // 保存的 top=12000 是真实高度坐标系；重建后锚点在当前布局的内容偏移只有 8200
+    // （上方未绘制卡按 160px 估算）。按锚点对齐 = 8200 - 10，而不是拉回 12000。
+    const { target, state } = makeHarness({ height: 20_000, anchorContentOffset: 8200 });
+    applyScrollRestore(target, { top: 12_000, anchorId: "card-40", anchorOffset: 10 }, () => false);
 
-    // 锚点现在比原来低 30px → 往前补 30px，卡片回到原来的视口位置
-    expect(state.adjustCalls).toEqual([30]);
+    expect(state.top).toBe(8190);
+  });
+
+  it("锚点露出下半部分（负偏移）同样对齐：视口顶停在锚点上方 anchorOffset 处", () => {
+    const { target, state } = makeHarness({ height: 9000, anchorContentOffset: 3000 });
+    applyScrollRestore(target, { top: 3000, anchorId: "card-7", anchorOffset: -30 }, () => false);
+
     expect(state.top).toBe(3030);
   });
 
-  it("偏差不到 1px 不补偿：避免为了亚像素差别多一次滚动写入", () => {
-    const { target, state } = makeHarness({ height: 9000, anchorOffset: 10.4 });
-    applyScrollRestore(target, { top: 2000, anchorId: "card-3", anchorOffset: 10 }, () => false);
+  it("锚点落位结果为负时夹到 0：内容被删短后锚点已近列表顶", () => {
+    const { target, state } = makeHarness({ height: 9000, anchorContentOffset: 5 });
+    applyScrollRestore(target, { top: 3000, anchorId: "card-7", anchorOffset: 40 }, () => false);
 
-    expect(state.adjustCalls).toEqual([]);
-    expect(state.top).toBe(2000);
+    expect(state.top).toBe(0);
   });
 
-  it("锚点没渲染出来（在补高度上限之外）时退化成像素落位", () => {
-    // anchorOffsetIn 返回 null 就是「这张卡还不在 DOM 里」
-    const { target, state } = makeHarness({ height: 1200, anchorOffset: null });
-    applyScrollRestore(target, { top: 12000, anchorId: "card-999", anchorOffset: 5 }, () => false);
+  it("锚点没渲染出来（在补卡上限之外）时退化成像素落位", () => {
+    // anchorContentOffset 返回 null 就是「这张卡还不在 DOM 里」
+    const { target, state } = makeHarness({ height: 20_000, anchorContentOffset: null });
+    applyScrollRestore(target, { top: 12_000, anchorId: "card-999", anchorOffset: 5 }, () => false);
 
-    expect(state.adjustCalls).toEqual([]);
-    expect(state.top).toBe(12000);
-  });
-
-  it("锚点位移超过一屏就不校正：那是 contain-intrinsic-size 的估算噪声，照做会把列表甩走", () => {
-    // 重建后视口上方的卡一律按 160px 估算，锚点量出来的偏移比真机小几千像素；
-    // 保存想法后「进度条跳到别处」就是照这个差值 adjust 造成的
-    const { target, state } = makeHarness({ height: 20_000, anchorOffset: 10 - 3800 });
-    applyScrollRestore(target, { top: 12_000, anchorId: "card-40", anchorOffset: 10 }, () => false);
-
-    expect(state.adjustCalls).toEqual([]);
     expect(state.top).toBe(12_000);
   });
 
-  it("一屏之内的位移仍然校正：在视口上方新增一条批注是这种量级", () => {
-    const { target, state } = makeHarness({ height: 20_000, anchorOffset: 10 - 240 });
-    applyScrollRestore(target, { top: 12_000, anchorId: "card-40", anchorOffset: 10 }, () => false);
+  it("空锚点（captureScroll 时 top≤1 等）直接按像素落位", () => {
+    const { target, state } = makeHarness({ height: 9000 });
+    applyScrollRestore(target, { top: 3000, anchorId: "", anchorOffset: 0 }, () => false);
 
-    expect(state.adjustCalls).toEqual([-240]);
-    expect(state.top).toBe(11_760);
+    expect(state.top).toBe(3000);
   });
 
   it("卡片已全部渲染完时返回 true，调用方据此移除底部哨兵", () => {

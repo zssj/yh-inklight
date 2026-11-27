@@ -517,7 +517,8 @@ export class AnnotationSidebarView extends ItemView {
    *
    * 列表是「滚到才建」的，重建后只有首屏那么高，直接写 scrollTop 会被夹住；
    * 所以先按需补渲染（最多 RESTORE_MAX_CARDS 张，再深就退回像素落位、其余交给滚动追加），
-   * 落位后再按锚点卡校正——卡片高度会随笔记内容变化，纯像素会漂。
+   * 落位按锚点卡对齐——像素坐标在重建前后不是同一坐标系（上方未绘制卡按估算高度报高），
+   * 认卡不认像素才落得回同一处内容。
    */
   private restoreListScroll(
     list: HTMLElement,
@@ -528,19 +529,17 @@ export class AnnotationSidebarView extends ItemView {
     const target = {
       contentHeight: () => list.scrollHeight,
       viewportHeight: () => list.clientHeight,
-      anchorOffsetIn: (anchorId: string): number | null => {
+      // 内容坐标系偏移（rect 差 + scrollTop）：上方卡片按估算高度报也不影响锚点落位
+      anchorContentOffset: (anchorId: string): number | null => {
         for (const card of Array.from(list.querySelectorAll<HTMLElement>(".yh-ov-card"))) {
           if (card.dataset.id === anchorId) {
-            return card.getBoundingClientRect().top - list.getBoundingClientRect().top;
+            return card.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
           }
         }
         return null;
       },
       setTop: (top: number) => {
         list.scrollTop = top;
-      },
-      adjust: (delta: number) => {
-        list.scrollTop += delta;
       },
     };
     const fill = (atLeastHeight: number): boolean => {

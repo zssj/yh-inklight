@@ -8,9 +8,12 @@
  * [POS]: views 模块的右侧 Leaf 总览面板，承载搜索、颜色/类型/标签筛选、排序、行内编辑、标签编辑、跳转、删除、导出模板、字面关联与确认关联；
  *        顶部搜索/范围/筛选/排序/导出统一收进单一折叠菜单（默认收起，展开态记在视图字段上），列表区域常驻不被菜单挤压；
  *        移动端标签编辑态额外处理软键盘遮挡（列表补底部留白 + 输入框滚入可视区），不触碰阅读区；
- *        标签编辑期间 requestRender / refreshList / render 本体都挡重绘（排队中的定时器也会走到 render），
- *        只登记 pendingRender、退出编辑后才补；挂载新编辑器先自增代次再收口旧的，旧 close 只解绑不复绘；
- *        行内「想法」编辑态记在视图上（editingNoteCardId + noteDraft），重建时连同草稿重挂，不抢焦点；
+ *        标签与「想法」两种编辑态都算编辑期：requestRender / refreshList / render 本体一律挡重绘
+ *        （排队中的定时器也会走到 render），只登记 pendingRender、退出编辑后才补；
+ *        视角变了（换范围/筛选）是例外，作废编辑态后照常重建；
+ *        编辑期间压住延迟正文绘制（paint 会清空正文重渲染，卡片高度一变就把输入框顶走），
+ *        退出编辑后由 flushDeferredContent 按视口补绘；正在编辑的卡退出 content-visibility 按需绘制；
+ *        挂载新编辑器先自增代次再收口旧的，旧 close 只解绑不复绘；
  *        视图不可见时（切走标签页/侧栏折叠）不重建，置 pendingVisibleRender 等重新可见再补
  *        ——隐藏元素量不到滚动位置，此时的清空重建会把用户正在读的位置丢成顶部；
  *        全库列表按需渲染：首屏 60 张，之后由列表底部哨兵的 IntersectionObserver 驱动，
@@ -156,6 +159,12 @@ export class AnnotationSidebarView extends ItemView {
    */
   private tagEditorMount = 0;
   /**
+   * 正在编辑标签的那张卡。编辑期间给它加 is-tag-editing：
+   * content-visibility: auto 的卡在焦点/布局变化时可能被重新判定为「屏幕外」而整卡不绘，
+   * 表现就是输入框出现一帧又不见。编辑期把这张卡排除在按需绘制之外。
+   */
+  private tagEditingCardEl: HTMLElement | null = null;
+  /**
    * 视图不可见（主区域标签页切走 / 侧栏折叠）时被挡下的重绘。
    * 隐藏元素量不到滚动位置（scrollTop 恒 0、卡片 rect 全零），此时重建等于把用户
    * 正在读的位置丢成顶部；等重新可见（layout-change）再补一次。
@@ -239,9 +248,10 @@ export class AnnotationSidebarView extends ItemView {
    * 默认走指纹守卫：内容没变就不动 DOM，切走再切回不会有任何重建成本。
    */
   requestRender(force = false): void {
-    // 标签编辑态下整表重建会删掉输入框：既丢未提交内容，又会 rAF 抢焦点把输入法顶出来。
-    // 先记下请求，等编辑结束再补一次重绘。
-    if (this.editingTagCardId !== null) {
+    // 编辑态下整表重建会删掉输入框：既丢未提交内容，又会 rAF 抢焦点把输入法顶出来。
+    // 先记下请求，等编辑结束再补一次重绘。视角变了（换范围/筛选）不在此列：
+    // 那是整表换内容，render 里会作废编辑态继续重建。
+    if (this.isEditing() && this.renderedIdentity === this.listIdentity()) {
       this.pendingRender = true;
       this.forceRender = this.forceRender || force;
       return;
@@ -283,6 +293,31 @@ export class AnnotationSidebarView extends ItemView {
   private isVisible(): boolean {
     const el = this.containerEl as HTMLElement & { isShown?: () => boolean };
     return typeof el.isShown === "function" ? el.isShown() : true;
+  }
+
+  /** 是否有任何一个行内编辑器开着（标签行 / 想法框） */
+  private isEditing(): boolean {
+    return this.editingTagCardId !== null || this.editingNoteCardId !== null;
+  }
+
+  /**
+   * 作废编辑态：视角变了要整表换内容时调用，旧卡片连同输入框马上被丢弃。
+   * 代次先自增，旧 close 会认定自己已被接管——只解绑监听，不会再去 repaint 已经不存在的行。
+   */
+  private abandonEditing(): void {
+    this.tagEditorMount += 1;
+    const previous = this.tagEditorCleanup;
+    this.tagEditorCleanup = null;
+    this.tagEditingCardEl?.removeClass("is-tag-editing");
+    this.tagEditingCardEl = null;
+    previous?.();
+    this.keyboardCleanup?.();
+    this.keyboardCleanup = null;
+    this.editingTagCardId = null;
+    this.pendingTagQuery = "";
+    this.tagEditorAutoFocus = false;
+    this.editingNoteCardId = null;
+    this.noteDraft = "";
   }
 
   /**
@@ -337,10 +372,15 @@ export class AnnotationSidebarView extends ItemView {
 
   async render(): Promise<void> {
     // 兜底守卫：requestRender 在「调用时」挡重绘，但若排队中的 setTimeout(0) 在编辑态
-    // 开始后才执行，仍会走进这里 container.empty() 把输入框删掉。编辑态下一律不重建。
-    if (this.editingTagCardId !== null) {
-      this.pendingRender = true;
-      return;
+    // 开始后才执行，仍会走进这里 container.empty() 把输入框删掉。
+    // 两种编辑态一视同仁——写想法的输入框同样活在这棵树里，重建就是一次可见的闪烁。
+    // 唯一的例外是视角变了（换范围/筛选）：那本来就该整表换内容，编辑态作废。
+    if (this.isEditing()) {
+      if (this.renderedIdentity === this.listIdentity()) {
+        this.pendingRender = true;
+        return;
+      }
+      this.abandonEditing();
     }
     const token = ++this.renderToken;
     const listToken = ++this.listToken;
@@ -415,7 +455,7 @@ export class AnnotationSidebarView extends ItemView {
    */
   private async refreshList(): Promise<void> {
     // 与 requestRender 同因：编辑态下重建列表会丢输入、抢焦点
-    if (this.editingTagCardId !== null) {
+    if (this.isEditing() && this.renderedIdentity === this.listIdentity()) {
       this.pendingRender = true;
       return;
     }
@@ -430,9 +470,9 @@ export class AnnotationSidebarView extends ItemView {
     if (key === this.renderedKey) {
       return;
     }
-    // 上面的 await（loadScope / prepareRelations）期间用户可能刚点开某个「+」。
+    // 上面的 await（loadScope / prepareRelations）期间用户可能刚点开某个编辑器。
     // 此刻 list.empty() 会把新挂载的输入框删掉——再挡一次。
-    if (this.editingTagCardId !== null) {
+    if (this.isEditing() && this.renderedIdentity === this.listIdentity()) {
       this.pendingRender = true;
       return;
     }
@@ -631,6 +671,12 @@ export class AnnotationSidebarView extends ItemView {
             if (!entry.isIntersecting) {
               continue;
             }
+            // 编辑期间压住不画：paint 会清空正文重新渲染 Markdown，卡片高度一变，
+            // 刚点开的输入框就被顶走（用户看到的就是「一闪而过」）。
+            // 留到退出编辑后由 flushDeferredContent 按视口补一次。
+            if (this.isEditing()) {
+              continue;
+            }
             this.contentObserver?.unobserve(entry.target);
             const job = this.pendingContent.get(entry.target);
             if (!job) {
@@ -652,6 +698,37 @@ export class AnnotationSidebarView extends ItemView {
     this.contentObserver?.disconnect();
     this.contentObserver = null;
     this.pendingContent.clear();
+  }
+
+  /**
+   * 退出编辑后补绘被压住的正文。IntersectionObserver 只在相交状态变化时回调，
+   * 编辑期间跳过的 job 不会自己重来，所以按当前视口主动扫一遍；
+   * 若这期间已经整表重建，队列已被 resetDeferredContent 清空，这里自然空转。
+   */
+  private flushDeferredContent(): void {
+    if (this.pendingContent.size === 0 || this.isEditing()) {
+      return;
+    }
+    const list = this.containerEl.querySelector<HTMLElement>(".yh-ov-list");
+    if (!list) {
+      return;
+    }
+    const bounds = list.getBoundingClientRect();
+    const top = bounds.top - CONTENT_PRERENDER_MARGIN_PX;
+    const bottom = bounds.bottom + CONTENT_PRERENDER_MARGIN_PX;
+    for (const [element, paint] of Array.from(this.pendingContent)) {
+      if (!element.isConnected) {
+        this.pendingContent.delete(element);
+        continue;
+      }
+      const rect = element.getBoundingClientRect();
+      if (rect.bottom < top || rect.top > bottom) {
+        continue;
+      }
+      this.pendingContent.delete(element);
+      this.contentObserver?.unobserve(element);
+      paint();
+    }
   }
 
   private scheduleCardBatch(run: () => void): void {
@@ -1088,6 +1165,9 @@ export class AnnotationSidebarView extends ItemView {
     const mount = ++this.tagEditorMount;
     const previous = this.tagEditorCleanup;
     this.tagEditorCleanup = null;
+    // 上一张卡的按需绘制豁免要收回：新编辑器可能挂在另一张卡上，旧卡的类不能留着
+    this.tagEditingCardEl?.removeClass("is-tag-editing");
+    this.tagEditingCardEl = null;
     previous?.();
 
     // 本次挂载是否由用户主动触发；重绘重建时为 false，不抢焦点、不弹输入法
@@ -1096,12 +1176,27 @@ export class AnnotationSidebarView extends ItemView {
 
     const field = row.querySelector<HTMLInputElement>(".yh-tag-input-field");
     const list = row.closest<HTMLElement>(".yh-ov-list");
+    const cardEl = row.closest<HTMLElement>(".yh-ov-card");
+    if (cardEl) {
+      cardEl.addClass("is-tag-editing");
+      this.tagEditingCardEl = cardEl;
+    }
 
     /** 把输入框滚进可视区；侧栏列表是唯一滚动容器，不触碰阅读区与编辑器 */
     const revealField = (): void => {
-      if (row.isConnected && field?.isConnected) {
-        field.scrollIntoView({ block: "center" });
+      if (!row.isConnected || !field?.isConnected) {
+        return;
       }
+      // 已经完整可见就别滚：scrollIntoView 会牵动列表，连锁触发下一批卡片的正文渲染，
+      // 那一串高度变化正是用户看到的「点完一闪」。首屏卡片从来不闪，原因就在这里。
+      if (list) {
+        const listRect = list.getBoundingClientRect();
+        const rowRect = row.getBoundingClientRect();
+        if (rowRect.top >= listRect.top && rowRect.bottom <= listRect.bottom) {
+          return;
+        }
+      }
+      field.scrollIntoView({ block: "center" });
     };
 
     const listeners = new AbortController();
@@ -1154,11 +1249,17 @@ export class AnnotationSidebarView extends ItemView {
       if (this.editingTagCardId === cardData.id) {
         this.editingTagCardId = null;
       }
+      if (this.tagEditingCardEl && this.tagEditingCardEl === cardEl) {
+        this.tagEditingCardEl.removeClass("is-tag-editing");
+        this.tagEditingCardEl = null;
+      }
       const shouldRender = this.pendingRender;
       this.pendingRender = false;
       if (row.isConnected) {
         repaint();
       }
+      // 编辑期间压下的正文绘制，退出后按视口补一次（重建则队列已被清空，自动空转）
+      window.requestAnimationFrame(() => this.flushDeferredContent());
       // 编辑期间攒下的刷新请求，退出编辑后补一次
       if (shouldRender) {
         this.requestRender();
@@ -1297,6 +1398,9 @@ export class AnnotationSidebarView extends ItemView {
     // 登记编辑态：重建时 buildCardElement 据此把输入框挂回来
     this.editingNoteCardId = cardData.id;
     this.noteDraft = initialValue;
+    // 编辑期间让这张卡退出按需绘制：content-visibility: auto 的卡在高度/焦点变化时
+    // 可能被重新判定为屏幕外而整卡不绘，输入框就「闪」掉了
+    card.addClass("is-note-editing");
 
     textarea.value = initialValue;
     edit.removeClass("hidden");
@@ -1318,8 +1422,10 @@ export class AnnotationSidebarView extends ItemView {
         this.editingNoteCardId = null;
         this.noteDraft = "";
       }
+      card.removeClass("is-note-editing");
       edit.addClass("hidden");
       addNote?.removeClass("hidden");
+      window.requestAnimationFrame(() => this.flushDeferredContent());
       if (this.pendingRender) {
         this.pendingRender = false;
         this.requestRender();

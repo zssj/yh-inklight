@@ -425,6 +425,16 @@
   contain: layout style;
 }
 
+/*
+ * 正在编辑标签 / 想法的卡片退出按需绘制。
+ * content-visibility: auto 的卡在高度与焦点同时变化时，可能被重新判定为「屏幕外」而整卡不绘，
+ * 表现就是输入框出现一帧又消失——首屏卡片不明显，滚到列表深处必现。
+ */
+.yh-ov-list > .yh-ov-card.is-tag-editing,
+.yh-ov-list > .yh-ov-card.is-note-editing {
+  content-visibility: visible;
+}
+
 /* 哨兵：列表末尾的 1px 探针，IntersectionObserver 靠它判断「滚到底了」 */
 .yh-ov-sentinel {
   flex: 0 0 auto;

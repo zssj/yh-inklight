@@ -14385,6 +14385,12 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
      */
     this.tagEditorMount = 0;
     /**
+     * 正在编辑标签的那张卡。编辑期间给它加 is-tag-editing：
+     * content-visibility: auto 的卡在焦点/布局变化时可能被重新判定为「屏幕外」而整卡不绘，
+     * 表现就是输入框出现一帧又不见。编辑期把这张卡排除在按需绘制之外。
+     */
+    this.tagEditingCardEl = null;
+    /**
      * 视图不可见（主区域标签页切走 / 侧栏折叠）时被挡下的重绘。
      * 隐藏元素量不到滚动位置（scrollTop 恒 0、卡片 rect 全零），此时重建等于把用户
      * 正在读的位置丢成顶部；等重新可见（layout-change）再补一次。
@@ -14454,7 +14460,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
    * 默认走指纹守卫：内容没变就不动 DOM，切走再切回不会有任何重建成本。
    */
   requestRender(force = false) {
-    if (this.editingTagCardId !== null) {
+    if (this.isEditing() && this.renderedIdentity === this.listIdentity()) {
       this.pendingRender = true;
       this.forceRender = this.forceRender || force;
       return;
@@ -14493,6 +14499,29 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
   isVisible() {
     const el = this.containerEl;
     return typeof el.isShown === "function" ? el.isShown() : true;
+  }
+  /** 是否有任何一个行内编辑器开着（标签行 / 想法框） */
+  isEditing() {
+    return this.editingTagCardId !== null || this.editingNoteCardId !== null;
+  }
+  /**
+   * 作废编辑态：视角变了要整表换内容时调用，旧卡片连同输入框马上被丢弃。
+   * 代次先自增，旧 close 会认定自己已被接管——只解绑监听，不会再去 repaint 已经不存在的行。
+   */
+  abandonEditing() {
+    this.tagEditorMount += 1;
+    const previous = this.tagEditorCleanup;
+    this.tagEditorCleanup = null;
+    this.tagEditingCardEl?.removeClass("is-tag-editing");
+    this.tagEditingCardEl = null;
+    previous?.();
+    this.keyboardCleanup?.();
+    this.keyboardCleanup = null;
+    this.editingTagCardId = null;
+    this.pendingTagQuery = "";
+    this.tagEditorAutoFocus = false;
+    this.editingNoteCardId = null;
+    this.noteDraft = "";
   }
   /**
    * 重建前记下滚动位置：像素位置 + 列表顶端第一张可见卡片。
@@ -14535,9 +14564,12 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     return { documents, cards };
   }
   async render() {
-    if (this.editingTagCardId !== null) {
-      this.pendingRender = true;
-      return;
+    if (this.isEditing()) {
+      if (this.renderedIdentity === this.listIdentity()) {
+        this.pendingRender = true;
+        return;
+      }
+      this.abandonEditing();
     }
     const token = ++this.renderToken;
     const listToken = ++this.listToken;
@@ -14599,7 +14631,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
    * 只刷新卡片列表（不重建搜索框等控件），用于搜索输入时保持焦点。
    */
   async refreshList() {
-    if (this.editingTagCardId !== null) {
+    if (this.isEditing() && this.renderedIdentity === this.listIdentity()) {
       this.pendingRender = true;
       return;
     }
@@ -14614,7 +14646,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     if (key === this.renderedKey) {
       return;
     }
-    if (this.editingTagCardId !== null) {
+    if (this.isEditing() && this.renderedIdentity === this.listIdentity()) {
       this.pendingRender = true;
       return;
     }
@@ -14786,6 +14818,9 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
             if (!entry.isIntersecting) {
               continue;
             }
+            if (this.isEditing()) {
+              continue;
+            }
             this.contentObserver?.unobserve(entry.target);
             const job = this.pendingContent.get(entry.target);
             if (!job) {
@@ -14806,6 +14841,36 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.contentObserver?.disconnect();
     this.contentObserver = null;
     this.pendingContent.clear();
+  }
+  /**
+   * 退出编辑后补绘被压住的正文。IntersectionObserver 只在相交状态变化时回调，
+   * 编辑期间跳过的 job 不会自己重来，所以按当前视口主动扫一遍；
+   * 若这期间已经整表重建，队列已被 resetDeferredContent 清空，这里自然空转。
+   */
+  flushDeferredContent() {
+    if (this.pendingContent.size === 0 || this.isEditing()) {
+      return;
+    }
+    const list = this.containerEl.querySelector(".yh-ov-list");
+    if (!list) {
+      return;
+    }
+    const bounds = list.getBoundingClientRect();
+    const top = bounds.top - CONTENT_PRERENDER_MARGIN_PX;
+    const bottom = bounds.bottom + CONTENT_PRERENDER_MARGIN_PX;
+    for (const [element, paint2] of Array.from(this.pendingContent)) {
+      if (!element.isConnected) {
+        this.pendingContent.delete(element);
+        continue;
+      }
+      const rect = element.getBoundingClientRect();
+      if (rect.bottom < top || rect.top > bottom) {
+        continue;
+      }
+      this.pendingContent.delete(element);
+      this.contentObserver?.unobserve(element);
+      paint2();
+    }
   }
   scheduleCardBatch(run) {
     const idle = window.requestIdleCallback;
@@ -15159,15 +15224,30 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     const mount = ++this.tagEditorMount;
     const previous = this.tagEditorCleanup;
     this.tagEditorCleanup = null;
+    this.tagEditingCardEl?.removeClass("is-tag-editing");
+    this.tagEditingCardEl = null;
     previous?.();
     const shouldFocus = this.tagEditorAutoFocus;
     this.tagEditorAutoFocus = false;
     const field = row.querySelector(".yh-tag-input-field");
     const list = row.closest(".yh-ov-list");
+    const cardEl = row.closest(".yh-ov-card");
+    if (cardEl) {
+      cardEl.addClass("is-tag-editing");
+      this.tagEditingCardEl = cardEl;
+    }
     const revealField = () => {
-      if (row.isConnected && field?.isConnected) {
-        field.scrollIntoView({ block: "center" });
+      if (!row.isConnected || !field?.isConnected) {
+        return;
       }
+      if (list) {
+        const listRect = list.getBoundingClientRect();
+        const rowRect = row.getBoundingClientRect();
+        if (rowRect.top >= listRect.top && rowRect.bottom <= listRect.bottom) {
+          return;
+        }
+      }
+      field.scrollIntoView({ block: "center" });
     };
     const listeners = new AbortController();
     const { signal } = listeners;
@@ -15210,11 +15290,16 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
       if (this.editingTagCardId === cardData.id) {
         this.editingTagCardId = null;
       }
+      if (this.tagEditingCardEl && this.tagEditingCardEl === cardEl) {
+        this.tagEditingCardEl.removeClass("is-tag-editing");
+        this.tagEditingCardEl = null;
+      }
       const shouldRender = this.pendingRender;
       this.pendingRender = false;
       if (row.isConnected) {
         repaint();
       }
+      window.requestAnimationFrame(() => this.flushDeferredContent());
       if (shouldRender) {
         this.requestRender();
       }
@@ -15331,6 +15416,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     }
     this.editingNoteCardId = cardData.id;
     this.noteDraft = initialValue;
+    card.addClass("is-note-editing");
     textarea.value = initialValue;
     edit.removeClass("hidden");
     addNote?.addClass("hidden");
@@ -15348,8 +15434,10 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
         this.editingNoteCardId = null;
         this.noteDraft = "";
       }
+      card.removeClass("is-note-editing");
       edit.addClass("hidden");
       addNote?.removeClass("hidden");
+      window.requestAnimationFrame(() => this.flushDeferredContent());
       if (this.pendingRender) {
         this.pendingRender = false;
         this.requestRender();

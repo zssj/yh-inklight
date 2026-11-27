@@ -28,18 +28,22 @@ function methodBody(signature: string, nextSignature: string): string {
 describe("侧栏标签编辑态守卫", () => {
   it("render() 在 container.empty() 之前先挡编辑态", () => {
     const body = methodBody("async render(): Promise<void> {", "private async refreshList");
-    const guard = body.indexOf("this.editingTagCardId !== null");
+    const guard = body.indexOf("this.isEditing()");
     // 只看真正的调用语句（带分号），别被守卫注释里提到的名字带偏
     const empty = body.search(/\n\s*container\.empty\(\);/);
     expect(guard, "render() 缺少编辑态守卫").toBeGreaterThan(-1);
     expect(empty, "render() 不再清空容器？检查实现是否已改").toBeGreaterThan(-1);
     expect(guard, "守卫必须在 container.empty() 之前，否则输入框已被删").toBeLessThan(empty);
+    // 但视角变了必须放行：否则换范围/筛选时列表被永久冻在旧内容上
+    expect(body, "编辑态守卫必须带视角例外").toMatch(
+      /this\.renderedIdentity === this\.listIdentity\(\)[\s\S]{0,80}this\.abandonEditing\(\)/,
+    );
   });
 
   it("refreshList() 在 await 之后再挡一次编辑态", () => {
     const body = methodBody("private async refreshList(): Promise<void> {", "private renderCardList");
     // 入口已有一处守卫；这里要的是 await loadScope / prepareRelations 之后的第二处
-    const guards = body.match(/this\.editingTagCardId !== null/g) ?? [];
+    const guards = body.match(/this\.isEditing\(\)/g) ?? [];
     expect(guards.length, "refreshList() 必须入口与 await 后各挡一次").toBeGreaterThanOrEqual(2);
     expect(body.indexOf("this.pendingRender = true")).toBeLessThan(body.indexOf("list.empty()"));
   });
@@ -111,5 +115,47 @@ describe("行内想法编辑态守卫", () => {
     expect(capture).toBeGreaterThan(-1);
     expect(guard, "守卫必须在 captureScroll 之前").toBeLessThan(capture);
     expect(body).toMatch(/this\.pendingVisibleRender = true/);
+  });
+});
+
+/**
+ * 滚动后追加的卡片：正文 Markdown 是「进视口才绘制」的。
+ * 这串绘制会清空正文重新渲染，卡片高度随之变化——点开编辑器的同一时刻发生，
+ * 用户看到的就是「一闪而过」。首屏卡片不走延迟绘制，所以从来不闪。
+ */
+describe("延迟正文绘制与编辑态", () => {
+  it("编辑期间不执行延迟绘制，退出后按视口补绘", () => {
+    const body = methodBody("private deferCardContent(", "private resetDeferredContent(): void");
+    expect(body, "IO 回调里必须先挡编辑态").toMatch(
+      /if \(this\.isEditing\(\)\) \{\s*continue;/,
+    );
+    // 挡住的 job 留在队列里，必须有主动补绘的出口，否则滚过来的卡片正文永远是原文
+    expect(source, "缺少 flushDeferredContent 出口").toContain("private flushDeferredContent(): void");
+    const exit = methodBody("private openInlineEditor(", "private async saveCardContent(");
+    expect(exit, "想法编辑退出后必须补绘").toContain("this.flushDeferredContent()");
+    const tagEditor = methodBody("private wireTagEditor(", "private tagRefs(");
+    expect(tagEditor, "标签编辑退出后必须补绘").toContain("this.flushDeferredContent()");
+  });
+
+  it("正在编辑的卡片退出 content-visibility 按需绘制", () => {
+    const css = readFileSync(join(ROOT, "styles.css"), "utf8");
+    expect(css).toMatch(
+      /\.yh-ov-list > \.yh-ov-card\.is-tag-editing,\s*\n\.yh-ov-list > \.yh-ov-card\.is-note-editing \{\s*content-visibility: visible;/,
+    );
+    const body = methodBody("private wireTagEditor(", "private tagRefs(");
+    expect(body).toContain('addClass("is-tag-editing")');
+    expect(body).toContain('removeClass("is-tag-editing")');
+    const note = methodBody("private openInlineEditor(", "private async saveCardContent(");
+    expect(note).toContain('addClass("is-note-editing")');
+    expect(note).toContain('removeClass("is-note-editing")');
+  });
+
+  it("已经完整可见的卡片不在点开时滚动列表", () => {
+    const body = methodBody("private wireTagEditor(", "private tagRefs(");
+    const guard = body.indexOf("rowRect.top >= listRect.top");
+    const scroll = body.indexOf("field.scrollIntoView(");
+    expect(guard, "revealField 必须先判断是否已完整可见").toBeGreaterThan(-1);
+    expect(scroll).toBeGreaterThan(-1);
+    expect(guard, "判断必须在 scrollIntoView 之前，否则白滚一次触发连锁重排").toBeLessThan(scroll);
   });
 });

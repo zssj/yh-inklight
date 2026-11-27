@@ -94,6 +94,9 @@ const MD_MODIFY_DEBOUNCE_MS = 300;
  */
 const RENAME_MIGRATION_DEBOUNCE_MS = 100;
 
+/** 视图落点：right = 右侧栏（历史默认），main = 主区域标签页（宽度铺满） */
+type LeafHome = "right" | "main";
+
 /**
  * 只比较锚点是否真的漂移。relocateDocumentAnchors 每次都返回新对象，
  * 不能用引用判断；用偏移与选中文本比较才能避免「文件一保存就重写 sidecar」。
@@ -138,6 +141,8 @@ const RELATION_TYPES: ReadonlyArray<readonly [RelationType, string]> = [
 export default class OverlayAnnotationsPlugin extends Plugin {
   settings: AnnotationPluginSettings = DEFAULT_SETTINGS;
   store!: AnnotationStore;
+  /** 最近一次打开过的文件：批注总览开在主区域时用它兜住「当前文件」范围（见 annotationScopeFile） */
+  private lastActiveFile: TFile | null = null;
 
   private toolbar!: SelectionToolbar;
   private popoverCard: AnnotationCard | null = null;
@@ -619,6 +624,18 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "open-annotation-sidebar-main",
+      name: "在主区域打开批注总览（全宽）",
+      callback: () => void this.openAnnotationSidebar("main"),
+    });
+
+    this.addCommand({
+      id: "open-annotation-sidebar-right",
+      name: "在右侧栏打开批注总览",
+      callback: () => void this.openAnnotationSidebar("sidebar"),
+    });
+
+    this.addCommand({
       id: "open-epub-bookshelf",
       name: "打开 EPUB 书架",
       callback: () => this.activateBookshelf(),
@@ -760,6 +777,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on("file-open", async (file) => {
         if (file instanceof TFile && ["md", "pdf"].includes(file.extension.toLowerCase())) {
+          this.lastActiveFile = file;
           this.popoverCard?.dismiss();
           await this.store.getDocument(file);
           await this.refreshAnnotations();
@@ -768,6 +786,19 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     );
 
     // Markdown 打开次数统计：60s 冷却去重，只写 data.json，不触碰 md 原文
+    // 记住最近打开的文件（含 EPUB/PDF）：批注总览开在主区域后自己会成为活动 leaf，
+    // 没有这条回落，「当前文件」范围在总览里永远是空的
+    this.registerEvent(
+      this.app.workspace.on("file-open", (file) => {
+        if (file instanceof TFile) {
+          this.lastActiveFile = file;
+        }
+      }),
+    );
+    this.app.workspace.onLayoutReady(() => {
+      this.lastActiveFile = this.app.workspace.getActiveFile() ?? this.lastActiveFile;
+    });
+
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         this.countMarkdownOpen(file);
@@ -1365,21 +1396,96 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     return view ? { editor: view.editor, file: view.file } : null;
   }
 
+  /**
+   * 批注总览「当前文件」范围用的源文件。
+   * 视图开在主区域时它自己就是活动 leaf，`getActiveFile()` 会返回 null，
+   * 这时回落到最近一次打开的文件（仍要校验文件还在库内，避免展示已删文件的残留）。
+   */
+  annotationScopeFile(): TFile | null {
+    const active = this.app.workspace.getActiveFile();
+    if (active) {
+      this.lastActiveFile = active;
+      return active;
+    }
+    const remembered = this.lastActiveFile;
+    if (!remembered) {
+      return null;
+    }
+    const live = this.app.vault.getAbstractFileByPath(remembered.path);
+    return live instanceof TFile ? live : null;
+  }
+
+  /** 打开批注总览（落点按设置，见 openAnnotationSidebar） */
   async activateSidebar(): Promise<void> {
-    let leaf = this.app.workspace.getLeavesOfType(ANNOTATION_SIDEBAR_VIEW)[0];
-    if (!leaf) {
-      const nextLeaf = this.app.workspace.getRightLeaf(false);
-      if (!nextLeaf) {
+    await this.openAnnotationSidebar();
+  }
+
+  /**
+   * 打开批注总览视图。默认落点由 settings.annotationViewLocation 决定：
+   * sidebar = 右侧栏（历史行为）；main = 主区域标签页（宽度铺满，适合手机读划线）。
+   * 视图类型相同，同一时刻只保留一个实例：落点与设置不一致时把现有 leaf 搬过去，
+   * 避免两份列表各自刷新、滚动位置互相打架。
+   */
+  async openAnnotationSidebar(location: "sidebar" | "main" = this.settings.annotationViewLocation): Promise<void> {
+    const desired: LeafHome = location === "main" ? "main" : "right";
+    const existing = this.app.workspace.getLeavesOfType(ANNOTATION_SIDEBAR_VIEW)[0];
+
+    if (existing) {
+      const current = this.leafHome(existing);
+      // unknown：宿主版本取不到 parent 链，别猜、别搬，维持现状只做 reveal
+      if (current === "unknown" || current === desired) {
+        this.app.workspace.revealLeaf(existing);
+        const view = existing.view;
+        if (view instanceof AnnotationSidebarView) {
+          view.requestRender();
+        }
         return;
       }
-      leaf = nextLeaf;
-      await leaf.setViewState({ type: ANNOTATION_SIDEBAR_VIEW, active: true });
+
+      const moved = await this.createAnnotationSidebarLeaf(desired);
+      if (!moved) {
+        return;
+      }
+      existing.detach();
+      this.app.workspace.revealLeaf(moved);
+      return;
     }
-    this.app.workspace.revealLeaf(leaf);
-    const view = leaf.view;
-    if (view instanceof AnnotationSidebarView) {
-      view.requestRender();
+
+    const leaf = await this.createAnnotationSidebarLeaf(desired);
+    if (leaf) {
+      this.app.workspace.revealLeaf(leaf);
     }
+  }
+
+  private async createAnnotationSidebarLeaf(home: LeafHome): Promise<WorkspaceLeaf | null> {
+    const leaf = home === "main"
+      ? this.app.workspace.getLeaf("tab")
+      : this.app.workspace.getRightLeaf(false);
+    if (!leaf) {
+      new Notice("墨光批注：找不到可用的标签页，无法打开批注总览");
+      return null;
+    }
+    await leaf.setViewState({ type: ANNOTATION_SIDEBAR_VIEW, active: true });
+    return leaf;
+  }
+
+  /**
+   * 判断 leaf 落在哪个区域：沿 parent 链上溯，命中 rightSplit（含手机抽屉）即侧栏。
+   * 取不到 parent 链的老宿主返回 unknown，调用方不得据此搬迁。
+   */
+  private leafHome(leaf: WorkspaceLeaf): LeafHome | "unknown" {
+    if (!("parent" in (leaf as object))) {
+      return "unknown";
+    }
+    const rightSplit = this.app.workspace.rightSplit as unknown;
+    let node: { parent?: unknown } | null = leaf as unknown as { parent?: unknown };
+    for (let depth = 0; node && depth < 8; depth += 1) {
+      if ((node as unknown) === rightSplit) {
+        return "right";
+      }
+      node = (node.parent as { parent?: unknown } | null | undefined) ?? null;
+    }
+    return "main";
   }
 
   async activateBookshelf(): Promise<void> {

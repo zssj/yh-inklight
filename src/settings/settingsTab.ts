@@ -51,6 +51,20 @@ export class AnnotationSettingsTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName("批注总览打开位置")
+      .setDesc("「右侧栏」与原来一致；「主区域」会在编辑区开一个全宽标签页，适合手机上长时间读划线内容。两种落点随时可用命令切换。")
+      .addDropdown((dropdown) => {
+        dropdown
+          .addOption("sidebar", "右侧栏（默认）")
+          .addOption("main", "主区域（全宽）")
+          .setValue(this.plugin.settings.annotationViewLocation)
+          .onChange(async (value) => {
+            this.plugin.settings.annotationViewLocation = value === "main" ? "main" : "sidebar";
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
       .setName("便签宽度")
       .addSlider((slider) => {
         slider

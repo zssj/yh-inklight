@@ -228,7 +228,7 @@ export class AnnotationSidebarView extends ItemView {
    * 视角变了才是换了另一批内容，回到顶部才符合预期。
    */
   private listIdentity(): string {
-    const activePath = this.annotationScope === "current" ? (this.app.workspace.getActiveFile()?.path ?? "") : "";
+    const activePath = this.annotationScope === "current" ? (this.plugin.annotationScopeFile()?.path ?? "") : "";
     return [this.annotationScope, this.query, this.color, this.type, this.sort, this.tagFilter, activePath].join("\u0001");
   }
 
@@ -268,7 +268,9 @@ export class AnnotationSidebarView extends ItemView {
   private async loadScope(
     force = false,
   ): Promise<{ documents: FileAnnotationDocument[]; cards: SidebarCard[] } | null> {
-    const file = this.app.workspace.getActiveFile();
+    // 「当前文件」的源文件走 plugin 解析：视图开在主区域时它自己就是活动 leaf，
+    // workspace.getActiveFile() 会返回 null，必须回落到最近一次打开的文件。
+    const file = this.plugin.annotationScopeFile();
     if (this.annotationScope === "current" && !file) {
       return null;
     }
@@ -315,7 +317,7 @@ export class AnnotationSidebarView extends ItemView {
     container.empty();
     container.addClass("yh-overview");
 
-    const file = this.app.workspace.getActiveFile();
+    const file = this.plugin.annotationScopeFile();
     this.renderHeader(container);
     this.renderMenu(container, file);
 

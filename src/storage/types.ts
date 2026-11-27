@@ -248,6 +248,11 @@ export interface AnnotationIndex {
 
 export interface AnnotationPluginSettings {
   defaultHighlightColor: AnnotationColor;
+  /**
+   * 批注总览视图默认开在哪：右侧栏（历史行为）或主区域标签页。
+   * 主区域宽度铺满，适合手机/窄屏长时间读划线内容；两种落点可随时用命令切换。
+   */
+  annotationViewLocation: "sidebar" | "main";
   stickyWidth: number;
   stickySide: SidebarSide;
   stickyCollapseWidth: number;
@@ -321,6 +326,7 @@ export interface MdOpenStat {
 
 export const DEFAULT_SETTINGS: AnnotationPluginSettings = {
   defaultHighlightColor: "yellow",
+  annotationViewLocation: "sidebar",
   stickyWidth: 280,
   stickySide: "right",
   stickyCollapseWidth: 800,

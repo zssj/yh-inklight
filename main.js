@@ -8496,6 +8496,7 @@ var COLOR_LABELS = {
 };
 var DEFAULT_SETTINGS = {
   defaultHighlightColor: "yellow",
+  annotationViewLocation: "sidebar",
   stickyWidth: 280,
   stickySide: "right",
   stickyCollapseWidth: 800,
@@ -11521,6 +11522,12 @@ var AnnotationSettingsTab = class extends import_obsidian8.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
+    new import_obsidian8.Setting(containerEl).setName("\u6279\u6CE8\u603B\u89C8\u6253\u5F00\u4F4D\u7F6E").setDesc("\u300C\u53F3\u4FA7\u680F\u300D\u4E0E\u539F\u6765\u4E00\u81F4\uFF1B\u300C\u4E3B\u533A\u57DF\u300D\u4F1A\u5728\u7F16\u8F91\u533A\u5F00\u4E00\u4E2A\u5168\u5BBD\u6807\u7B7E\u9875\uFF0C\u9002\u5408\u624B\u673A\u4E0A\u957F\u65F6\u95F4\u8BFB\u5212\u7EBF\u5185\u5BB9\u3002\u4E24\u79CD\u843D\u70B9\u968F\u65F6\u53EF\u7528\u547D\u4EE4\u5207\u6362\u3002").addDropdown((dropdown) => {
+      dropdown.addOption("sidebar", "\u53F3\u4FA7\u680F\uFF08\u9ED8\u8BA4\uFF09").addOption("main", "\u4E3B\u533A\u57DF\uFF08\u5168\u5BBD\uFF09").setValue(this.plugin.settings.annotationViewLocation).onChange(async (value) => {
+        this.plugin.settings.annotationViewLocation = value === "main" ? "main" : "sidebar";
+        await this.plugin.saveSettings();
+      });
+    });
     new import_obsidian8.Setting(containerEl).setName("\u4FBF\u7B7E\u5BBD\u5EA6").addSlider((slider) => {
       slider.setLimits(220, 420, 10).setValue(this.plugin.settings.stickyWidth).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.stickyWidth = value;
@@ -14422,7 +14429,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
    * 视角变了才是换了另一批内容，回到顶部才符合预期。
    */
   listIdentity() {
-    const activePath = this.annotationScope === "current" ? this.app.workspace.getActiveFile()?.path ?? "" : "";
+    const activePath = this.annotationScope === "current" ? this.plugin.annotationScopeFile()?.path ?? "" : "";
     return [this.annotationScope, this.query, this.color, this.type, this.sort, this.tagFilter, activePath].join("");
   }
   /**
@@ -14457,7 +14464,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
    * 切走再切回、file-open 触发的刷新都不必重新读文档、重建全部卡片。
    */
   async loadScope(force = false) {
-    const file = this.app.workspace.getActiveFile();
+    const file = this.plugin.annotationScopeFile();
     if (this.annotationScope === "current" && !file) {
       return null;
     }
@@ -14493,7 +14500,7 @@ var AnnotationSidebarView = class extends import_obsidian11.ItemView {
     this.resetDeferredContent();
     container.empty();
     container.addClass("yh-overview");
-    const file = this.app.workspace.getActiveFile();
+    const file = this.plugin.annotationScopeFile();
     this.renderHeader(container);
     this.renderMenu(container, file);
     if (this.annotationScope === "current" && !file) {
@@ -22177,6 +22184,8 @@ var OverlayAnnotationsPlugin = class extends import_obsidian22.Plugin {
   constructor() {
     super(...arguments);
     this.settings = DEFAULT_SETTINGS;
+    /** 最近一次打开过的文件：批注总览开在主区域时用它兜住「当前文件」范围（见 annotationScopeFile） */
+    this.lastActiveFile = null;
     this.popoverCard = null;
     /** 浮层「相关」区的展开态：存在插件上，关掉卡片再打开仍保持 */
     this.popoverRelatedOpen = /* @__PURE__ */ new Set();
@@ -22616,6 +22625,16 @@ var OverlayAnnotationsPlugin = class extends import_obsidian22.Plugin {
       callback: () => this.activateSidebar()
     });
     this.addCommand({
+      id: "open-annotation-sidebar-main",
+      name: "\u5728\u4E3B\u533A\u57DF\u6253\u5F00\u6279\u6CE8\u603B\u89C8\uFF08\u5168\u5BBD\uFF09",
+      callback: () => void this.openAnnotationSidebar("main")
+    });
+    this.addCommand({
+      id: "open-annotation-sidebar-right",
+      name: "\u5728\u53F3\u4FA7\u680F\u6253\u5F00\u6279\u6CE8\u603B\u89C8",
+      callback: () => void this.openAnnotationSidebar("sidebar")
+    });
+    this.addCommand({
       id: "open-epub-bookshelf",
       name: "\u6253\u5F00 EPUB \u4E66\u67B6",
       callback: () => this.activateBookshelf()
@@ -22740,12 +22759,23 @@ ${lines.slice(0, 8).join("\n")}`);
     this.registerEvent(
       this.app.workspace.on("file-open", async (file) => {
         if (file instanceof import_obsidian22.TFile && ["md", "pdf"].includes(file.extension.toLowerCase())) {
+          this.lastActiveFile = file;
           this.popoverCard?.dismiss();
           await this.store.getDocument(file);
           await this.refreshAnnotations();
         }
       })
     );
+    this.registerEvent(
+      this.app.workspace.on("file-open", (file) => {
+        if (file instanceof import_obsidian22.TFile) {
+          this.lastActiveFile = file;
+        }
+      })
+    );
+    this.app.workspace.onLayoutReady(() => {
+      this.lastActiveFile = this.app.workspace.getActiveFile() ?? this.lastActiveFile;
+    });
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         this.countMarkdownOpen(file);
@@ -23262,21 +23292,86 @@ ${lines.slice(0, 8).join("\n")}`);
     const view = this.app.workspace.getActiveViewOfType(import_obsidian22.MarkdownView);
     return view ? { editor: view.editor, file: view.file } : null;
   }
+  /**
+   * 批注总览「当前文件」范围用的源文件。
+   * 视图开在主区域时它自己就是活动 leaf，`getActiveFile()` 会返回 null，
+   * 这时回落到最近一次打开的文件（仍要校验文件还在库内，避免展示已删文件的残留）。
+   */
+  annotationScopeFile() {
+    const active = this.app.workspace.getActiveFile();
+    if (active) {
+      this.lastActiveFile = active;
+      return active;
+    }
+    const remembered = this.lastActiveFile;
+    if (!remembered) {
+      return null;
+    }
+    const live = this.app.vault.getAbstractFileByPath(remembered.path);
+    return live instanceof import_obsidian22.TFile ? live : null;
+  }
+  /** 打开批注总览（落点按设置，见 openAnnotationSidebar） */
   async activateSidebar() {
-    let leaf = this.app.workspace.getLeavesOfType(ANNOTATION_SIDEBAR_VIEW)[0];
-    if (!leaf) {
-      const nextLeaf = this.app.workspace.getRightLeaf(false);
-      if (!nextLeaf) {
+    await this.openAnnotationSidebar();
+  }
+  /**
+   * 打开批注总览视图。默认落点由 settings.annotationViewLocation 决定：
+   * sidebar = 右侧栏（历史行为）；main = 主区域标签页（宽度铺满，适合手机读划线）。
+   * 视图类型相同，同一时刻只保留一个实例：落点与设置不一致时把现有 leaf 搬过去，
+   * 避免两份列表各自刷新、滚动位置互相打架。
+   */
+  async openAnnotationSidebar(location = this.settings.annotationViewLocation) {
+    const desired = location === "main" ? "main" : "right";
+    const existing = this.app.workspace.getLeavesOfType(ANNOTATION_SIDEBAR_VIEW)[0];
+    if (existing) {
+      const current = this.leafHome(existing);
+      if (current === "unknown" || current === desired) {
+        this.app.workspace.revealLeaf(existing);
+        const view = existing.view;
+        if (view instanceof AnnotationSidebarView) {
+          view.requestRender();
+        }
         return;
       }
-      leaf = nextLeaf;
-      await leaf.setViewState({ type: ANNOTATION_SIDEBAR_VIEW, active: true });
+      const moved = await this.createAnnotationSidebarLeaf(desired);
+      if (!moved) {
+        return;
+      }
+      existing.detach();
+      this.app.workspace.revealLeaf(moved);
+      return;
     }
-    this.app.workspace.revealLeaf(leaf);
-    const view = leaf.view;
-    if (view instanceof AnnotationSidebarView) {
-      view.requestRender();
+    const leaf = await this.createAnnotationSidebarLeaf(desired);
+    if (leaf) {
+      this.app.workspace.revealLeaf(leaf);
     }
+  }
+  async createAnnotationSidebarLeaf(home) {
+    const leaf = home === "main" ? this.app.workspace.getLeaf("tab") : this.app.workspace.getRightLeaf(false);
+    if (!leaf) {
+      new import_obsidian22.Notice("\u58A8\u5149\u6279\u6CE8\uFF1A\u627E\u4E0D\u5230\u53EF\u7528\u7684\u6807\u7B7E\u9875\uFF0C\u65E0\u6CD5\u6253\u5F00\u6279\u6CE8\u603B\u89C8");
+      return null;
+    }
+    await leaf.setViewState({ type: ANNOTATION_SIDEBAR_VIEW, active: true });
+    return leaf;
+  }
+  /**
+   * 判断 leaf 落在哪个区域：沿 parent 链上溯，命中 rightSplit（含手机抽屉）即侧栏。
+   * 取不到 parent 链的老宿主返回 unknown，调用方不得据此搬迁。
+   */
+  leafHome(leaf) {
+    if (!("parent" in leaf)) {
+      return "unknown";
+    }
+    const rightSplit = this.app.workspace.rightSplit;
+    let node = leaf;
+    for (let depth = 0; node && depth < 8; depth += 1) {
+      if (node === rightSplit) {
+        return "right";
+      }
+      node = node.parent ?? null;
+    }
+    return "main";
   }
   async activateBookshelf() {
     let leaf = this.app.workspace.getLeavesOfType(EPUB_BOOKSHELF_VIEW_TYPE)[0];

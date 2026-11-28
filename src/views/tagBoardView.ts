@@ -487,17 +487,20 @@ export class TagBoardView extends ItemView {
     const jump = meta.createSpan({ cls: "yh-tagboard-jump", text: "跳回原文 →" });
     jump.setAttribute("role", "button");
     jump.addEventListener("click", () => {
-      void openAnnotationTarget(
-        this.app,
-        {
-          file,
-          offset: card.startOffset,
-          pageNumber: card.pageNumber,
-          mode: card.mode,
-          cfiRange: card.cfiRange,
-        },
-        // 必须是「打开书 + 定位」：navigateEpubToCfi 只定位已打开的阅读器，书没开就什么都不做
-        (target, cfi) => this.plugin.openEpubAtCfi(target.path, cfi),
+      // 程序化「查看批注目标」不改「当前文件」范围视角（同 sidebarView.jumpTo）
+      void this.plugin.openKeepingScope(() =>
+        openAnnotationTarget(
+          this.app,
+          {
+            file,
+            offset: card.startOffset,
+            pageNumber: card.pageNumber,
+            mode: card.mode,
+            cfiRange: card.cfiRange,
+          },
+          // 必须是「打开书 + 定位」：navigateEpubToCfi 只定位已打开的阅读器，书没开就什么都不做
+          (target, cfi) => this.plugin.openEpubAtCfi(target.path, cfi),
+        ),
       );
     });
   }

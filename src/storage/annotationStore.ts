@@ -372,7 +372,7 @@ export class AnnotationStore {
 
   async saveDocument(
     document: FileAnnotationDocument,
-    options: { writeIndex?: boolean; carryExportFrom?: string } = {},
+    options: { writeIndex?: boolean; carryExportFrom?: string; bumpVersion?: boolean } = {},
   ): Promise<void> {
     const filePath = this.normalizeVaultPath(document.filePath);
     const sidecarPath = this.toSidecarPath(filePath);
@@ -409,7 +409,11 @@ export class AnnotationStore {
 
     this.documents.set(this.toCacheKey(normalized.filePath), normalized);
     this.index = nextIndex;
-    this.changeVersion += 1;
+    // bumpVersion=false 供阅读进度写盘使用：进度变化不改变批注列表内容，
+    // 若也 ++version，总览的内容指纹会误判「内容变了」而整表重建（滚动位置随之丢失）。
+    if (options.bumpVersion !== false) {
+      this.changeVersion += 1;
+    }
   }
 
   async addHighlight(file: TFile, highlight: HighlightAnnotation): Promise<FileAnnotationDocument> {
@@ -1354,11 +1358,16 @@ export class AnnotationStore {
 
   async saveEpubProgress(file: TFile, progress: EpubReadingProgress): Promise<void> {
     const document = await this.getDocument(file);
-    await this.saveDocument({
-      ...document,
-      epubProgress: progress,
-      lastModified: new Date().toISOString(),
-    });
+    await this.saveDocument(
+      {
+        ...document,
+        epubProgress: progress,
+        lastModified: new Date().toISOString(),
+      },
+      // 阅读进度不改变批注列表内容，不 bump version：否则总览指纹守卫失效，
+      // 跳进书里看一会儿再回来就被整表重建（浏览位置丢失）
+      { bumpVersion: false },
+    );
   }
   // ===== PDF 进度 =====
 
@@ -1369,11 +1378,14 @@ export class AnnotationStore {
 
   async savePdfProgress(file: TFile, progress: PdfReadingProgress): Promise<void> {
     const document = await this.getDocument(file);
-    await this.saveDocument({
-      ...document,
-      pdfProgress: progress,
-      lastModified: new Date().toISOString(),
-    });
+    await this.saveDocument(
+      {
+        ...document,
+        pdfProgress: progress,
+        lastModified: new Date().toISOString(),
+      },
+      { bumpVersion: false },
+    );
   }
 
   // ===== 书签（EPUB/PDF 通用）=====

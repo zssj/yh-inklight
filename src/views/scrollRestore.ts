@@ -1,6 +1,7 @@
 /**
  * [INPUT]: 只依赖调用方注入的量测/写入回调，不直接碰 DOM API
- * [OUTPUT]: 对外提供 applyScrollRestore 与 RESTORE_MAX_CARDS，供侧栏列表重建后回到原位置
+ * [OUTPUT]: 对外提供 applyScrollRestore / placeScrollRestore / restorePending 与 RESTORE_MAX_CARDS，
+ *           供侧栏列表重建后回到原位置；深列表恢复由「先像素落位、后续批次补落位」两段完成
  * [POS]: views 模块的纯逻辑层（与 cardModel 同层），不读写存储、不持状态；
  *        量测与写入由 sidebarView 注入，因此可以在 jsdom 里直接测。
  * [PROTOCOL]: 变更时更新此头部，然后检查 AGENTS.md
@@ -60,13 +61,31 @@ export function applyScrollRestore(
 ): boolean {
   const finished = fill(restore.top + target.viewportHeight());
 
+  placeScrollRestore(target, restore);
+  return finished;
+}
+
+/**
+ * 按锚点落位；锚点不可用时退回像素落位。
+ * 从 applyScrollRestore 里拆出来供「深列表补落位」复用：补卡预算用尽时第一次落位
+ * 会被当时的 scrollHeight 夹住，后续追加批次把内容补够后要再按锚点落一次。
+ */
+export function placeScrollRestore(target: ScrollRestoreTarget, restore: ScrollRestore): void {
   const contentOffset = restore.anchorId ? target.anchorContentOffset(restore.anchorId) : null;
   if (contentOffset !== null) {
     target.setTop(Math.max(0, contentOffset - restore.anchorOffset));
   } else {
     target.setTop(restore.top);
   }
-  return finished;
+}
+
+/**
+ * 深列表补落位判断：内容高度还容不下 restore.top + 视口时，第一次像素落位
+ * 会被 scrollHeight 夹住（滑过补卡上限的典型症状）——返回 true，调用方在
+ * 后续追加批次里量一次，够高了就调 placeScrollRestore 补落位。
+ */
+export function restorePending(target: ScrollRestoreTarget, restore: ScrollRestore): boolean {
+  return target.contentHeight() < restore.top + target.viewportHeight();
 }
 
 /**

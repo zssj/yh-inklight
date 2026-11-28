@@ -18,6 +18,7 @@ import { FakeVault, createApp } from "../helpers/fakeVault";
 
 const MD_PATH = "读书笔记/复利.md";
 const PDF_PATH = "papers/成本.pdf";
+const EPUB_PATH = "books/人类简史.epub";
 const SIDECAR_DIR = ".obsidian-annotations";
 
 function anchorOf(text: string, start = 0): TextAnchor {
@@ -1147,5 +1148,54 @@ describe("toSidecarPath", () => {
   it("同一路径大小写不同映射到同一个 sidecar，避免双份数据", async () => {
     const { store } = await setup();
     expect(store.toSidecarPath("Notes/A.md")).toBe(store.toSidecarPath("notes/a.md"));
+  });
+});
+
+describe("阅读进度与批注数据版本", () => {
+  it("saveEpubProgress / savePdfProgress 落盘进度但不 bump version（总览指纹不被进度写盘搅动）", async () => {
+    const { app, vault } = createApp({ files: { [EPUB_PATH]: "", [PDF_PATH]: "" } });
+    const store = new AnnotationStore(app);
+    await store.initialize();
+    const epub = vault.fileAt(EPUB_PATH);
+    const pdf = vault.fileAt(PDF_PATH);
+    const before = store.version;
+
+    await store.saveEpubProgress(epub, {
+      cfi: "epubcfi(/6/4)",
+      chapter: "第一章",
+      percent: 0.42,
+      lastRead: "2026-11-28T00:00:00.000Z",
+      readingTimeSeconds: 120,
+      readCount: 1,
+    });
+    await store.savePdfProgress(pdf, { pageNumber: 3, totalPages: 100, percent: 0.03, lastRead: "2026-11-28T00:00:00.000Z" });
+
+    // 进度照常落盘（书架/阅读器恢复不受影响），但 version 不动
+    expect((await store.getEpubProgress(epub))?.percent).toBe(0.42);
+    expect((await store.getPdfProgress(pdf))?.pageNumber).toBe(3);
+    expect(store.version).toBe(before);
+  });
+
+  it("进度连续保存多次 version 仍不变，批注写入照旧 bump（回归守卫）", async () => {
+    const { app, vault } = createApp({ files: { [EPUB_PATH]: "" } });
+    const store = new AnnotationStore(app);
+    await store.initialize();
+    const epub = vault.fileAt(EPUB_PATH);
+
+    for (let i = 0; i < 3; i += 1) {
+      await store.saveEpubProgress(epub, {
+        cfi: `epubcfi(/6/${i + 4})`,
+        chapter: "第一章",
+        percent: i * 0.1,
+        lastRead: "2026-11-28T00:00:00.000Z",
+        readingTimeSeconds: i * 10,
+        readCount: 0,
+      });
+    }
+    expect(store.version).toBe(0);
+
+    const before = store.version;
+    await store.addHighlight(epub, highlightOf("h1", "人类简史", 0));
+    expect(store.version).toBe(before + 1);
   });
 });

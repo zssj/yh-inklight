@@ -1,12 +1,19 @@
 /**
  * [INPUT]: 被测 src/views/scrollRestore.ts 的纯函数（量测/写入通过 target 注入）
- * [OUTPUT]: 覆盖「重建后回到原滚动位置」的判定：先补高度再落位、按锚点内容偏移对齐（认卡不认像素）、无锚点退像素
+ * [OUTPUT]: 覆盖「重建后回到原滚动位置」的判定：先补高度再落位、按锚点内容偏移对齐（认卡不认像素）、
+ *           无锚点退像素；以及深列表补落位（预算用尽像素被夹 → restorePending 挂起 → 内容补够后补落位）
  * [POS]: L1 纯逻辑测试——DOM 量测在真机验证，这里只锁住恢复顺序与落位算法
  */
 
 import { describe, expect, it } from "vitest";
 
-import { applyScrollRestore, pickScrollAnchor, RESTORE_MAX_CARDS } from "../../src/views/scrollRestore";
+import {
+  applyScrollRestore,
+  pickScrollAnchor,
+  placeScrollRestore,
+  restorePending,
+  RESTORE_MAX_CARDS,
+} from "../../src/views/scrollRestore";
 
 interface Harness {
   target: {
@@ -116,6 +123,60 @@ describe("applyScrollRestore", () => {
 
     expect(appended).toBe(RESTORE_MAX_CARDS);
     expect(finished).toBe(false);
+  });
+});
+
+describe("restorePending / placeScrollRestore（深列表补落位）", () => {
+  const deepRestore = { top: 60_000, anchorId: "card-900", anchorOffset: 12 };
+
+  it("内容容不下「原位置 + 视口」时判定补落位挂起（像素落位会被 scrollHeight 夹住）", () => {
+    const { target } = makeHarness({ height: 20_000 });
+    expect(restorePending(target, deepRestore)).toBe(true);
+  });
+
+  it("内容补够后不再挂起", () => {
+    const { target } = makeHarness({ height: 60_000 + 600 });
+    expect(restorePending(target, deepRestore)).toBe(false);
+  });
+
+  it("补够后按锚点补落位一次：视口顶对到「锚点内容偏移 - 重建前偏移」", () => {
+    const { target, state } = makeHarness({ height: 60_000 + 600, anchorContentOffset: 58_000 });
+    placeScrollRestore(target, deepRestore);
+
+    expect(state.top).toBe(57_988);
+  });
+
+  it("锚点始终不在 DOM（全库真的没有这张卡）时补落位退回像素兜底", () => {
+    const { target, state } = makeHarness({ height: 61_000, anchorContentOffset: null });
+    placeScrollRestore(target, deepRestore);
+
+    expect(state.top).toBe(60_000);
+  });
+
+  it("整链路：预算用尽第一次落位被夹住 → 后续批次补够 → 补落位落回锚点", () => {
+    // 第一次落位：内容只有 40_000，像素 60_000 被夹住（模拟 scrollHeight 夹取）
+    const { target, state } = makeHarness({ height: 40_000, anchorContentOffset: null });
+    const finished = applyScrollRestore(target, deepRestore, (atLeast) => {
+      // 补卡预算 400 张，每批 40 张、每张 100px：预算用尽只能把高度推到 44_000
+      let done = false;
+      let budget = RESTORE_MAX_CARDS;
+      while (!done && budget > 0 && target.contentHeight() < atLeast) {
+        state.height += 400; // 每批 40 张、每张 10px
+        budget -= 40;
+      }
+      return done;
+    });
+    expect(finished).toBe(false);
+    expect(state.height).toBe(44_000);
+    // 像素落位 60_000 在真机被 scrollHeight 夹到 44_000 - 视口；这里锁「挂起判定成立」
+    expect(restorePending(target, deepRestore)).toBe(true);
+
+    // 后续追加批次把内容补够、锚点渲染出来了 → 补落位
+    state.height = 60_000 + 600;
+    target.anchorContentOffset = () => 59_500;
+    expect(restorePending(target, deepRestore)).toBe(false);
+    placeScrollRestore(target, deepRestore);
+    expect(state.top).toBe(59_488);
   });
 });
 

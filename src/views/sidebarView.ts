@@ -45,8 +45,15 @@ import {
 import { AnnotationKind, AnnotationMode, buildCards, canExtractAtomCard, SidebarCard } from "./cardModel";
 import { CardBodyHost, renderCardBody } from "./cardBody";
 import { renderRelatedBlock } from "./relatedBlock";
-import { applyScrollRestore, pickScrollAnchor, RESTORE_MAX_CARDS } from "./scrollRestore";
-import type { ScrollRestore } from "./scrollRestore";
+import {
+  applyScrollRestore,
+  pickScrollAnchor,
+  placeScrollRestore,
+  RESTORE_MAX_CARDS,
+  restorePending,
+  ScrollRestore,
+  ScrollRestoreTarget,
+} from "./scrollRestore";
 import { openAnnotationTarget } from "./navigation";
 import { hasTag, tagKey } from "../storage/tags";
 import type { TagRef } from "../storage/annotationStore";
@@ -113,6 +120,13 @@ export class AnnotationSidebarView extends ItemView {
    * 数据变化触发的重建要保留滚动位置，视角变化则是用户主动换内容，回到顶部。
    */
   private renderedIdentity = "";
+  /**
+   * 深列表补落位：恢复时补卡预算（RESTORE_MAX_CARDS）用尽、内容还不够高，
+   * 第一次像素落位会被 scrollHeight 夹住——记下 restore，等后续追加批次把
+   * 内容补够后按锚点补落位一次（见 restorePending / placeScrollRestore）。
+   * 每次列表重建都会被 renderCardList 重置。
+   */
+  private pendingRestore: ScrollRestore | null = null;
   /** requestRender(true) 用：刷新按钮与显式重载要绕开指纹守卫 */
   private forceRender = false;
   /**
@@ -434,6 +448,8 @@ export class AnnotationSidebarView extends ItemView {
       list.createDiv({ cls: "yh-empty", text: "No matching annotations." });
       return;
     }
+    // 新列表、新状态：上一轮未完成的深列表补落位不再适用
+    this.pendingRestore = null;
 
     let cursor = 0;
     // 哨兵永远作为列表最后一个子节点：卡片插在它前面，滚到它就追加下一批
@@ -470,8 +486,10 @@ export class AnnotationSidebarView extends ItemView {
         // 老 WebView 没有观察器：退回「空闲时段继续追加」，行为与本轮之前一致
         this.scheduleCardBatch(() => {
           if (!append(CARD_BATCH_SIZE)) {
+            this.settlePendingRestore(list as HTMLElement);
             scheduleNext();
           } else {
+            this.settlePendingRestore(list as HTMLElement);
             sentinel.remove();
           }
         });
@@ -497,8 +515,10 @@ export class AnnotationSidebarView extends ItemView {
             this.listObserver = null;
           }
           if (append(CARD_BATCH_SIZE)) {
+            this.settlePendingRestore(list as HTMLElement);
             sentinel.remove();
           } else {
+            this.settlePendingRestore(list as HTMLElement);
             scheduleNext();
           }
         },
@@ -519,6 +539,10 @@ export class AnnotationSidebarView extends ItemView {
    * 所以先按需补渲染（最多 RESTORE_MAX_CARDS 张，再深就退回像素落位、其余交给滚动追加），
    * 落位按锚点卡对齐——像素坐标在重建前后不是同一坐标系（上方未绘制卡按估算高度报高），
    * 认卡不认像素才落得回同一处内容。
+   *
+   * 预算用尽时内容还容不下原位置：像素落位被当时的 scrollHeight 夹住（深列表近千卡时
+   * 必现）。记进 pendingRestore，等后续追加批次把内容补够后按锚点补落位一次
+   * （settlePendingRestore），全库滑到深处再回来也能落回原位。
    */
   private restoreListScroll(
     list: HTMLElement,
@@ -526,7 +550,25 @@ export class AnnotationSidebarView extends ItemView {
     finished: boolean,
     restore: ScrollRestore,
   ): boolean {
-    const target = {
+    const target = this.restoreTarget(list);
+    const fill = (atLeastHeight: number): boolean => {
+      let done = finished;
+      let budget = RESTORE_MAX_CARDS;
+      while (!done && budget > 0 && target.contentHeight() < atLeastHeight) {
+        done = append(CARD_BATCH_SIZE);
+        budget -= CARD_BATCH_SIZE;
+      }
+      return done;
+    };
+    const done = applyScrollRestore(target, restore, fill);
+    // 全部卡都渲染完了就不会再有后续批次，别留下一个永远等不到落位的 pendingRestore
+    this.pendingRestore = !done && restorePending(target, restore) ? restore : null;
+    return done;
+  }
+
+  /** 恢复落位的量测/写入接口：真实布局值现量现用，估算高度不影响锚点落位 */
+  private restoreTarget(list: HTMLElement): ScrollRestoreTarget {
+    return {
       contentHeight: () => list.scrollHeight,
       viewportHeight: () => list.clientHeight,
       // 内容坐标系偏移（rect 差 + scrollTop）：上方卡片按估算高度报也不影响锚点落位
@@ -542,16 +584,22 @@ export class AnnotationSidebarView extends ItemView {
         list.scrollTop = top;
       },
     };
-    const fill = (atLeastHeight: number): boolean => {
-      let done = finished;
-      let budget = RESTORE_MAX_CARDS;
-      while (!done && budget > 0 && target.contentHeight() < atLeastHeight) {
-        done = append(CARD_BATCH_SIZE);
-        budget -= CARD_BATCH_SIZE;
-      }
-      return done;
-    };
-    return applyScrollRestore(target, restore, fill);
+  }
+
+  /**
+   * 追加批次后的深列表补落位：内容已够容下原位置时按锚点落位一次并清掉挂起状态。
+   * 哨兵在内容补够前本来就在视口里，观察器会自动连续追加，不需要用户先滚一下。
+   */
+  private settlePendingRestore(list: HTMLElement): void {
+    const restore = this.pendingRestore;
+    if (!restore) {
+      return;
+    }
+    const target = this.restoreTarget(list);
+    if (!restorePending(target, restore)) {
+      placeScrollRestore(target, restore);
+      this.pendingRestore = null;
+    }
   }
 
   /**
@@ -1298,10 +1346,14 @@ export class AnnotationSidebarView extends ItemView {
     mode: AnnotationMode = "md",
     cfiRange?: string,
   ): Promise<void> {
-    await openAnnotationTarget(this.app, { file, offset, pageNumber, mode, cfiRange }, (target, cfi) =>
-      // 必须是「打开书 + 定位」：navigateEpubToCfi 只在已打开的阅读器里定位，
-      // 书没开时它只会重试到超时，用户看到的就是「点了完全没反应、也不报错」。
-      this.plugin.openEpubAtCfi(target.path, cfi),
+    // 程序化「查看批注目标」不改「当前文件」范围视角：否则总览跳出去再回来，
+    // lastActiveFile 已被污染成目标文件，列表内容整个换成它的批注、滚动位置丢失
+    await this.plugin.openKeepingScope(() =>
+      openAnnotationTarget(this.app, { file, offset, pageNumber, mode, cfiRange }, (target, cfi) =>
+        // 必须是「打开书 + 定位」：navigateEpubToCfi 只在已打开的阅读器里定位，
+        // 书没开时它只会重试到超时，用户看到的就是「点了完全没反应、也不报错」。
+        this.plugin.openEpubAtCfi(target.path, cfi),
+      ),
     );
   }
 }

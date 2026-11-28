@@ -69,6 +69,7 @@ npm run release-check              # 默认取 package.json 版本；也可 npm 
 - Module header convention: `[INPUT]` / `[OUTPUT]` / `[POS]` / `[PROTOCOL]` doc comments.
 - `SUPPORTED_BOOK_EXTENSIONS` in types.ts lists all foliate-compatible formats registered as view handlers.
 - Rename/move migration is debounced at 100ms (`main.ts:377`).
+- **总览浏览位置保护**：程序化「查看批注目标」的打开（侧栏/标签总览跳转、关系跳转、回链、统计回顾、导出笔记/原子卡）一律包进 `plugin.openKeepingScope`——那一次 file-open 不改写 `lastActiveFile`，否则总览跳出去再回来「当前文件」范围被污染、滚动位置丢失；用户手动打开照常更新。阅读进度写盘（`saveEpubProgress`/`savePdfProgress`）走 `saveDocument(_, { bumpVersion: false })`：进度不改变批注列表内容，若也 ++version，总览内容指纹守卫失效、整表重建丢浏览位置。
 
 ## Testing
 

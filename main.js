@@ -12482,7 +12482,9 @@ var AnnotationStore = class {
     }
     this.documents.set(this.toCacheKey(normalized.filePath), normalized);
     this.index = nextIndex;
-    this.changeVersion += 1;
+    if (options.bumpVersion !== false) {
+      this.changeVersion += 1;
+    }
   }
   async addHighlight(file, highlight) {
     const document2 = await this.getDocument(file);
@@ -13297,11 +13299,16 @@ var AnnotationStore = class {
   }
   async saveEpubProgress(file, progress) {
     const document2 = await this.getDocument(file);
-    await this.saveDocument({
-      ...document2,
-      epubProgress: progress,
-      lastModified: (/* @__PURE__ */ new Date()).toISOString()
-    });
+    await this.saveDocument(
+      {
+        ...document2,
+        epubProgress: progress,
+        lastModified: (/* @__PURE__ */ new Date()).toISOString()
+      },
+      // 阅读进度不改变批注列表内容，不 bump version：否则总览指纹守卫失效，
+      // 跳进书里看一会儿再回来就被整表重建（浏览位置丢失）
+      { bumpVersion: false }
+    );
   }
   // ===== PDF 进度 =====
   async getPdfProgress(file) {
@@ -13310,11 +13317,14 @@ var AnnotationStore = class {
   }
   async savePdfProgress(file, progress) {
     const document2 = await this.getDocument(file);
-    await this.saveDocument({
-      ...document2,
-      pdfProgress: progress,
-      lastModified: (/* @__PURE__ */ new Date()).toISOString()
-    });
+    await this.saveDocument(
+      {
+        ...document2,
+        pdfProgress: progress,
+        lastModified: (/* @__PURE__ */ new Date()).toISOString()
+      },
+      { bumpVersion: false }
+    );
   }
   // ===== 书签（EPUB/PDF 通用）=====
   async addBookmark(file, bookmark) {
@@ -14343,13 +14353,19 @@ var import_obsidian12 = require("obsidian");
 var RESTORE_MAX_CARDS = 400;
 function applyScrollRestore(target, restore, fill) {
   const finished = fill(restore.top + target.viewportHeight());
+  placeScrollRestore(target, restore);
+  return finished;
+}
+function placeScrollRestore(target, restore) {
   const contentOffset = restore.anchorId ? target.anchorContentOffset(restore.anchorId) : null;
   if (contentOffset !== null) {
     target.setTop(Math.max(0, contentOffset - restore.anchorOffset));
   } else {
     target.setTop(restore.top);
   }
-  return finished;
+}
+function restorePending(target, restore) {
+  return target.contentHeight() < restore.top + target.viewportHeight();
 }
 function pickScrollAnchor(cards, listTop) {
   for (const card of cards) {
@@ -14546,6 +14562,13 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
      * 数据变化触发的重建要保留滚动位置，视角变化则是用户主动换内容，回到顶部。
      */
     this.renderedIdentity = "";
+    /**
+     * 深列表补落位：恢复时补卡预算（RESTORE_MAX_CARDS）用尽、内容还不够高，
+     * 第一次像素落位会被 scrollHeight 夹住——记下 restore，等后续追加批次把
+     * 内容补够后按锚点补落位一次（见 restorePending / placeScrollRestore）。
+     * 每次列表重建都会被 renderCardList 重置。
+     */
+    this.pendingRestore = null;
     /** requestRender(true) 用：刷新按钮与显式重载要绕开指纹守卫 */
     this.forceRender = false;
     /**
@@ -14810,6 +14833,7 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
       list.createDiv({ cls: "yh-empty", text: "No matching annotations." });
       return;
     }
+    this.pendingRestore = null;
     let cursor = 0;
     const sentinel = list.createDiv({ cls: "yh-ov-sentinel" });
     const append = (size) => {
@@ -14837,8 +14861,10 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
       if (typeof IntersectionObserver === "undefined") {
         this.scheduleCardBatch(() => {
           if (!append(CARD_BATCH_SIZE)) {
+            this.settlePendingRestore(list);
             scheduleNext();
           } else {
+            this.settlePendingRestore(list);
             sentinel.remove();
           }
         });
@@ -14864,8 +14890,10 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
             this.listObserver = null;
           }
           if (append(CARD_BATCH_SIZE)) {
+            this.settlePendingRestore(list);
             sentinel.remove();
           } else {
+            this.settlePendingRestore(list);
             scheduleNext();
           }
         },
@@ -14884,9 +14912,29 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
    * 所以先按需补渲染（最多 RESTORE_MAX_CARDS 张，再深就退回像素落位、其余交给滚动追加），
    * 落位按锚点卡对齐——像素坐标在重建前后不是同一坐标系（上方未绘制卡按估算高度报高），
    * 认卡不认像素才落得回同一处内容。
+   *
+   * 预算用尽时内容还容不下原位置：像素落位被当时的 scrollHeight 夹住（深列表近千卡时
+   * 必现）。记进 pendingRestore，等后续追加批次把内容补够后按锚点补落位一次
+   * （settlePendingRestore），全库滑到深处再回来也能落回原位。
    */
   restoreListScroll(list, append, finished, restore) {
-    const target = {
+    const target = this.restoreTarget(list);
+    const fill = (atLeastHeight) => {
+      let done2 = finished;
+      let budget = RESTORE_MAX_CARDS;
+      while (!done2 && budget > 0 && target.contentHeight() < atLeastHeight) {
+        done2 = append(CARD_BATCH_SIZE);
+        budget -= CARD_BATCH_SIZE;
+      }
+      return done2;
+    };
+    const done = applyScrollRestore(target, restore, fill);
+    this.pendingRestore = !done && restorePending(target, restore) ? restore : null;
+    return done;
+  }
+  /** 恢复落位的量测/写入接口：真实布局值现量现用，估算高度不影响锚点落位 */
+  restoreTarget(list) {
+    return {
       contentHeight: () => list.scrollHeight,
       viewportHeight: () => list.clientHeight,
       // 内容坐标系偏移（rect 差 + scrollTop）：上方卡片按估算高度报也不影响锚点落位
@@ -14902,16 +14950,21 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
         list.scrollTop = top;
       }
     };
-    const fill = (atLeastHeight) => {
-      let done = finished;
-      let budget = RESTORE_MAX_CARDS;
-      while (!done && budget > 0 && target.contentHeight() < atLeastHeight) {
-        done = append(CARD_BATCH_SIZE);
-        budget -= CARD_BATCH_SIZE;
-      }
-      return done;
-    };
-    return applyScrollRestore(target, restore, fill);
+  }
+  /**
+   * 追加批次后的深列表补落位：内容已够容下原位置时按锚点落位一次并清掉挂起状态。
+   * 哨兵在内容补够前本来就在视口里，观察器会自动连续追加，不需要用户先滚一下。
+   */
+  settlePendingRestore(list) {
+    const restore = this.pendingRestore;
+    if (!restore) {
+      return;
+    }
+    const target = this.restoreTarget(list);
+    if (!restorePending(target, restore)) {
+      placeScrollRestore(target, restore);
+      this.pendingRestore = null;
+    }
   }
   /**
    * 正文 Markdown 的延迟渲染：卡片进入列表可视区（提前 400px）才解析。
@@ -15528,13 +15581,15 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
     return card.note?.updatedAt ?? card.createdAt;
   }
   async jumpTo(file, offset, pageNumber, mode = "md", cfiRange) {
-    await openAnnotationTarget(
-      this.app,
-      { file, offset, pageNumber, mode, cfiRange },
-      (target, cfi) => (
-        // 必须是「打开书 + 定位」：navigateEpubToCfi 只在已打开的阅读器里定位，
-        // 书没开时它只会重试到超时，用户看到的就是「点了完全没反应、也不报错」。
-        this.plugin.openEpubAtCfi(target.path, cfi)
+    await this.plugin.openKeepingScope(
+      () => openAnnotationTarget(
+        this.app,
+        { file, offset, pageNumber, mode, cfiRange },
+        (target, cfi) => (
+          // 必须是「打开书 + 定位」：navigateEpubToCfi 只在已打开的阅读器里定位，
+          // 书没开时它只会重试到超时，用户看到的就是「点了完全没反应、也不报错」。
+          this.plugin.openEpubAtCfi(target.path, cfi)
+        )
       )
     );
   }
@@ -22165,17 +22220,19 @@ var TagBoardView = class extends import_obsidian22.ItemView {
     const jump = meta.createSpan({ cls: "yh-tagboard-jump", text: "\u8DF3\u56DE\u539F\u6587 \u2192" });
     jump.setAttribute("role", "button");
     jump.addEventListener("click", () => {
-      void openAnnotationTarget(
-        this.app,
-        {
-          file,
-          offset: card.startOffset,
-          pageNumber: card.pageNumber,
-          mode: card.mode,
-          cfiRange: card.cfiRange
-        },
-        // 必须是「打开书 + 定位」：navigateEpubToCfi 只定位已打开的阅读器，书没开就什么都不做
-        (target, cfi) => this.plugin.openEpubAtCfi(target.path, cfi)
+      void this.plugin.openKeepingScope(
+        () => openAnnotationTarget(
+          this.app,
+          {
+            file,
+            offset: card.startOffset,
+            pageNumber: card.pageNumber,
+            mode: card.mode,
+            cfiRange: card.cfiRange
+          },
+          // 必须是「打开书 + 定位」：navigateEpubToCfi 只定位已打开的阅读器，书没开就什么都不做
+          (target, cfi) => this.plugin.openEpubAtCfi(target.path, cfi)
+        )
       );
     });
   }
@@ -22312,6 +22369,12 @@ var OverlayAnnotationsPlugin = class extends import_obsidian23.Plugin {
     this.settings = DEFAULT_SETTINGS;
     /** 最近一次打开过的文件：批注总览开在主区域时用它兜住「当前文件」范围（见 annotationScopeFile） */
     this.lastActiveFile = null;
+    /**
+     * 程序化「查看批注目标」跳转的守卫：置位后的下一次 file-open 不改写 lastActiveFile
+     * （消费一次即清）。否则总览跳进书里，lastActiveFile 被污染成那本书，
+     * 切回总览时 annotationScopeFile() 回落到书 →「当前文件」范围整个换成书的批注。
+     */
+    this.suppressScopeFileOnce = false;
     this.popoverCard = null;
     /** 浮层「相关」区的展开态：存在插件上，关掉卡片再打开仍保持 */
     this.popoverRelatedOpen = /* @__PURE__ */ new Set();
@@ -22893,18 +22956,18 @@ ${lines.slice(0, 8).join("\n")}`);
     );
     this.registerEvent(
       this.app.workspace.on("file-open", async (file) => {
-        if (file instanceof import_obsidian23.TFile && ["md", "pdf"].includes(file.extension.toLowerCase())) {
+        if (!(file instanceof import_obsidian23.TFile)) {
+          return;
+        }
+        if (this.suppressScopeFileOnce) {
+          this.suppressScopeFileOnce = false;
+        } else {
           this.lastActiveFile = file;
+        }
+        if (["md", "pdf"].includes(file.extension.toLowerCase())) {
           this.popoverCard?.dismiss();
           await this.store.getDocument(file);
           await this.refreshAnnotations();
-        }
-      })
-    );
-    this.registerEvent(
-      this.app.workspace.on("file-open", (file) => {
-        if (file instanceof import_obsidian23.TFile) {
-          this.lastActiveFile = file;
         }
       })
     );
@@ -23739,17 +23802,19 @@ ${lines.slice(0, 8).join("\n")}`);
       new import_obsidian23.Notice(`\u627E\u4E0D\u5230\u6E90\u6587\u4EF6\uFF1A${entry.filePath}`);
       return;
     }
-    await openAnnotationTarget(
-      this.app,
-      {
-        file,
-        offset: entry.offset ?? 0,
-        pageNumber: entry.pageNumber ?? null,
-        mode: entry.mode,
-        cfiRange: entry.cfiRange
-      },
-      (targetFile, cfi) => this.openEpubAtCfi(targetFile.path, cfi),
-      { newTab: true }
+    await this.openKeepingScope(
+      () => openAnnotationTarget(
+        this.app,
+        {
+          file,
+          offset: entry.offset ?? 0,
+          pageNumber: entry.pageNumber ?? null,
+          mode: entry.mode,
+          cfiRange: entry.cfiRange
+        },
+        (targetFile, cfi) => this.openEpubAtCfi(targetFile.path, cfi),
+        { newTab: true }
+      )
     );
     this.markAnnotationReviewed(entry.id);
     this.refreshMarkdownStatsViews();
@@ -24045,14 +24110,30 @@ ${lines.slice(0, 8).join("\n")}`);
     await this.openFileInNewTab(file);
   }
   /**
+   * 程序化「查看批注目标」时打开文件但不污染「当前文件」范围视角。
+   * leaf.openFile 会触发 file-open，把 lastActiveFile 改写成目标文件；总览跳出去看书
+   * 再回来，annotationScopeFile() 回落到那本书 → 列表内容整个换成书的批注、滚动位置丢失。
+   * 所有「从总览/卡片跳去查看目标」的入口都应走这里；用户手动打开的文件照常更新视角。
+   * finally 兜底清守卫：openFile 抛错时守卫卡死会吞掉下一次手动打开的视角更新。
+   */
+  async openKeepingScope(job) {
+    this.suppressScopeFileOnce = true;
+    try {
+      await job();
+    } finally {
+      this.suppressScopeFileOnce = false;
+    }
+  }
+  /**
    * 新建标签页打开并确保真的切过去。
    * openFile 的 active 默认值是「本 leaf 是否等于当前活动 leaf」——从侧栏/标签总览点按钮时
    * 活动 leaf 是它们自己，文件会静默装进后台标签页；getLeaf("tab") 也只会插入、不激活。
    * 所以必须显式 active + revealLeaf，否则表现就是「点了没反应」。
+   * 导出笔记/原子卡也属于「查看批注目标」的程序化打开，同样不改 lastActiveFile。
    */
   async openFileInNewTab(file) {
     const leaf = this.app.workspace.getLeaf("tab");
-    await leaf.openFile(file, { active: true });
+    await this.openKeepingScope(() => leaf.openFile(file, { active: true }));
     await this.app.workspace.revealLeaf(leaf);
   }
   /**
@@ -24102,20 +24183,22 @@ ${lines.slice(0, 8).join("\n")}`);
       return;
     }
     if (relation.targetMode === "epub" && relation.targetCfi) {
-      await this.openEpubAtCfi(file.path, relation.targetCfi);
+      await this.openKeepingScope(() => this.openEpubAtCfi(file.path, relation.targetCfi));
       return;
     }
-    await openAnnotationTarget(
-      this.app,
-      {
-        file,
-        offset: relation.targetOffset ?? 0,
-        pageNumber: relation.targetPage ?? null,
-        mode: relation.targetMode,
-        cfiRange: relation.targetCfi
-      },
-      (targetFile, cfi) => this.openEpubAtCfi(targetFile.path, cfi),
-      { newTab: true }
+    await this.openKeepingScope(
+      () => openAnnotationTarget(
+        this.app,
+        {
+          file,
+          offset: relation.targetOffset ?? 0,
+          pageNumber: relation.targetPage ?? null,
+          mode: relation.targetMode,
+          cfiRange: relation.targetCfi
+        },
+        (targetFile, cfi) => this.openEpubAtCfi(targetFile.path, cfi),
+        { newTab: true }
+      )
     );
   }
   /** 卡片动作「解除关系」：两侧一起断，只删一侧会在对方卡片上留下孤儿行 */
@@ -24165,24 +24248,26 @@ ${lines.slice(0, 8).join("\n")}`);
       return;
     }
     if (target.mode === "epub" && target.cfi) {
-      await this.openEpubAtCfi(file.path, target.cfi);
+      await this.openKeepingScope(() => this.openEpubAtCfi(file.path, target.cfi));
       return;
     }
     let offset = target.offset ?? 0;
     if (target.mode === "md") {
       offset = refineOffset(await this.app.vault.cachedRead(file), offset, target.quote);
     }
-    await openAnnotationTarget(
-      this.app,
-      {
-        file,
-        offset,
-        pageNumber: target.page,
-        mode: target.mode,
-        cfiRange: target.cfi ?? void 0
-      },
-      (targetFile, cfi) => this.openEpubAtCfi(targetFile.path, cfi),
-      { newTab: true }
+    await this.openKeepingScope(
+      () => openAnnotationTarget(
+        this.app,
+        {
+          file,
+          offset,
+          pageNumber: target.page,
+          mode: target.mode,
+          cfiRange: target.cfi ?? void 0
+        },
+        (targetFile, cfi) => this.openEpubAtCfi(targetFile.path, cfi),
+        { newTab: true }
+      )
     );
   }
   async openEpubAtCfi(filePath, cfi) {

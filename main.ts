@@ -143,6 +143,12 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   store!: AnnotationStore;
   /** 最近一次打开过的文件：批注总览开在主区域时用它兜住「当前文件」范围（见 annotationScopeFile） */
   private lastActiveFile: TFile | null = null;
+  /**
+   * 程序化「查看批注目标」跳转的守卫：置位后的下一次 file-open 不改写 lastActiveFile
+   * （消费一次即清）。否则总览跳进书里，lastActiveFile 被污染成那本书，
+   * 切回总览时 annotationScopeFile() 回落到书 →「当前文件」范围整个换成书的批注。
+   */
+  private suppressScopeFileOnce = false;
 
   private toolbar!: SelectionToolbar;
   private popoverCard: AnnotationCard | null = null;
@@ -783,24 +789,23 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       }),
     );
 
+    // 记住最近打开的文件（含 EPUB/PDF）：批注总览开在主区域后自己会成为活动 leaf，
+    // 没有这条回落，「当前文件」范围在总览里永远是空的。
+    // 程序化跳转（suppressScopeFileOnce 置位）时跳过：见 openKeepingScope。
     this.registerEvent(
       this.app.workspace.on("file-open", async (file) => {
-        if (file instanceof TFile && ["md", "pdf"].includes(file.extension.toLowerCase())) {
+        if (!(file instanceof TFile)) {
+          return;
+        }
+        if (this.suppressScopeFileOnce) {
+          this.suppressScopeFileOnce = false;
+        } else {
           this.lastActiveFile = file;
+        }
+        if (["md", "pdf"].includes(file.extension.toLowerCase())) {
           this.popoverCard?.dismiss();
           await this.store.getDocument(file);
           await this.refreshAnnotations();
-        }
-      }),
-    );
-
-    // Markdown 打开次数统计：60s 冷却去重，只写 data.json，不触碰 md 原文
-    // 记住最近打开的文件（含 EPUB/PDF）：批注总览开在主区域后自己会成为活动 leaf，
-    // 没有这条回落，「当前文件」范围在总览里永远是空的
-    this.registerEvent(
-      this.app.workspace.on("file-open", (file) => {
-        if (file instanceof TFile) {
-          this.lastActiveFile = file;
         }
       }),
     );
@@ -808,6 +813,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       this.lastActiveFile = this.app.workspace.getActiveFile() ?? this.lastActiveFile;
     });
 
+    // Markdown 打开次数统计：60s 冷却去重，只写 data.json，不触碰 md 原文
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         this.countMarkdownOpen(file);
@@ -1748,17 +1754,19 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       new Notice(`找不到源文件：${entry.filePath}`);
       return;
     }
-    await openAnnotationTarget(
-      this.app,
-      {
-        file,
-        offset: entry.offset ?? 0,
-        pageNumber: entry.pageNumber ?? null,
-        mode: entry.mode,
-        cfiRange: entry.cfiRange,
-      },
-      (targetFile, cfi) => this.openEpubAtCfi(targetFile.path, cfi),
-      { newTab: true },
+    await this.openKeepingScope(() =>
+      openAnnotationTarget(
+        this.app,
+        {
+          file,
+          offset: entry.offset ?? 0,
+          pageNumber: entry.pageNumber ?? null,
+          mode: entry.mode,
+          cfiRange: entry.cfiRange,
+        },
+        (targetFile, cfi) => this.openEpubAtCfi(targetFile.path, cfi),
+        { newTab: true },
+      ),
     );
     // 回看已处理：记下时间戳并重绘列表，条目当天不再出现（次日窗口自然不匹配）
     this.markAnnotationReviewed(entry.id);
@@ -2109,14 +2117,31 @@ export default class OverlayAnnotationsPlugin extends Plugin {
   }
 
   /**
+   * 程序化「查看批注目标」时打开文件但不污染「当前文件」范围视角。
+   * leaf.openFile 会触发 file-open，把 lastActiveFile 改写成目标文件；总览跳出去看书
+   * 再回来，annotationScopeFile() 回落到那本书 → 列表内容整个换成书的批注、滚动位置丢失。
+   * 所有「从总览/卡片跳去查看目标」的入口都应走这里；用户手动打开的文件照常更新视角。
+   * finally 兜底清守卫：openFile 抛错时守卫卡死会吞掉下一次手动打开的视角更新。
+   */
+  async openKeepingScope(job: () => Promise<void>): Promise<void> {
+    this.suppressScopeFileOnce = true;
+    try {
+      await job();
+    } finally {
+      this.suppressScopeFileOnce = false;
+    }
+  }
+
+  /**
    * 新建标签页打开并确保真的切过去。
    * openFile 的 active 默认值是「本 leaf 是否等于当前活动 leaf」——从侧栏/标签总览点按钮时
    * 活动 leaf 是它们自己，文件会静默装进后台标签页；getLeaf("tab") 也只会插入、不激活。
    * 所以必须显式 active + revealLeaf，否则表现就是「点了没反应」。
+   * 导出笔记/原子卡也属于「查看批注目标」的程序化打开，同样不改 lastActiveFile。
    */
   async openFileInNewTab(file: TFile): Promise<void> {
     const leaf = this.app.workspace.getLeaf("tab");
-    await leaf.openFile(file, { active: true });
+    await this.openKeepingScope(() => leaf.openFile(file, { active: true }));
     await this.app.workspace.revealLeaf(leaf);
   }
 
@@ -2170,20 +2195,22 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       return;
     }
     if (relation.targetMode === "epub" && relation.targetCfi) {
-      await this.openEpubAtCfi(file.path, relation.targetCfi);
+      await this.openKeepingScope(() => this.openEpubAtCfi(file.path, relation.targetCfi!));
       return;
     }
-    await openAnnotationTarget(
-      this.app,
-      {
-        file,
-        offset: relation.targetOffset ?? 0,
-        pageNumber: relation.targetPage ?? null,
-        mode: relation.targetMode,
-        cfiRange: relation.targetCfi,
-      },
-      (targetFile, cfi) => this.openEpubAtCfi(targetFile.path, cfi),
-      { newTab: true },
+    await this.openKeepingScope(() =>
+      openAnnotationTarget(
+        this.app,
+        {
+          file,
+          offset: relation.targetOffset ?? 0,
+          pageNumber: relation.targetPage ?? null,
+          mode: relation.targetMode,
+          cfiRange: relation.targetCfi,
+        },
+        (targetFile, cfi) => this.openEpubAtCfi(targetFile.path, cfi),
+        { newTab: true },
+      ),
     );
   }
 
@@ -2242,7 +2269,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     }
 
     if (target.mode === "epub" && target.cfi) {
-      await this.openEpubAtCfi(file.path, target.cfi);
+      await this.openKeepingScope(() => this.openEpubAtCfi(file.path, target.cfi!));
       return;
     }
 
@@ -2251,17 +2278,19 @@ export default class OverlayAnnotationsPlugin extends Plugin {
       offset = refineOffset(await this.app.vault.cachedRead(file), offset, target.quote);
     }
 
-    await openAnnotationTarget(
-      this.app,
-      {
-        file,
-        offset,
-        pageNumber: target.page,
-        mode: target.mode,
-        cfiRange: target.cfi ?? undefined,
-      },
-      (targetFile, cfi) => this.openEpubAtCfi(targetFile.path, cfi),
-      { newTab: true },
+    await this.openKeepingScope(() =>
+      openAnnotationTarget(
+        this.app,
+        {
+          file,
+          offset,
+          pageNumber: target.page,
+          mode: target.mode,
+          cfiRange: target.cfi ?? undefined,
+        },
+        (targetFile, cfi) => this.openEpubAtCfi(targetFile.path, cfi),
+        { newTab: true },
+      ),
     );
   }
 

@@ -168,6 +168,7 @@ export class AnnotationSidebarView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.containerEl.addClass("yh-sidebar");
+    console.debug("[inklight/ov] onOpen");
     // 重新打开时容器可能已被清空：指纹必须作废，否则守卫会跳过一次真正需要的渲染
     this.renderedKey = "";
     this.renderedIdentity = "";
@@ -189,6 +190,7 @@ export class AnnotationSidebarView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    console.debug("[inklight/ov] onClose");
     this.listToken += 1;
     this.listObserver?.disconnect();
     this.listObserver = null;
@@ -263,6 +265,7 @@ export class AnnotationSidebarView extends ItemView {
     }
     const top = target.scrollTop;
     if (top <= 1) {
+      console.debug("[inklight/ov] capture top0", { visible: this.isVisible() });
       return null;
     }
     const listTop = target.getBoundingClientRect().top;
@@ -309,6 +312,14 @@ export class AnnotationSidebarView extends ItemView {
     this.forceRender = false;
     const key = this.currentKey();
     const identity = this.listIdentity();
+    // [inklight/ov] 诊断：总览「跳出去再回来丢位置」的判定链全在这几行日志里
+    console.debug("[inklight/ov] render", {
+      force,
+      visible: this.isVisible(),
+      keyChanged: key !== this.renderedKey,
+      identityChanged: identity !== this.renderedIdentity,
+      version: this.plugin.store.version,
+    });
     const container = this.containerEl.children[1] ?? this.containerEl;
     // 内容没变且列表还在：直接保留现有 DOM（含滚动位置），不重建
     if (!force && key === this.renderedKey && container.querySelector(".yh-ov-list")) {
@@ -323,6 +334,7 @@ export class AnnotationSidebarView extends ItemView {
     }
     // 视角没变、只是数据变了 → 重建后回到原位；视角变了 → 从顶部开始
     const restore = this.renderedIdentity === identity ? this.captureScroll() : null;
+    console.debug("[inklight/ov] rebuild", { restore: restore ? { top: restore.top, anchorId: restore.anchorId } : null });
     this.listObserver?.disconnect();
     this.listObserver = null;
     this.resetDeferredContent();
@@ -563,6 +575,9 @@ export class AnnotationSidebarView extends ItemView {
     const done = applyScrollRestore(target, restore, fill);
     // 全部卡都渲染完了就不会再有后续批次，别留下一个永远等不到落位的 pendingRestore
     this.pendingRestore = !done && restorePending(target, restore) ? restore : null;
+    if (this.pendingRestore) {
+      console.debug("[inklight/ov] restore-deferred", { top: restore.top });
+    }
     return done;
   }
 

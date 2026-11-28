@@ -797,6 +797,7 @@ export default class OverlayAnnotationsPlugin extends Plugin {
         if (!(file instanceof TFile)) {
           return;
         }
+        console.debug("[inklight/lastfile] file-open", file.path, { suppress: this.suppressScopeFileOnce });
         if (this.suppressScopeFileOnce) {
           this.suppressScopeFileOnce = false;
         } else {

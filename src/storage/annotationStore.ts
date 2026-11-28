@@ -414,7 +414,7 @@ export class AnnotationStore {
     if (options.bumpVersion !== false) {
       // [inklight/ver] 诊断：总览指纹含 store.version，任何计划外的 +1 都会让守卫失效。
       // 带 stack 是为了直接看到调用方；定位完成后可降为纯文本。
-      console.debug(`[inklight/ver] +1 ${normalized.filePath}`, new Error("bump").stack);
+      console.log(`[inklight/ver] +1 ${normalized.filePath}`, new Error("bump").stack);
       this.changeVersion += 1;
     }
   }

@@ -12483,7 +12483,7 @@ var AnnotationStore = class {
     this.documents.set(this.toCacheKey(normalized.filePath), normalized);
     this.index = nextIndex;
     if (options.bumpVersion !== false) {
-      console.debug(`[inklight/ver] +1 ${normalized.filePath}`, new Error("bump").stack);
+      console.log(`[inklight/ver] +1 ${normalized.filePath}`, new Error("bump").stack);
       this.changeVersion += 1;
     }
   }
@@ -14598,7 +14598,7 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
   }
   async onOpen() {
     this.containerEl.addClass("yh-sidebar");
-    console.debug("[inklight/ov] onOpen");
+    console.log("[inklight/ov] onOpen");
     this.renderedKey = "";
     this.renderedIdentity = "";
     this.registerDomEvent(this.containerEl, "click", (event) => this.handleViewClick(event));
@@ -14614,7 +14614,7 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
     await this.render();
   }
   async onClose() {
-    console.debug("[inklight/ov] onClose");
+    console.log("[inklight/ov] onClose");
     this.listToken += 1;
     this.listObserver?.disconnect();
     this.listObserver = null;
@@ -14683,7 +14683,7 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
     }
     const top = target.scrollTop;
     if (top <= 1) {
-      console.debug("[inklight/ov] capture top0", { visible: this.isVisible() });
+      console.log("[inklight/ov] capture top0", { visible: this.isVisible() });
       return null;
     }
     const listTop = target.getBoundingClientRect().top;
@@ -14720,12 +14720,14 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
     this.forceRender = false;
     const key = this.currentKey();
     const identity = this.listIdentity();
-    console.debug("[inklight/ov] render", {
+    const ovList = this.containerEl.querySelector(".yh-ov-list");
+    console.log("[inklight/ov] render", {
       force,
       visible: this.isVisible(),
       keyChanged: key !== this.renderedKey,
       identityChanged: identity !== this.renderedIdentity,
-      version: this.plugin.store.version
+      version: this.plugin.store.version,
+      scrollTop: ovList?.scrollTop ?? -1
     });
     const container = this.containerEl.children[1] ?? this.containerEl;
     if (!force && key === this.renderedKey && container.querySelector(".yh-ov-list")) {
@@ -14736,7 +14738,7 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
       return;
     }
     const restore = this.renderedIdentity === identity ? this.captureScroll() : null;
-    console.debug("[inklight/ov] rebuild", { restore: restore ? { top: restore.top, anchorId: restore.anchorId } : null });
+    console.log("[inklight/ov] rebuild", { restore: restore ? { top: restore.top, anchorId: restore.anchorId } : null });
     this.listObserver?.disconnect();
     this.listObserver = null;
     this.resetDeferredContent();
@@ -14943,7 +14945,7 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
     const done = applyScrollRestore(target, restore, fill);
     this.pendingRestore = !done && restorePending(target, restore) ? restore : null;
     if (this.pendingRestore) {
-      console.debug("[inklight/ov] restore-deferred", { top: restore.top });
+      console.log("[inklight/ov] restore-deferred", { top: restore.top });
     }
     return done;
   }
@@ -22974,7 +22976,7 @@ ${lines.slice(0, 8).join("\n")}`);
         if (!(file instanceof import_obsidian23.TFile)) {
           return;
         }
-        console.debug("[inklight/lastfile] file-open", file.path, { suppress: this.suppressScopeFileOnce });
+        console.log("[inklight/lastfile] file-open", file.path, { suppress: this.suppressScopeFileOnce });
         if (this.suppressScopeFileOnce) {
           this.suppressScopeFileOnce = false;
         } else {

@@ -8,6 +8,7 @@
 import { addIcon, Editor, MarkdownPostProcessorContext, MarkdownView, Modal, Notice, Platform, Plugin, TFile, TFolder, WorkspaceLeaf } from "obsidian";
 
 import { createTextAnchor, relocateDocumentAnchors } from "./src/anchor/textAnchor";
+import { diagLog, setDiagSink } from "./src/utils/diagLog";
 import { foldWhitespaceWithMap, stripWithMap, strippedScore } from "./src/anchor/textStrip";
 import { createHighlightExtension } from "./src/editor/highlightExtension";
 import { installReadingViewHighlights, refreshReadingViewHighlights } from "./src/editor/readingViewHighlight";
@@ -149,6 +150,8 @@ export default class OverlayAnnotationsPlugin extends Plugin {
    * 切回总览时 annotationScopeFile() 回落到书 →「当前文件」范围整个换成书的批注。
    */
   private suppressScopeFileOnce = false;
+  /** openKeepingScope finally 里延迟清守卫的定时器：等异步派发的 file-open 事件先到 */
+  private suppressTimer: number | null = null;
 
   private toolbar!: SelectionToolbar;
   private popoverCard: AnnotationCard | null = null;
@@ -181,6 +184,16 @@ export default class OverlayAnnotationsPlugin extends Plugin {
     addIcon("yh-inklight-icon", YH_INKLIGHT_ICON);
     await this.loadSettings();
     console.info(`yh-inklight loaded v${this.manifest.version}`);
+    // 诊断文件通道：vault.adapter.append 写库内相对路径（manifest.dir 是相对路径，
+    // 之前用 node fs join 被解析到 Obsidian 进程 CWD 导致 ENOENT；adapter 桌面/移动通吃）
+    const diagPath = `${this.manifest.dir ?? ".obsidian/plugins/yh-inklight"}/diag.log`;
+    let diagChain: Promise<void> = Promise.resolve();
+    setDiagSink((line: string) => {
+      diagChain = diagChain
+        .then(() => this.app.vault.adapter.append(diagPath, line + "\n"))
+        .catch((error) => console.warn("[inklight/diag] append failed", diagPath, error instanceof Error ? error.message : error));
+    });
+    diagLog("[inklight/diag] sink on", { version: this.manifest.version, path: diagPath });
     this.store = new AnnotationStore(this.app);
     await this.store.initialize();
     await this.loadMdOpenStats();
@@ -797,7 +810,6 @@ export default class OverlayAnnotationsPlugin extends Plugin {
         if (!(file instanceof TFile)) {
           return;
         }
-        console.log("[inklight/lastfile] file-open", file.path, { suppress: this.suppressScopeFileOnce });
         if (this.suppressScopeFileOnce) {
           this.suppressScopeFileOnce = false;
         } else {
@@ -2126,10 +2138,20 @@ export default class OverlayAnnotationsPlugin extends Plugin {
    */
   async openKeepingScope(job: () => Promise<void>): Promise<void> {
     this.suppressScopeFileOnce = true;
+    if (this.suppressTimer !== null) {
+      window.clearTimeout(this.suppressTimer);
+      this.suppressTimer = null;
+    }
     try {
       await job();
     } finally {
-      this.suppressScopeFileOnce = false;
+      // openFile 的 promise 先于 file-open 事件 resolve：事件是 setViewState 完成后异步派发的，
+      // finally 同步清守卫会赶在事件之前 → 守卫失效（真机日志 file-open suppress:false 实锤）。
+      // 改为延迟清，窗口覆盖事件派发；短窗口 + 重入覆盖，不会吞掉后续手动打开的视角更新。
+      this.suppressTimer = window.setTimeout(() => {
+        this.suppressTimer = null;
+        this.suppressScopeFileOnce = false;
+      }, 150);
     }
   }
 

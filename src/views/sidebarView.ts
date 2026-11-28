@@ -55,6 +55,7 @@ import {
   ScrollRestoreTarget,
 } from "./scrollRestore";
 import { openAnnotationTarget } from "./navigation";
+import { diagLog } from "../utils/diagLog";
 import { hasTag, tagKey } from "../storage/tags";
 import type { TagRef } from "../storage/annotationStore";
 
@@ -80,6 +81,22 @@ type AnnotationScope = "current" | "all";
 type TypeFilter = "all" | AnnotationKind;
 
 export class AnnotationSidebarView extends ItemView {
+  /** 诊断：区分多个总览实例（两实例并存时用户看到的可能不是浏览的那个） */
+  private readonly ovInstanceId = Math.random().toString(36).slice(2, 6);
+  /**
+   * 列表位置快照（内容锚点：哪张卡 + 卡内偏移 + 像素兜底）：滚动稳定 ~250ms 后抓取。
+   * 总览标签页不活跃时 Obsidian 以 display:none 隐藏，重新显示时 Chromium 的
+   * 滚动恢复 + 锚定调整 + deferred 卡片重绘会把位置漂掉；回切后按锚点校正回原内容。
+   */
+  private savedListScroll: ScrollRestore | null = null;
+  /** 回切校正目标：转入隐藏的那一刻从快照冻结——回切瞬间浏览器的乱滚污染不到它 */
+  private pendingSnapWant: ScrollRestore | null = null;
+  /** 滚动稳定后抓锚点快照的定时器 */
+  private snapCaptureTimer: number | null = null;
+  /** 回切 settle 窗口：期间浏览器会自行乱滚并触发锚定调整，快照冻结、不抢写滚动条 */
+  private snapSettling = false;
+  /** 回切校正的世代号：新一轮校正开始/用户主动滚动都会使其失效 */
+  private snapToken = 0;
   private annotationScope: AnnotationScope = "current";
   private query = "";
   private color: AnnotationColor | "all" = "all";
@@ -168,21 +185,40 @@ export class AnnotationSidebarView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.containerEl.addClass("yh-sidebar");
-    console.log("[inklight/ov] onOpen");
     // 重新打开时容器可能已被清空：指纹必须作废，否则守卫会跳过一次真正需要的渲染
     this.renderedKey = "";
     this.renderedIdentity = "";
     // 点击委托挂在视图根节点上：header 每次重绘都会重建按钮，
     // 绑在按钮自身上的监听会随节点一起消失，委托则始终有效。
     this.registerDomEvent(this.containerEl, "click", (event) => this.handleViewClick(event));
+    // 用户主动滚动 = 放弃回切校正，绝不跟手抢滚动条
+    const cancelSnap = (): void => {
+      this.snapToken += 1;
+      this.snapSettling = false;
+    };
+    this.registerDomEvent(this.containerEl, "wheel", cancelSnap, { passive: true });
+    this.registerDomEvent(this.containerEl, "touchstart", cancelSnap, { passive: true });
     // 后台被挡下的重绘：切回前台再补，此时才量得到真实滚动位置。
     // layout-change 覆盖标签页切换/侧栏展开，active-leaf-change 兜住部分移动端切回路径。
     const flushVisible = (): void => {
-      if (!this.pendingVisibleRender || !this.isVisible()) {
+      if (!this.isVisible()) {
+        // 转入隐藏：此刻的快照还是真实用户位置，冻结为回切校正目标；
+        // 终止未完成的校正会话（回切时重新开）
+        this.pendingSnapWant = this.savedListScroll;
+        this.snapToken += 1;
+        this.snapSettling = false;
         return;
       }
-      this.pendingVisibleRender = false;
-      void this.render();
+      if (this.pendingVisibleRender) {
+        // 有被挡下的重绘：走 rebuild，它自带的 captureScroll/restore 会按锚点落位，
+        // 不叠加本层的快照校正，两套落位逻辑会打架
+        this.pendingVisibleRender = false;
+        void this.render();
+        return;
+      }
+      if (this.isVisible()) {
+        this.scheduleScrollSnap();
+      }
     };
     this.registerEvent(this.app.workspace.on("layout-change", flushVisible));
     this.registerEvent(this.app.workspace.on("active-leaf-change", flushVisible));
@@ -190,7 +226,9 @@ export class AnnotationSidebarView extends ItemView {
   }
 
   async onClose(): Promise<void> {
-    console.log("[inklight/ov] onClose");
+    this.snapToken += 1;
+    this.snapSettling = false;
+    window.clearTimeout(this.snapCaptureTimer ?? undefined);
     this.listToken += 1;
     this.listObserver?.disconnect();
     this.listObserver = null;
@@ -254,6 +292,63 @@ export class AnnotationSidebarView extends ItemView {
     return typeof el.isShown === "function" ? el.isShown() : true;
   }
 
+  /** 诊断：当前列表滚动位置（没有列表时 -1） */
+  private ovScrollTop(): number {
+    return this.containerEl.querySelector<HTMLElement>(".yh-ov-list")?.scrollTop ?? -1;
+  }
+
+  /**
+   * 回切可见后把列表校正回快照位置。
+   * 基准是「内容锚点」（哪张卡 + 卡内偏移）而不是像素 scrollTop：跳走期间视口
+   * 附近的 deferred 卡片正文重绘、高度变化，同一像素对不准同一张卡（实测
+   * scrollTop 精确保留时内容仍偏）。每次轮询都用 placeScrollRestore 现量锚点
+   * 落位，内容高度怎么变都自动跟准。
+   * Chromium 在 display:none→block 翻转后的 settle 期会自行乱滚并做锚定调整
+   * （实测可达 1s+），所以 60ms 轮询直到稳定 ~0.5s 才收工，总窗口 3s 封顶；
+   * 用户一旦主动滚动立即让位，绝不跟手抢滚动条。
+   */
+  private scheduleScrollSnap(): void {
+    const want = this.pendingSnapWant;
+    if (want === null) {
+      return;
+    }
+    // settle 会话进行中：沿用既定校正，不重置计时（flush 会连续触发多次）
+    if (this.snapSettling) {
+      return;
+    }
+    this.snapSettling = true;
+    const token = ++this.snapToken;
+    const deadline = Date.now() + 3000;
+    let stableCount = 0;
+    let lastTop = -1;
+    const step = (): void => {
+      if (token !== this.snapToken || !this.isVisible()) {
+        return;
+      }
+      const list = this.containerEl.querySelector<HTMLElement>(".yh-ov-list");
+      if (list) {
+        const before = list.scrollTop;
+        placeScrollRestore(this.restoreTarget(list), want);
+        const after = list.scrollTop;
+        if (before !== after) {
+          stableCount = 0;
+          diagLog("[inklight/ov] snap-back", { from: before, to: after, anchorId: want.anchorId });
+        } else if (after === lastTop && ++stableCount >= 8) {
+          // 连续 ~0.5s 对齐：浏览器 settle 结束，收工
+          this.snapSettling = false;
+          return;
+        }
+        lastTop = after;
+      }
+      if (Date.now() < deadline) {
+        window.setTimeout(step, 60);
+      } else {
+        this.snapSettling = false;
+      }
+    };
+    window.setTimeout(step, 250);
+  }
+
   /**
    * 重建前记下滚动位置：像素位置 + 列表顶端第一张可见卡片。
    * 必须在清空 DOM 之前调用，之后列表里已经没有卡片可量了。
@@ -265,7 +360,6 @@ export class AnnotationSidebarView extends ItemView {
     }
     const top = target.scrollTop;
     if (top <= 1) {
-      console.log("[inklight/ov] capture top0", { visible: this.isVisible() });
       return null;
     }
     const listTop = target.getBoundingClientRect().top;
@@ -312,16 +406,6 @@ export class AnnotationSidebarView extends ItemView {
     this.forceRender = false;
     const key = this.currentKey();
     const identity = this.listIdentity();
-    // [inklight/ov] 诊断：总览「跳出去再回来丢位置」的判定链全在这几行日志里
-    const ovList = this.containerEl.querySelector<HTMLElement>(".yh-ov-list");
-    console.log("[inklight/ov] render", {
-      force,
-      visible: this.isVisible(),
-      keyChanged: key !== this.renderedKey,
-      identityChanged: identity !== this.renderedIdentity,
-      version: this.plugin.store.version,
-      scrollTop: ovList?.scrollTop ?? -1,
-    });
     const container = this.containerEl.children[1] ?? this.containerEl;
     // 内容没变且列表还在：直接保留现有 DOM（含滚动位置），不重建
     if (!force && key === this.renderedKey && container.querySelector(".yh-ov-list")) {
@@ -336,7 +420,7 @@ export class AnnotationSidebarView extends ItemView {
     }
     // 视角没变、只是数据变了 → 重建后回到原位；视角变了 → 从顶部开始
     const restore = this.renderedIdentity === identity ? this.captureScroll() : null;
-    console.log("[inklight/ov] rebuild", { restore: restore ? { top: restore.top, anchorId: restore.anchorId } : null });
+    diagLog("[inklight/ov] rebuild", { restore: restore ? { top: restore.top, anchorId: restore.anchorId } : null });
     this.listObserver?.disconnect();
     this.listObserver = null;
     this.resetDeferredContent();
@@ -371,7 +455,24 @@ export class AnnotationSidebarView extends ItemView {
     this.renderCountLine(container, rawCards, documents.length);
 
     const list = container.createDiv({ cls: "yh-ov-list" });
+    // [inklight/ov] 诊断：抓「不经 render 就动滚动条」的黑手——隐藏期间任何 scroll 事件、
+    // 或可见时的跳变（>200px 一帧）都记下来。定位完成后随埋点一起回收。
+    list.addEventListener("scroll", () => {
+      const visible = this.isVisible();
+      // settle 窗口内的滚动是浏览器自己的恢复乱滚，不是用户位置，不进快照
+      if (visible && !this.snapSettling) {
+        // 滚动稳定 ~250ms 后抓内容锚点快照（滚动中量会被锚定调整追着跑）
+        window.clearTimeout(this.snapCaptureTimer ?? undefined);
+        this.snapCaptureTimer = window.setTimeout(() => {
+          if (this.isVisible() && !this.snapSettling) {
+            this.savedListScroll = this.captureScroll(list);
+          }
+        }, 250);
+      }
+    });
     this.renderCardList(list, cards, listToken, restore);
+    // 新列表的初始位置（restore 落位结果）就是快照起点，避免套用旧列表的残留快照
+    this.savedListScroll = this.captureScroll(list);
     this.renderedKey = key;
     this.renderedIdentity = identity;
     this.pendingVisibleRender = false;
@@ -575,10 +676,16 @@ export class AnnotationSidebarView extends ItemView {
       return done;
     };
     const done = applyScrollRestore(target, restore, fill);
+    diagLog("[inklight/ov] restore-place", {
+      restoreTop: restore.top,
+      anchorId: restore.anchorId,
+      afterTop: list.scrollTop,
+      contentHeight: list.scrollHeight,
+    });
     // 全部卡都渲染完了就不会再有后续批次，别留下一个永远等不到落位的 pendingRestore
     this.pendingRestore = !done && restorePending(target, restore) ? restore : null;
     if (this.pendingRestore) {
-      console.log("[inklight/ov] restore-deferred", { top: restore.top });
+      diagLog("[inklight/ov] restore-deferred", { top: restore.top });
     }
     return done;
   }
@@ -616,6 +723,7 @@ export class AnnotationSidebarView extends ItemView {
     if (!restorePending(target, restore)) {
       placeScrollRestore(target, restore);
       this.pendingRestore = null;
+      diagLog("[inklight/ov] settle-place", { top: list.scrollTop, anchorId: restore.anchorId });
     }
   }
 
@@ -1365,6 +1473,11 @@ export class AnnotationSidebarView extends ItemView {
   ): Promise<void> {
     // 程序化「查看批注目标」不改「当前文件」范围视角：否则总览跳出去再回来，
     // lastActiveFile 已被污染成目标文件，列表内容整个换成它的批注、滚动位置丢失
+    diagLog("[inklight/ov] jump-from", {
+      inst: this.ovInstanceId,
+      scrollTop: this.ovScrollTop(),
+      file: file.path,
+    });
     await this.plugin.openKeepingScope(() =>
       openAnnotationTarget(this.app, { file, offset, pageNumber, mode, cfiRange }, (target, cfi) =>
         // 必须是「打开书 + 定位」：navigateEpubToCfi 只在已打开的阅读器里定位，

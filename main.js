@@ -7958,6 +7958,40 @@ function normalizeLineEndings(content) {
   return content.replace(/\r\n/g, "\n");
 }
 
+// src/utils/diagLog.ts
+var sink = null;
+var seq = 0;
+function setDiagSink(writer) {
+  sink = writer;
+}
+function fmt(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+function diagLog(message, detail) {
+  seq += 1;
+  const ts = (/* @__PURE__ */ new Date()).toISOString().slice(11, 23);
+  const line = `${ts} #${seq} ${message}${detail !== void 0 ? ` ${fmt(detail)}` : ""}`;
+  console.log(line);
+  if (!sink) {
+    return;
+  }
+  try {
+    sink(line);
+  } catch {
+  }
+}
+function diagLogStack(message) {
+  const stack = new Error("diag").stack ?? "";
+  diagLog(message, stack.split("\n").slice(2, 8).join(" | "));
+}
+
 // src/anchor/textStrip.ts
 var MARKDOWN_DECORATION_CHARS = /* @__PURE__ */ new Set([
   "*",
@@ -12483,7 +12517,7 @@ var AnnotationStore = class {
     this.documents.set(this.toCacheKey(normalized.filePath), normalized);
     this.index = nextIndex;
     if (options.bumpVersion !== false) {
-      console.log(`[inklight/ver] +1 ${normalized.filePath}`, new Error("bump").stack);
+      diagLogStack(`[inklight/ver] +1 ${normalized.filePath}`);
       this.changeVersion += 1;
     }
   }
@@ -14523,6 +14557,22 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
+    /** 诊断：区分多个总览实例（两实例并存时用户看到的可能不是浏览的那个） */
+    this.ovInstanceId = Math.random().toString(36).slice(2, 6);
+    /**
+     * 列表位置快照（内容锚点：哪张卡 + 卡内偏移 + 像素兜底）：滚动稳定 ~250ms 后抓取。
+     * 总览标签页不活跃时 Obsidian 以 display:none 隐藏，重新显示时 Chromium 的
+     * 滚动恢复 + 锚定调整 + deferred 卡片重绘会把位置漂掉；回切后按锚点校正回原内容。
+     */
+    this.savedListScroll = null;
+    /** 回切校正目标：转入隐藏的那一刻从快照冻结——回切瞬间浏览器的乱滚污染不到它 */
+    this.pendingSnapWant = null;
+    /** 滚动稳定后抓锚点快照的定时器 */
+    this.snapCaptureTimer = null;
+    /** 回切 settle 窗口：期间浏览器会自行乱滚并触发锚定调整，快照冻结、不抢写滚动条 */
+    this.snapSettling = false;
+    /** 回切校正的世代号：新一轮校正开始/用户主动滚动都会使其失效 */
+    this.snapToken = 0;
     this.annotationScope = "current";
     this.query = "";
     this.color = "all";
@@ -14598,23 +14648,39 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
   }
   async onOpen() {
     this.containerEl.addClass("yh-sidebar");
-    console.log("[inklight/ov] onOpen");
     this.renderedKey = "";
     this.renderedIdentity = "";
     this.registerDomEvent(this.containerEl, "click", (event) => this.handleViewClick(event));
+    const cancelSnap = () => {
+      this.snapToken += 1;
+      this.snapSettling = false;
+    };
+    this.registerDomEvent(this.containerEl, "wheel", cancelSnap, { passive: true });
+    this.registerDomEvent(this.containerEl, "touchstart", cancelSnap, { passive: true });
     const flushVisible = () => {
-      if (!this.pendingVisibleRender || !this.isVisible()) {
+      if (!this.isVisible()) {
+        this.pendingSnapWant = this.savedListScroll;
+        this.snapToken += 1;
+        this.snapSettling = false;
         return;
       }
-      this.pendingVisibleRender = false;
-      void this.render();
+      if (this.pendingVisibleRender) {
+        this.pendingVisibleRender = false;
+        void this.render();
+        return;
+      }
+      if (this.isVisible()) {
+        this.scheduleScrollSnap();
+      }
     };
     this.registerEvent(this.app.workspace.on("layout-change", flushVisible));
     this.registerEvent(this.app.workspace.on("active-leaf-change", flushVisible));
     await this.render();
   }
   async onClose() {
-    console.log("[inklight/ov] onClose");
+    this.snapToken += 1;
+    this.snapSettling = false;
+    window.clearTimeout(this.snapCaptureTimer ?? void 0);
     this.listToken += 1;
     this.listObserver?.disconnect();
     this.listObserver = null;
@@ -14672,6 +14738,59 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
     const el = this.containerEl;
     return typeof el.isShown === "function" ? el.isShown() : true;
   }
+  /** 诊断：当前列表滚动位置（没有列表时 -1） */
+  ovScrollTop() {
+    return this.containerEl.querySelector(".yh-ov-list")?.scrollTop ?? -1;
+  }
+  /**
+   * 回切可见后把列表校正回快照位置。
+   * 基准是「内容锚点」（哪张卡 + 卡内偏移）而不是像素 scrollTop：跳走期间视口
+   * 附近的 deferred 卡片正文重绘、高度变化，同一像素对不准同一张卡（实测
+   * scrollTop 精确保留时内容仍偏）。每次轮询都用 placeScrollRestore 现量锚点
+   * 落位，内容高度怎么变都自动跟准。
+   * Chromium 在 display:none→block 翻转后的 settle 期会自行乱滚并做锚定调整
+   * （实测可达 1s+），所以 60ms 轮询直到稳定 ~0.5s 才收工，总窗口 3s 封顶；
+   * 用户一旦主动滚动立即让位，绝不跟手抢滚动条。
+   */
+  scheduleScrollSnap() {
+    const want = this.pendingSnapWant;
+    if (want === null) {
+      return;
+    }
+    if (this.snapSettling) {
+      return;
+    }
+    this.snapSettling = true;
+    const token = ++this.snapToken;
+    const deadline = Date.now() + 3e3;
+    let stableCount = 0;
+    let lastTop = -1;
+    const step = () => {
+      if (token !== this.snapToken || !this.isVisible()) {
+        return;
+      }
+      const list = this.containerEl.querySelector(".yh-ov-list");
+      if (list) {
+        const before = list.scrollTop;
+        placeScrollRestore(this.restoreTarget(list), want);
+        const after = list.scrollTop;
+        if (before !== after) {
+          stableCount = 0;
+          diagLog("[inklight/ov] snap-back", { from: before, to: after, anchorId: want.anchorId });
+        } else if (after === lastTop && ++stableCount >= 8) {
+          this.snapSettling = false;
+          return;
+        }
+        lastTop = after;
+      }
+      if (Date.now() < deadline) {
+        window.setTimeout(step, 60);
+      } else {
+        this.snapSettling = false;
+      }
+    };
+    window.setTimeout(step, 250);
+  }
   /**
    * 重建前记下滚动位置：像素位置 + 列表顶端第一张可见卡片。
    * 必须在清空 DOM 之前调用，之后列表里已经没有卡片可量了。
@@ -14683,7 +14802,6 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
     }
     const top = target.scrollTop;
     if (top <= 1) {
-      console.log("[inklight/ov] capture top0", { visible: this.isVisible() });
       return null;
     }
     const listTop = target.getBoundingClientRect().top;
@@ -14720,15 +14838,6 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
     this.forceRender = false;
     const key = this.currentKey();
     const identity = this.listIdentity();
-    const ovList = this.containerEl.querySelector(".yh-ov-list");
-    console.log("[inklight/ov] render", {
-      force,
-      visible: this.isVisible(),
-      keyChanged: key !== this.renderedKey,
-      identityChanged: identity !== this.renderedIdentity,
-      version: this.plugin.store.version,
-      scrollTop: ovList?.scrollTop ?? -1
-    });
     const container = this.containerEl.children[1] ?? this.containerEl;
     if (!force && key === this.renderedKey && container.querySelector(".yh-ov-list")) {
       return;
@@ -14738,7 +14847,7 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
       return;
     }
     const restore = this.renderedIdentity === identity ? this.captureScroll() : null;
-    console.log("[inklight/ov] rebuild", { restore: restore ? { top: restore.top, anchorId: restore.anchorId } : null });
+    diagLog("[inklight/ov] rebuild", { restore: restore ? { top: restore.top, anchorId: restore.anchorId } : null });
     this.listObserver?.disconnect();
     this.listObserver = null;
     this.resetDeferredContent();
@@ -14768,7 +14877,19 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
     const cards = this.filterCards(rawCards);
     this.renderCountLine(container, rawCards, documents.length);
     const list = container.createDiv({ cls: "yh-ov-list" });
+    list.addEventListener("scroll", () => {
+      const visible = this.isVisible();
+      if (visible && !this.snapSettling) {
+        window.clearTimeout(this.snapCaptureTimer ?? void 0);
+        this.snapCaptureTimer = window.setTimeout(() => {
+          if (this.isVisible() && !this.snapSettling) {
+            this.savedListScroll = this.captureScroll(list);
+          }
+        }, 250);
+      }
+    });
     this.renderCardList(list, cards, listToken, restore);
+    this.savedListScroll = this.captureScroll(list);
     this.renderedKey = key;
     this.renderedIdentity = identity;
     this.pendingVisibleRender = false;
@@ -14943,9 +15064,15 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
       return done2;
     };
     const done = applyScrollRestore(target, restore, fill);
+    diagLog("[inklight/ov] restore-place", {
+      restoreTop: restore.top,
+      anchorId: restore.anchorId,
+      afterTop: list.scrollTop,
+      contentHeight: list.scrollHeight
+    });
     this.pendingRestore = !done && restorePending(target, restore) ? restore : null;
     if (this.pendingRestore) {
-      console.log("[inklight/ov] restore-deferred", { top: restore.top });
+      diagLog("[inklight/ov] restore-deferred", { top: restore.top });
     }
     return done;
   }
@@ -14981,6 +15108,7 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
     if (!restorePending(target, restore)) {
       placeScrollRestore(target, restore);
       this.pendingRestore = null;
+      diagLog("[inklight/ov] settle-place", { top: list.scrollTop, anchorId: restore.anchorId });
     }
   }
   /**
@@ -15598,6 +15726,11 @@ var AnnotationSidebarView = class extends import_obsidian12.ItemView {
     return card.note?.updatedAt ?? card.createdAt;
   }
   async jumpTo(file, offset, pageNumber, mode = "md", cfiRange) {
+    diagLog("[inklight/ov] jump-from", {
+      inst: this.ovInstanceId,
+      scrollTop: this.ovScrollTop(),
+      file: file.path
+    });
     await this.plugin.openKeepingScope(
       () => openAnnotationTarget(
         this.app,
@@ -22392,6 +22525,8 @@ var OverlayAnnotationsPlugin = class extends import_obsidian23.Plugin {
      * 切回总览时 annotationScopeFile() 回落到书 →「当前文件」范围整个换成书的批注。
      */
     this.suppressScopeFileOnce = false;
+    /** openKeepingScope finally 里延迟清守卫的定时器：等异步派发的 file-open 事件先到 */
+    this.suppressTimer = null;
     this.popoverCard = null;
     /** 浮层「相关」区的展开态：存在插件上，关掉卡片再打开仍保持 */
     this.popoverRelatedOpen = /* @__PURE__ */ new Set();
@@ -22426,6 +22561,12 @@ var OverlayAnnotationsPlugin = class extends import_obsidian23.Plugin {
     (0, import_obsidian23.addIcon)("yh-inklight-icon", YH_INKLIGHT_ICON);
     await this.loadSettings();
     console.info(`yh-inklight loaded v${this.manifest.version}`);
+    const diagPath = `${this.manifest.dir ?? ".obsidian/plugins/yh-inklight"}/diag.log`;
+    let diagChain = Promise.resolve();
+    setDiagSink((line) => {
+      diagChain = diagChain.then(() => this.app.vault.adapter.append(diagPath, line + "\n")).catch((error) => console.warn("[inklight/diag] append failed", diagPath, error instanceof Error ? error.message : error));
+    });
+    diagLog("[inklight/diag] sink on", { version: this.manifest.version, path: diagPath });
     this.store = new AnnotationStore(this.app);
     await this.store.initialize();
     await this.loadMdOpenStats();
@@ -22976,7 +23117,6 @@ ${lines.slice(0, 8).join("\n")}`);
         if (!(file instanceof import_obsidian23.TFile)) {
           return;
         }
-        console.log("[inklight/lastfile] file-open", file.path, { suppress: this.suppressScopeFileOnce });
         if (this.suppressScopeFileOnce) {
           this.suppressScopeFileOnce = false;
         } else {
@@ -24136,10 +24276,17 @@ ${lines.slice(0, 8).join("\n")}`);
    */
   async openKeepingScope(job) {
     this.suppressScopeFileOnce = true;
+    if (this.suppressTimer !== null) {
+      window.clearTimeout(this.suppressTimer);
+      this.suppressTimer = null;
+    }
     try {
       await job();
     } finally {
-      this.suppressScopeFileOnce = false;
+      this.suppressTimer = window.setTimeout(() => {
+        this.suppressTimer = null;
+        this.suppressScopeFileOnce = false;
+      }, 150);
     }
   }
   /**

@@ -31,6 +31,7 @@ import {
 } from "./types";
 import { normalizeTag, normalizeTags, sortTagKeys, tagKey, toObsidianTag, toObsidianTags } from "./tags";
 import { buildSourceLinkUrl } from "./sourceLink";
+import { diagLogStack } from "../utils/diagLog";
 
 const STORE_DIR = ".obsidian-annotations";
 const INDEX_PATH = normalizePath(`${STORE_DIR}/index.json`);
@@ -414,7 +415,7 @@ export class AnnotationStore {
     if (options.bumpVersion !== false) {
       // [inklight/ver] 诊断：总览指纹含 store.version，任何计划外的 +1 都会让守卫失效。
       // 带 stack 是为了直接看到调用方；定位完成后可降为纯文本。
-      console.log(`[inklight/ver] +1 ${normalized.filePath}`, new Error("bump").stack);
+      diagLogStack(`[inklight/ver] +1 ${normalized.filePath}`);
       this.changeVersion += 1;
     }
   }
